@@ -49,7 +49,7 @@ def keep_alive():
 
 TOKEN = "8225501991:AAEWMGWhCwt9FD16_FyM0GFr8Yzh1GUwQlE" #BOT TOKEN
 OWNER_ID = 5716292610                               # OWNER USER ID
-ADMIN_ID =                                    # ADMIN USER ID
+ADMIN_ID = 7708811819                                   # ADMIN USER ID
 YOUR_USERNAME = "monarch_sama"                                # OWNER USERNAME (without @)
 UPDATE_CHANNEL = "notification_came"                             # CHANNEL USERNAME (without @)
 
