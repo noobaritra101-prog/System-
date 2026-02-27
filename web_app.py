@@ -242,3 +242,16 @@ async def web_stop_hunt(bot_id: int):
         user_configs[bot_id]['hunting'] = False
         return {"status": "Hunting Stopped"}
     raise HTTPException(status_code=404, detail="Bot not found")
+
+
+# ==========================================
+# STACKHOST / KOYEB BYPASS BLOCK
+# ==========================================
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Grab the port assigned by the host, or default to 8000
+    port = int(os.environ.get("PORT", 8000))
+    
+    # Programmatically launch the Uvicorn web server
+    uvicorn.run("web_app:app", host="0.0.0.0", port=port)
