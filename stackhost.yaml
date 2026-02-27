@@ -9,9 +9,9 @@ commands:
   package: ""
   build:
     - "pip install -r requirements.txt"
-  start: "uvicorn system:app --host 0.0.0.0 --port 8000"
+  # --- CHANGED BACK TO PYTHON ---
+  start: "python web_app.py" 
 
 repository:
   branch: "main"
   auto_deploy: true
-  
