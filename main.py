@@ -4,7 +4,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 # Use your actual token from @BotFather
 BOT_TOKEN = "8225501991:AAEWMGWhCwt9FD16_FyM0GFr8Yzh1GUwQlE"
-NETLIFY_URL = "inspiring-mousse-213572.netlify.app"
+NETLIFY_URL = "https://inspiring-mousse-213572.netlify.app/"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
