@@ -10,7 +10,7 @@ commands:
   build:
     - "pip install -r requirements.txt"
   # --- CHANGED BACK TO PYTHON ---
-  start: "python web_app.py" 
+  start: "python main.py" 
 
 repository:
   branch: "main"
