@@ -12,7 +12,7 @@ from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
 
 # --- LOCAL IMPORTS ---
-from config import API_ID, API_HASH, HEXA_ID, logger, DEFAULT_LIST
+from config import API_ID, API_HASH, HEXA_ID, logger, DEFAULT_LIST, BOT_TOKEN
 from globals import user_clients, user_configs, otp_flows
 from database import db, reset_stats
 from utils import master_bot, send_hunt_with_retry
@@ -22,7 +22,6 @@ from userbot import run_userbot
 background_tasks = set()
 
 async def monitor_hunting_status():
-    """Failsafe: Restarts hunt if a bot gets stuck for 10 minutes."""
     logger.info("🛡️ Watchdog Monitor: STARTED")
     while True:
         await asyncio.sleep(60)
@@ -42,7 +41,6 @@ async def monitor_hunting_status():
                 pass
 
 async def auto_daily_reset():
-    """Resets daily stats at 5:00 AM IST."""
     ist_tz = timezone(timedelta(hours=5, minutes=30))
     while True:
         now_ist = datetime.now(ist_tz)
@@ -60,7 +58,6 @@ async def auto_daily_reset():
 async def lifespan(app: FastAPI):
     logger.info("🌐 Server Booting... Loading Database.")
     
-    # 1. Restore all user sessions from the DB
     cursor = db.cursor()
     cursor.execute("""
         SELECT user_id, owner_id, session, poke_list, ball, total_matched, total_caught, 
@@ -92,16 +89,16 @@ async def lifespan(app: FastAPI):
             background_tasks.add(task)
             task.add_done_callback(background_tasks.discard)
 
-    # 2. Start Master Bot & Background Tasks
-    await master_bot.start()
+    # 2. Start Master Bot & Background Tasks (FIXED HERE)
+    await master_bot.start(bot_token=BOT_TOKEN)
+    
     t1 = asyncio.create_task(auto_daily_reset())
     t2 = asyncio.create_task(monitor_hunting_status())
     background_tasks.update([t1, t2])
     
     logger.info("✅ API and Bots Online.")
-    yield # SERVER IS RUNNING
+    yield 
     
-    # 3. Shutdown Sequence
     logger.info("🛑 Shutting down bots...")
     await master_bot.disconnect()
     for client in user_clients.values():
@@ -113,14 +110,12 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    # Here is your live Netlify URL safely whitelisted!
     allow_origins=["https://clinquant-sherbet-949751.netlify.app", "http://localhost:8000"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- MODELS FOR API REQUESTS ---
 class LoginRequest(BaseModel):
     username: str
     passkey: str
@@ -132,11 +127,8 @@ class OTPRequest(BaseModel):
 class VerifyRequest(BaseModel):
     phone: str
     code: str
-    password: str = None # For 2FA
+    password: str = None 
     owner_id: int
-
-
-# --- API ENDPOINTS ---
 
 @app.get("/")
 async def root():
@@ -144,18 +136,14 @@ async def root():
 
 @app.post("/api/auth")
 async def login(data: LoginRequest):
-    """Verifies standard and admin logins from the dashboard."""
     cursor = db.cursor()
     cursor.execute("SELECT owner_id, username FROM owners WHERE username=? AND passkey=?", (data.username.lower(), data.passkey))
     user = cursor.fetchone()
     if not user: raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"owner_id": user[0], "username": user[1], "is_admin": user[1] == 'admin'}
 
-# --- TELEGRAM OTP LOGIN FLOW ---
-
 @app.post("/api/telegram/send_code")
 async def send_telegram_code(data: OTPRequest):
-    """Step 1: Creates a temp client and sends the OTP to the user's phone."""
     try:
         client = TelegramClient(StringSession(), API_ID, API_HASH)
         await client.connect()
@@ -167,7 +155,6 @@ async def send_telegram_code(data: OTPRequest):
 
 @app.post("/api/telegram/verify_code")
 async def verify_telegram_code(data: VerifyRequest):
-    """Step 2: Verifies OTP, handles 2FA, and saves session to DB."""
     flow = otp_flows.get(data.phone)
     if not flow: raise HTTPException(status_code=400, detail="Flow expired or invalid.")
     
@@ -210,11 +197,8 @@ async def verify_telegram_code(data: VerifyRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# --- BOT HUNT CONTROLS ---
-
 @app.get("/api/bot/{bot_id}/status")
 async def web_get_status(bot_id: int):
-    """Fetches live stats to populate the dashboard UI."""
     if bot_id not in user_configs:
         raise HTTPException(status_code=404, detail="Bot not found")
     return {
@@ -224,7 +208,6 @@ async def web_get_status(bot_id: int):
 
 @app.post("/api/bot/{bot_id}/start")
 async def web_start_hunt(bot_id: int):
-    """Starts the bot via the web dashboard."""
     if bot_id not in user_configs or bot_id not in user_clients:
         raise HTTPException(status_code=404, detail="Bot offline or not found")
         
@@ -237,7 +220,6 @@ async def web_start_hunt(bot_id: int):
 
 @app.post("/api/bot/{bot_id}/stop")
 async def web_stop_hunt(bot_id: int):
-    """Stops the bot via the web dashboard."""
     if bot_id in user_configs:
         user_configs[bot_id]['hunting'] = False
         return {"status": "Hunting Stopped"}
@@ -249,9 +231,5 @@ async def web_stop_hunt(bot_id: int):
 # ==========================================
 if __name__ == "__main__":
     import uvicorn
-    
-    # Grab the port assigned by the host, or default to 8000
     port = int(os.environ.get("PORT", 8000))
-    
-    # Programmatically launch the Uvicorn web server
     uvicorn.run("web_app:app", host="0.0.0.0", port=port)
