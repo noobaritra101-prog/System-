@@ -39,19 +39,20 @@ def fetch_random_pokemon_id_and_name_sync():
 def official_shiny_artwork_url(poke_id):
     return f"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/shiny/{poke_id}.png"
 
-def default_pokemon_image():
-    return "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/1.png"
-
 def get_species_catch_rate_sync(poke_id):
+    """Synchronous API call to prevent deadlocks in the callback thread."""
     try:
         url = f"https://pokeapi.co/api/v2/pokemon-species/{poke_id}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode())
             return data.get("capture_rate", 127) or 127
-    except: return 127
+    except Exception as e:
+        logger.error(f"Catch rate fetch failed for {poke_id}: {e}")
+        return 127
 
 def get_pokemon_stats_sync(pokemon_name):
+    """Synchronous API call to fetch types and base stats for the Pokédex."""
     try:
         url = f"https://pokeapi.co/api/v2/pokemon/{pokemon_name.lower()}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -60,10 +61,22 @@ def get_pokemon_stats_sync(pokemon_name):
             types = [t["type"]["name"].capitalize() for t in data["types"]]
             stats = {s["stat"]["name"].replace("-", " ").capitalize(): s["base_stat"] for s in data["stats"]}
             return types, stats
-    except: return None, None
+    except Exception as e:
+        logger.error(f"Stats fetch failed for {pokemon_name}: {e}")
+        return None, None
+
+async def fetch_move_type(session, url):
+    """Fetches the element type of a specific move."""
+    try:
+        async with session.get(url, timeout=5) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data["type"]["name"].capitalize()
+    except: pass
+    return "Normal"
 
 async def fetch_random_pvp_pokemon():
-    """Fetches a random Pokémon, its stats, types, and detailed moves for PvP."""
+    """Fetches a random Pokémon, its stats, types, and 4 detailed moves for PvP."""
     poke_id = random.randint(1, 898)
     async with aiohttp.ClientSession() as session:
         url = f"https://pokeapi.co/api/v2/pokemon/{poke_id}"
@@ -75,21 +88,23 @@ async def fetch_random_pvp_pokemon():
                 stats = {s["stat"]["name"]: s["base_stat"] for s in data["stats"]}
                 types = "/".join([t["type"]["name"].capitalize() for t in data.get("types", [])])
                 
-                # Pick 4 random moves and assign mock Power & Accuracy to keep API fast
+                # Pick 4 random moves from their actual movepool
                 all_moves = data.get("moves", [])
                 selected_moves = random.sample(all_moves, min(4, len(all_moves)))
                 
-                moves = []
-                for m in selected_moves:
-                    moves.append({
-                        "name": m["move"]["name"].replace("-", " ").capitalize(),
+                async def build_move(m):
+                    m_name = m["move"]["name"].replace("-", " ").capitalize()
+                    m_type = await fetch_move_type(session, m["move"]["url"])
+                    return {
+                        "name": m_name,
                         "power": random.randint(50, 110),
-                        "acc": random.choice([80, 85, 90, 95, 100, 100])
-                    })
-                
-                # Fallback if moves are missing
+                        "acc": random.choice([80, 85, 90, 95, 100, 100]),
+                        "type": m_type
+                    }
+                    
+                moves = await asyncio.gather(*(build_move(m) for m in selected_moves))
                 while len(moves) < 4: 
-                    moves.append({"name": "Tackle", "power": 40, "acc": 100})
+                    moves.append({"name": "Tackle", "power": 40, "acc": 100, "type": "Normal"})
                 
                 hp = int(stats.get("hp", 50)) * 3 
                 
@@ -108,6 +123,7 @@ async def fetch_random_pvp_pokemon():
             return None
 
 async def generate_random_team():
+    """Fetches 6 random Pokémon simultaneously for a PvP team."""
     tasks = [fetch_random_pvp_pokemon() for _ in range(6)]
     team = await asyncio.gather(*tasks)
     return [p for p in team if p is not None]
