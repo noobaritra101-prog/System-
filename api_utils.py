@@ -14,8 +14,30 @@ def escape_md(text):
     special_chars = r'([_\*\[\]\(\)~`>\#\+\-=\|\{\}\.\!])'
     return re.sub(special_chars, r'\\\1', str(text))
 
+def fetch_random_pokemon_id_and_name_sync():
+    """Ultra-fast synchronous fetch for /scout to avoid asyncio overhead."""
+    if random.random() < 0.05:
+        poke_id, name, base_id = random.choice(MEGA_POKEMON)
+        return poke_id, name, base_id
+    
+    poke_id = random.randint(1, 898)
+    if poke_id in pokemon_cache:
+        return poke_id, pokemon_cache[poke_id], poke_id
+        
+    try:
+        url = f"https://pokeapi.co/api/v2/pokemon/{poke_id}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            name = data["name"].capitalize()
+            pokemon_cache[poke_id] = name
+            return poke_id, name, poke_id
+    except Exception as e:
+        logger.error(f"PokeAPI sync request failed: {e}")
+        return None, None, None
+
 async def fetch_random_pokemon_id_and_name():
-    """Fetches a single random Pokémon for the /scout command."""
+    """Fetches a single random Pokémon asynchronously (legacy/fallback)."""
     if random.random() < 0.05:
         poke_id, name, base_id = random.choice(MEGA_POKEMON)
         return poke_id, name, base_id
