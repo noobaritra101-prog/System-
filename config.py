@@ -2,15 +2,16 @@
 import logging
 
 # ================== CONFIG ==================
-BOT_TOKEN = "8311035050:AAEfGHJEjqi59jifzbdP1rxJQ1LoLwQN3Nw"  # Replace with your valid bot token
-OWNER_ID = 5716292610  # Your Telegram user ID
-LOG_GROUP_ID = -1002790195961  # Replace with your log group's chat ID or keep as None
-FLEE_TIMEOUT = 120  # Seconds (2 minutes) before Pokémon flees
-DB_FILE = "pokemon.db"
+BOT_TOKEN = "8311035050:AAEfGHJEjqi59jifzbdP1rxJQ1LoLwQN3Nw"
+OWNER_ID = 5716292610
+LOG_GROUP_ID = -1002790195961
+FLEE_TIMEOUT = 120
+
+# NEW POSTGRESQL URL
+DATABASE_URL = "postgresql://postgres.cywehetfjxedufhpktfz:ncXUOSyHOdgyenTb@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres"
 
 REGIONS = ["Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Kalos", "Alola", "Galar"]
 
-# Mega Pokémon list (ID, name, base_id for sprites)
 MEGA_POKEMON = [
     (3, "Venusaur-Mega", 3), (6, "Charizard-Mega-X", 6), (6, "Charizard-Mega-Y", 6), (9, "Blastoise-Mega", 9),
     (65, "Alakazam-Mega", 65), (94, "Gengar-Mega", 94), (115, "Kangaskhan-Mega", 115), (127, "Pinsir-Mega", 127),
@@ -22,6 +23,5 @@ MEGA_POKEMON = [
     (445, "Garchomp-Mega", 445), (448, "Lucario-Mega", 448), (460, "Abomasnow-Mega", 460)
 ]
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("pokemon_bot")
