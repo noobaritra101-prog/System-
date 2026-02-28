@@ -110,7 +110,6 @@ async def _delete_pokemon(user_id, pokemon_name):
     async with pool.acquire() as conn:
         status = await conn.execute("DELETE FROM pokemons WHERE id IN (SELECT id FROM pokemons WHERE user_id=$1 AND name=$2 LIMIT 1)", 
                                     user_id, pokemon_name.capitalize())
-        # status looks like "DELETE 1" or "DELETE 0"
         return int(status.split()[-1]) > 0
 
 async def _get_all_users():
@@ -144,6 +143,29 @@ async def _get_debug_stats():
         g_c = await conn.fetchval("SELECT COUNT(*) FROM groups")
         return u_c, p_c, g_c
 
+async def _restore_sqlite_data(users, pokemons, groups):
+    async with pool.acquire() as conn:
+        # 1. Restore Users (upsert to handle if they already exist)
+        await conn.executemany("""
+            INSERT INTO users(user_id, tries_left, region, last_reset) 
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id) DO UPDATE SET 
+            tries_left = EXCLUDED.tries_left, region = EXCLUDED.region, last_reset = EXCLUDED.last_reset
+        """, users)
+        
+        # 2. Restore Groups
+        # Groups might be empty depending on the SQLite file, so check if it has items first
+        if groups:
+            await conn.executemany("""
+                INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING
+            """, groups)
+        
+        # 3. Restore Pokémons
+        if pokemons:
+            await conn.executemany("""
+                INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)
+            """, pokemons)
+
 # ================== SYNC EXPOSED API ==================
 def init_db(): run_sync(_init_db())
 def add_group(group_id): run_sync(_add_group(group_id))
@@ -157,8 +179,10 @@ def list_user_pokemon_names(user_id): return run_sync(_list_user_pokemon_names(u
 def delete_pokemon(user_id, pokemon_name): return run_sync(_delete_pokemon(user_id, pokemon_name))
 def get_all_users(): return run_sync(_get_all_users())
 def get_top_trainers(limit=5): return run_sync(_get_top_trainers(limit))
-
-# New explicit handlers to keep main.py clean
 def reset_user(user_id): run_sync(_reset_user(user_id))
 def update_user_region(user_id, region): run_sync(_update_user_region(user_id, region))
 def get_debug_stats(): return run_sync(_get_debug_stats())
+
+# The migration bridge
+def restore_sqlite_data(users, pokemons, groups): 
+    run_sync(_restore_sqlite_data(users, pokemons, groups))
