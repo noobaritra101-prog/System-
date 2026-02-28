@@ -511,7 +511,7 @@ def cmd_inspect(message):
         return
     bot.send_photo(message.chat.id, img_url, caption=escape_markdown_v2(f"{name.capitalize()} (Shiny)"), parse_mode="MarkdownV2")
 
-@bot.message_handler(commands=["flex"])
+@@bot.message_handler(commands=["flex", "top"])
 def cmd_flex(message):
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -533,7 +533,7 @@ def cmd_flex(message):
             lines.append(f"{rank}\\. User {uid} — {cnt} Pokémon")
         bot.reply_to(message, escape_markdown_v2("*Top Trainers:*\n" + "\n".join(lines)), parse_mode="MarkdownV2")
     except Exception as e:
-        logger.error(f"Error in flex command: {e}")
+        logger.error(f"Error in flex/top command: {e}")
         bot.reply_to(message, escape_markdown_v2("Error fetching top trainers."), parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["plist"])
