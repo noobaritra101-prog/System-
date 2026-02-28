@@ -15,7 +15,7 @@ from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, log
 import database as db
 from api_utils import (
     escape_md, 
-    fetch_random_pokemon_id_and_name, 
+    fetch_random_pokemon_id_and_name_sync, 
     official_shiny_artwork_url, 
     get_species_catch_rate_sync,
     get_pokemon_stats_sync,
@@ -92,7 +92,7 @@ def auto_flee(message_id, chat_id, pokemon_name):
         logger.error(f"Error in auto-flee: {e}")
     active_hunts.pop(message_id, None)
 
-async def start_scout(chat_id, user_id, reply_to_id=None):
+def start_scout(chat_id, user_id, reply_to_id=None):
     global last_api_call
     if not db.get_user(user_id):
         return bot.send_message(chat_id, escape_md("⚠️ Please /start the bot first."), reply_to_message_id=reply_to_id)
@@ -105,7 +105,8 @@ async def start_scout(chat_id, user_id, reply_to_id=None):
     if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
         return bot.send_message(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_message_id=reply_to_id)
 
-    poke_id, name, base_id = await fetch_random_pokemon_id_and_name()
+    # Fast sync call to eliminate lag
+    poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync()
     if not poke_id:
         return bot.send_message(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_message_id=reply_to_id)
 
@@ -120,7 +121,7 @@ async def start_scout(chat_id, user_id, reply_to_id=None):
 
     current_time = time.time()
     if current_time - last_api_call < 0.2:
-        await asyncio.sleep(0.2)
+        time.sleep(0.2)
     last_api_call = current_time
 
     try:
@@ -176,7 +177,7 @@ def cmd_travel(message):
 
 @bot.message_handler(commands=["scout"])
 def cmd_scout(message):
-    asyncio.run(start_scout(message.chat.id, message.from_user.id, message.message_id))
+    start_scout(message.chat.id, message.from_user.id, message.message_id)
 
 @bot.message_handler(commands=["pokedex"])
 def cmd_pokedex(message):
@@ -441,6 +442,10 @@ def cmd_clearhunts(message):
     pvp_battles.clear()
     bot.reply_to(message, escape_md("🧹 All active hunts and PvP battles cleared."))
 
+@bot.message_handler(commands=["getid"])
+def cmd_getid(message):
+    bot.reply_to(message, escape_md(f"🆔 Chat ID: {message.chat.id}\n📁 Chat Type: {message.chat.type}"))
+
 # ================== GROUP TRACKING ==================
 @bot.chat_member_handler()
 def handle_chat_member_update(update):
@@ -455,14 +460,15 @@ def handle_chat_member_update(update):
 def cb_handler(call):
     try:
         if call.data.startswith("travel_"):
-            _, uid_str, region = call.data.split("_", 2)
-            if call.from_user.id != int(uid_str): return bot.answer_callback_query(call.id, "This selection is not for you.")
-            db.update_user_region(int(uid_str), region)
+            parts = call.data.split("_", 2)
+            uid, region = int(parts[1]), parts[2]
+            if call.from_user.id != uid: return bot.answer_callback_query(call.id, "This selection is not for you.")
+            db.update_user_region(uid, region)
             bot.edit_message_text(f"✈️ You successfully travelled to *{escape_md(region)}*\\.", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
 
         elif call.data.startswith("catch_"):
-            _, uid_str, pid_str, name = call.data.split("_", 3)
-            uid, pid = int(uid_str), int(pid_str)
+            parts = call.data.split("_", 3)
+            uid, pid, name = int(parts[1]), int(parts[2]), parts[3]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Hands off! This scout is not yours.")
             if call.message.message_id not in active_hunts: return bot.answer_callback_query(call.id, "This scout has expired.")
             active_hunts[call.message.message_id]["timer"].cancel()
@@ -477,8 +483,8 @@ def cb_handler(call):
             active_hunts.pop(call.message.message_id, None)
 
         elif call.data.startswith("run_"):
-            _, uid_str, name = call.data.split("_", 2)
-            uid = int(uid_str)
+            parts = call.data.split("_", 2)
+            uid, name = int(parts[1]), parts[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "This scout is not yours.")
             if call.message.message_id not in active_hunts: return bot.answer_callback_query(call.id, "This scout has expired.")
             active_hunts[call.message.message_id]["timer"].cancel()
@@ -486,16 +492,16 @@ def cb_handler(call):
             active_hunts.pop(call.message.message_id, None)
 
         elif call.data.startswith("mypoke_") or call.data.startswith("plist_"):
-            action, uid_str, page_str = call.data.split("_")
-            uid, page_idx = int(uid_str), int(page_str)
-            if action == "mypoke_" and call.from_user.id != uid: return bot.answer_callback_query(call.id, "This is not your bag.")
-            if action == "plist_" and call.from_user.id != OWNER_ID: return bot.answer_callback_query(call.id, "Owner only.")
+            parts = call.data.split("_")
+            action, uid, page_idx = parts[0], int(parts[1]), int(parts[2])
+            if action == "mypoke" and call.from_user.id != uid: return bot.answer_callback_query(call.id, "This is not your bag.")
+            if action == "plist" and call.from_user.id != OWNER_ID: return bot.answer_callback_query(call.id, "Owner only.")
             names = db.list_user_pokemon_names(uid)
             if not names: return
             page_size = 20
             pages = [names[i:i + page_size] for i in range(0, len(names), page_size)]
             if page_idx < 0 or page_idx >= len(pages): return
-            title = "🎒 *Your Pokémon*" if action == "mypoke_" else f"🎒 *Pokémon for User {uid}*"
+            title = "🎒 *Your Pokémon*" if action == "mypoke" else f"🎒 *Pokémon for User {uid}*"
             text = f"{title} \\(Page {page_idx + 1}/{len(pages)}\\):\n\n" + "\n".join(f"➥ {escape_md(n)}" for n in pages[page_idx])
             kb = types.InlineKeyboardMarkup(row_width=4)
             kb.add(
@@ -507,10 +513,12 @@ def cb_handler(call):
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
 
         elif call.data.startswith("pvp_accept_"):
-            _, p1_id_str, p2_id_str = call.data.split("_")
-            p1_id, p2_id = int(p1_id_str), int(p2_id_str)
+            parts = call.data.split("_")
+            p1_id, p2_id = int(parts[2]), int(parts[3])
+            
             if call.from_user.id != p2_id: return bot.answer_callback_query(call.id, "Only the challenged player can accept!")
             bot.answer_callback_query(call.id, "Challenge Accepted! Preparing the arena...")
+            
             battle_id = call.message.message_id
             chat_id = call.message.chat.id
             p1_name = pending_challenges.pop(battle_id, "Player 1")
@@ -539,8 +547,10 @@ def cb_handler(call):
             threading.Thread(target=setup_battle).start()
 
         elif call.data.startswith("pvp_decline_"):
-            _, p1_id_str, p2_id_str = call.data.split("_")
-            if call.from_user.id != int(p2_id_str): return bot.answer_callback_query(call.id, "Only the challenged player can decline.")
+            parts = call.data.split("_")
+            p1_id, p2_id = int(parts[2]), int(parts[3])
+            
+            if call.from_user.id != p2_id: return bot.answer_callback_query(call.id, "Only the challenged player can decline.")
             bot.edit_message_text("❌ *Challenge declined\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
 
         elif call.data.startswith("p_move_"):
