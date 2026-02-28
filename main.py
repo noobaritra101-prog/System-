@@ -9,20 +9,22 @@ import threading
 import os
 import shutil
 import sqlite3
+import random
 
 # Import from our modular files
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, DB_FILE, logger
 import database as db
 from api_utils import (
-    escape_markdown_v2, 
+    escape_md, 
     fetch_random_pokemon_id_and_name, 
     official_shiny_artwork_url, 
     default_pokemon_image, 
-    get_species_catch_rate
+    get_species_catch_rate_sync,
+    get_pokemon_stats_sync
 )
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
-active_hunts = {}  # Format: {message_id: {"user_id": user_id, "start_time": time.time(), "timer": Timer, "name": pokemon_name}}
+active_hunts = {}  
 last_api_call = 0  
 
 # ================== GAME LOGIC ==================
@@ -31,45 +33,43 @@ def auto_flee(message_id, chat_id, pokemon_name):
         return
     try:
         bot.edit_message_caption(
-            caption=escape_markdown_v2(f"The shiny {pokemon_name.capitalize()} fled!"),
-            chat_id=chat_id,
-            message_id=message_id,
-            reply_markup=None,
-            parse_mode="MarkdownV2"
+            caption=f"💨 The wild ✨ *{escape_md(pokemon_name.capitalize())}* fled\\!",
+            chat_id=chat_id, message_id=message_id, reply_markup=None, parse_mode="MarkdownV2"
         )
     except Exception as e:
-        logger.error(f"Error in auto-flee for message {message_id}: {e}")
+        logger.error(f"Error in auto-flee: {e}")
     active_hunts.pop(message_id, None)
 
 async def start_scout(chat_id, user_id, reply_to_id=None):
     global last_api_call
     user = db.get_user(user_id)
     if not user:
-        bot.send_message(chat_id, escape_markdown_v2("Please /start the bot first."), reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
+        bot.send_message(chat_id, escape_md("⚠️ Please /start the bot first."), reply_to_message_id=reply_to_id)
         return
         
     tries_left, region = db.update_user_tries(user_id)
     if tries_left is None:
-        bot.send_message(chat_id, escape_markdown_v2("Error checking your profile. Try again."), reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
+        bot.send_message(chat_id, escape_md("⚠️ Error checking your profile."), reply_to_message_id=reply_to_id)
         return
     if tries_left <= 0:
-        bot.send_message(chat_id, escape_markdown_v2("You have no scouts left today. Come back tomorrow."), reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
+        bot.send_message(chat_id, escape_md("💤 You have no scouts left today. Rest and come back tomorrow!"), reply_to_message_id=reply_to_id)
         return
     if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
-        bot.send_message(chat_id, escape_markdown_v2("You already have an active scout. Complete it first."), reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
+        bot.send_message(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_message_id=reply_to_id)
         return
 
     poke_id, name, base_id = await fetch_random_pokemon_id_and_name()
     if not poke_id:
-        bot.send_message(chat_id, escape_markdown_v2("Failed to fetch Pokémon. Try again."), reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
+        bot.send_message(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_message_id=reply_to_id)
         return
 
     img_url = official_shiny_artwork_url(base_id)
-    caption = escape_markdown_v2(f"A wild shiny {name} appeared in {region}!\nWhat will you do?")
+    caption = f"🌍 A wild ✨ *{escape_md(name)}* appeared in *{escape_md(region)}*\\!\n\n🎒 What will you do?"
+    
     kb = types.InlineKeyboardMarkup()
     kb.add(
-        types.InlineKeyboardButton("Catch", callback_data=f"catch_{user_id}_{poke_id}_{name[:16]}"),
-        types.InlineKeyboardButton("Run", callback_data=f"run_{user_id}_{name[:16]}")
+        types.InlineKeyboardButton("🔴 Catch", callback_data=f"catch_{user_id}_{poke_id}_{name[:16]}"),
+        types.InlineKeyboardButton("🏃‍♂️ Run", callback_data=f"run_{user_id}_{name[:16]}")
     )
 
     current_time = time.time()
@@ -78,30 +78,14 @@ async def start_scout(chat_id, user_id, reply_to_id=None):
     last_api_call = current_time
 
     try:
-        sent = bot.send_photo(
-            chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id,
-            reply_markup=kb, parse_mode="MarkdownV2"
-        )
+        sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
         timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, chat_id, name))
         timer.start()
-        active_hunts[sent.message_id] = {
-            "user_id": user_id, "start_time": time.time(),
-            "timer": timer, "name": name
-        }
+        active_hunts[sent.message_id] = {"user_id": user_id, "start_time": time.time(), "timer": timer, "name": name}
     except Exception as e:
-        logger.error(f"Failed to send scout photo for {user_id}: {e}")
-        try:
-            sent = bot.send_photo(
-                chat_id, default_pokemon_image(), caption=escape_markdown_v2(f"{caption}\n(Note: Image unavailable)"),
-                reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2"
-            )
-            timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, chat_id, name))
-            timer.start()
-            active_hunts[sent.message_id] = {"user_id": user_id, "start_time": time.time(), "timer": timer, "name": name}
-        except Exception:
-            bot.send_message(chat_id, escape_markdown_v2("Error displaying Pokémon. Try again."), reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
+        logger.error(f"Failed to send scout photo: {e}")
 
-# ================== COMMANDS ==================
+# ================== USER COMMANDS ==================
 @bot.message_handler(commands=["start"])
 def cmd_start(message):
     is_new = db.add_user_if_new(message.from_user.id)
@@ -111,71 +95,98 @@ def cmd_start(message):
     kb = types.InlineKeyboardMarkup()
     kb.add(
         types.InlineKeyboardButton("Main Group ✨", url="https://t.me/sexagamechat"),
-        types.InlineKeyboardButton("Owner ✨", url="https://t.me/Dark_monarchx")
+        types.InlineKeyboardButton("Owner 👑", url="https://t.me/Dark_monarchx")
     )
-    bot.reply_to(message, escape_markdown_v2("Welcome! Use /scout to search for shiny Pokémon.\nUse /travel to change region."), reply_markup=kb, parse_mode="MarkdownV2")
+    text = "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 Use /scout to search for shiny Pokémon\\.\n🌍 Use /travel to change your region\\.\n📱 Use /pokedex `<name>` to check stats\\."
+    bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
     
     if is_new and LOG_GROUP_ID is not None:
         first = message.from_user.first_name or ""
         username = f"@{message.from_user.username}" if message.from_user.username else ""
         try:
-            bot.send_message(LOG_GROUP_ID, escape_markdown_v2(f"New Trainer: {first} {username} (ID: {message.from_user.id}) started the bot in chat {message.chat.id}."), parse_mode="MarkdownV2")
+            bot.send_message(LOG_GROUP_ID, escape_md(f"🔔 New Trainer: {first} {username} (ID: {message.from_user.id}) started the bot in chat {message.chat.id}."))
         except Exception as e:
-            logger.error(f"Failed to send start notification to log group: {str(e)}")
+            logger.error(f"Failed to send start notification: {str(e)}")
 
 @bot.message_handler(commands=["getid"])
 def cmd_getid(message):
-    bot.reply_to(message, escape_markdown_v2(f"Chat ID: {message.chat.id}\nChat Type: {message.chat.type}"), parse_mode="MarkdownV2")
+    bot.reply_to(message, escape_md(f"🆔 Chat ID: {message.chat.id}\n📁 Chat Type: {message.chat.type}"))
 
 @bot.message_handler(commands=["profile"])
 def cmd_profile(message):
     user = db.get_user(message.from_user.id)
     if not user:
-        bot.reply_to(message, escape_markdown_v2("Please /start the bot first."), parse_mode="MarkdownV2")
-        return
+        return bot.reply_to(message, escape_md("⚠️ Please /start the bot first."))
     tries_left, region = db.update_user_tries(message.from_user.id)
     count = len(db.list_user_pokemon_names(message.from_user.id))
-    bot.reply_to(message, escape_markdown_v2(f"𝐓𝐫𝐚𝐢𝐧𝐞𝐫 𝐏𝐫𝐨𝐟𝐢𝐥𝐞\n➥𝐑𝐞𝐠𝐢𝐨𝐧: {region}\n➥𝐓𝐨𝐭𝐚𝐥 𝐏ó𝐤𝐞𝐦𝐨𝐧𝐬: {count}\n➥𝐃𝐚𝐢𝐥𝐲 𝐬𝐜𝐨𝐮𝐭 𝐋𝐞𝐟𝐭: {tries_left}"), parse_mode="MarkdownV2")
+    
+    profile_text = (
+        f"👤 *Trainer Profile*\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🌍 *Region:* {escape_md(region)}\n"
+        f"🏆 *Pokémon Caught:* {count}\n"
+        f"🔋 *Scouts Left:* {tries_left}/300"
+    )
+    bot.reply_to(message, profile_text, parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["travel"])
 def cmd_travel(message):
     if not db.get_user(message.from_user.id):
-        bot.reply_to(message, escape_markdown_v2("Please /start the bot first."), parse_mode="MarkdownV2")
-        return
+        return bot.reply_to(message, escape_md("⚠️ Please /start the bot first."))
     kb = types.InlineKeyboardMarkup()
     for r in REGIONS:
-        kb.add(types.InlineKeyboardButton(r, callback_data=f"travel_{message.from_user.id}_{r}"))
-    bot.reply_to(message, escape_markdown_v2("Choose a region:"), reply_markup=kb, parse_mode="MarkdownV2")
+        kb.add(types.InlineKeyboardButton(f"✈️ {r}", callback_data=f"travel_{message.from_user.id}_{r}"))
+    bot.reply_to(message, "*Choose a region to travel to:*", reply_markup=kb, parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["scout"])
 def cmd_scout(message):
     asyncio.run(start_scout(message.chat.id, message.from_user.id, message.message_id))
 
+@bot.message_handler(commands=["pokedex"])
+def cmd_pokedex(message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return bot.reply_to(message, escape_md("📝 Usage: /pokedex <pokemon_name>"))
+    
+    pokemon_name = parts[1].strip()
+    types_list, stats = get_pokemon_stats_sync(pokemon_name)
+    
+    if not stats:
+        return bot.reply_to(message, f"❌ Could not find data for *{escape_md(pokemon_name)}*\\.", parse_mode="MarkdownV2")
+    
+    types_str = " \\| ".join(types_list)
+    stats_str = "\n".join([f"🔸 *{escape_md(k)}:* {v}" for k, v in stats.items()])
+    
+    dex_text = (
+        f"📱 *Pokédex Data: {escape_md(pokemon_name.capitalize())}*\n"
+        f"🧬 *Type:* {escape_md(types_str)}\n\n"
+        f"📊 *Base Stats:*\n"
+        f"{stats_str}"
+    )
+    bot.reply_to(message, dex_text, parse_mode="MarkdownV2")
+
 @bot.message_handler(commands=["mypokemon"])
 def cmd_mypokemon(message):
     user_id = message.from_user.id
     if not db.get_user(user_id):
-        bot.reply_to(message, escape_markdown_v2("Please /start the bot first."), parse_mode="MarkdownV2")
-        return
+        return bot.reply_to(message, escape_md("⚠️ Please /start the bot first."))
     names = db.list_user_pokemon_names(user_id)
     if not names:
-        bot.reply_to(message, escape_markdown_v2("You don't have any Pokémon yet."), parse_mode="MarkdownV2")
-        return
+        return bot.reply_to(message, escape_md("🎒 You don't have any Pokémon yet."))
     
     page_size = 20
     pages = [names[i:i + page_size] for i in range(0, len(names), page_size)]
     
     def get_page_text(page_idx):
-        return escape_markdown_v2(f"𝕐𝕠𝕦𝕣 ℙ𝕠𝕜é𝕞𝕠𝕟 (Page {page_idx + 1}/{len(pages)}):\n" + "\n".join(f"➥ {n}" for n in pages[page_idx]))
+        poke_list = "\n".join(f"➥ {escape_md(n)}" for n in pages[page_idx])
+        return f"🎒 *Your Pokémon* \\(Page {page_idx + 1}/{len(pages)}\\):\n\n{poke_list}"
     
     def make_kb(current_page, uid, num_pages):
         kb = types.InlineKeyboardMarkup(row_width=4)
-        prev_page = max(0, current_page - 1)
-        next_page = min(num_pages - 1, current_page + 1)
         kb.add(
             types.InlineKeyboardButton("<<", callback_data=f"mypoke_{uid}_0"),
-            types.InlineKeyboardButton("<", callback_data=f"mypoke_{uid}_{prev_page}"),
-            types.InlineKeyboardButton(">", callback_data=f"mypoke_{uid}_{next_page}"),
+            types.InlineKeyboardButton("<", callback_data=f"mypoke_{uid}_{max(0, current_page - 1)}"),
+            types.InlineKeyboardButton(">", callback_data=f"mypoke_{uid}_{min(num_pages - 1, current_page + 1)}"),
             types.InlineKeyboardButton(">>", callback_data=f"mypoke_{uid}_{num_pages - 1}")
         )
         return kb
@@ -183,51 +194,241 @@ def cmd_mypokemon(message):
     kb = make_kb(0, user_id, len(pages)) if len(pages) > 1 else None
     bot.reply_to(message, get_page_text(0), reply_markup=kb, parse_mode="MarkdownV2")
 
+@bot.message_handler(commands=["inspect"])
+def cmd_inspect(message):
+    user = db.get_user(message.from_user.id)
+    if not user:
+        return bot.reply_to(message, escape_md("⚠️ Please /start the bot first."))
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return bot.reply_to(message, escape_md("📝 Usage: /inspect <pokemon_name>"))
+    
+    name = parts[1].strip().lower()
+    names = [n.lower() for n in db.list_user_pokemon_names(message.from_user.id)]
+    if name not in names:
+        return bot.reply_to(message, escape_md("❌ You don't own this Pokémon."))
+        
+    async def fetch_pokemon_image():
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(f"https://pokeapi.co/api/v2/pokemon/{name}", timeout=15) as response:
+                    if response.status != 200: return None
+                    data = await response.json()
+                    return official_shiny_artwork_url(data["id"])
+            except: return None
+
+    img_url = asyncio.run(fetch_pokemon_image())
+    if not img_url:
+        return bot.reply_to(message, escape_md(f"⚠️ Couldn't fetch info for {name}."))
+    bot.send_photo(message.chat.id, img_url, caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
+
+@bot.message_handler(commands=["release"])
+def cmd_release(message):
+    user = db.get_user(message.from_user.id)
+    if not user:
+        return bot.reply_to(message, escape_md("⚠️ Please /start the bot first."))
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return bot.reply_to(message, escape_md("📝 Usage: /release <pokemon_name>"))
+        
+    poke_name = parts[1].strip().capitalize()
+    if db.delete_pokemon(message.from_user.id, poke_name):
+        bot.reply_to(message, escape_md(f"👋 You released {poke_name} back into the wild."))
+    else:
+        bot.reply_to(message, escape_md(f"❌ You don't have a {poke_name} to release."))
+
 @bot.message_handler(commands=["flex", "top"])
 def cmd_flex(message):
     rows = db.get_top_trainers(5)
     if not rows:
-        bot.reply_to(message, escape_markdown_v2("No trainers yet."), parse_mode="MarkdownV2")
-        return
-    lines = [f"{rank}\\. User {uid} — {cnt} Pokémon" for rank, (uid, cnt) in enumerate(rows, start=1)]
-    bot.reply_to(message, escape_markdown_v2("*Top Trainers:*\n" + "\n".join(lines)), parse_mode="MarkdownV2")
+        return bot.reply_to(message, escape_md("📉 No trainers on the leaderboard yet."))
+    lines = [f"{rank}\\. 👤 *User {uid}* — {cnt} Pokémon" for rank, (uid, cnt) in enumerate(rows, start=1)]
+    bot.reply_to(message, "🏆 *Top Trainers Leaderboard:*\n\n" + "\n".join(lines), parse_mode="MarkdownV2")
 
-# --- ADMIN COMMANDS ---
-@bot.message_handler(commands=["plist", "take", "give", "bcast", "gcast", "gcs", "allusers", "leave", "reset", "backup", "restore", "debug", "clearhunts"])
-def admin_commands(message):
+
+# ================== ADMIN COMMANDS ==================
+def is_owner(message):
     if message.from_user.id != OWNER_ID:
-        bot.reply_to(message, escape_markdown_v2("𝚃𝚑𝚒𝚜 𝚌𝚘𝚖𝚖𝚊𝚗𝚍 𝚒𝚜 𝚏𝚘𝚛 𝚘𝚠𝚗𝚎𝚛 -𝚜𝚊𝚖𝚊 𝚘𝚗𝚕𝚢."), parse_mode="MarkdownV2")
-        return
+        bot.reply_to(message, escape_md("🚫 This command is for owner-sama only."))
+        return False
+    return True
+
+@bot.message_handler(commands=["plist"])
+def cmd_plist(message):
+    if not is_owner(message): return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return bot.reply_to(message, escape_md("📝 Usage: /plist <user_id>"))
+    try:
+        uid = int(parts[1])
+        names = db.list_user_pokemon_names(uid)
+        if not names:
+            return bot.reply_to(message, escape_md(f"User {uid} has no Pokémon."))
+        page_size = 20
+        pages = [names[i:i + page_size] for i in range(0, len(names), page_size)]
         
-    cmd = message.text.split()[0].lower()
+        def make_kb(current_page, num_pages):
+            kb = types.InlineKeyboardMarkup(row_width=4)
+            kb.add(
+                types.InlineKeyboardButton("<<", callback_data=f"plist_{uid}_0"),
+                types.InlineKeyboardButton("<", callback_data=f"plist_{uid}_{max(0, current_page - 1)}"),
+                types.InlineKeyboardButton(">", callback_data=f"plist_{uid}_{min(num_pages - 1, current_page + 1)}"),
+                types.InlineKeyboardButton(">>", callback_data=f"plist_{uid}_{num_pages - 1}")
+            )
+            return kb
+            
+        text = f"🎒 *Pokémon for User {uid}* \\(Page 1/{len(pages)}\\):\n" + "\n".join(f"\\- {escape_md(n)}" for n in pages[0])
+        bot.reply_to(message, text, reply_markup=make_kb(0, len(pages)) if len(pages) > 1 else None, parse_mode="MarkdownV2")
+    except Exception as e:
+        bot.reply_to(message, escape_md(f"Error: {str(e)}"))
+
+@bot.message_handler(commands=["take"])
+def cmd_take(message):
+    if not is_owner(message): return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3: return bot.reply_to(message, escape_md("📝 Usage: /take <user_id> <pokemon_name>"))
+    try:
+        uid, poke_name = int(parts[1]), parts[2].strip().capitalize()
+        if db.delete_pokemon(uid, poke_name):
+            bot.reply_to(message, escape_md(f"✅ Removed {poke_name} from user {uid}."))
+        else:
+            bot.reply_to(message, escape_md(f"❌ User {uid} does not have {poke_name}."))
+    except Exception as e:
+        bot.reply_to(message, escape_md(f"Error: {str(e)}"))
+
+@bot.message_handler(commands=["give"])
+def cmd_give(message):
+    if not is_owner(message): return
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3: return bot.reply_to(message, escape_md("📝 Usage: /give <user_id> <pokemon_name>"))
+    try:
+        uid, poke_name = int(parts[1]), parts[2].strip().capitalize()
+        db.add_caught_pokemon(uid, poke_name, "Gift")
+        bot.reply_to(message, escape_md(f"🎁 Gave {poke_name} to user {uid}."))
+    except Exception as e:
+        bot.reply_to(message, escape_md(f"Error: {str(e)}"))
+
+@bot.message_handler(commands=["bcast", "gcast"])
+def cmd_broadcasts(message):
+    if not is_owner(message): return
+    if not message.reply_to_message:
+        return bot.reply_to(message, escape_md("⚠️ Please reply to a message to forward it."))
+        
+    is_gcast = message.text.startswith("/gcast")
+    targets = db.get_all_groups() if is_gcast else db.get_all_users()
+    success, failed = 0, 0
     
-    if cmd == "/debug":
+    for target_id in targets:
+        try:
+            bot.forward_message(target_id, message.chat.id, message.reply_to_message.message_id)
+            success += 1
+            time.sleep(0.1) # Prevent flood limits
+        except: failed += 1
+        
+    bot.reply_to(message, escape_md(f"📢 Broadcast complete! Success: {success}, Failed: {failed}"))
+
+@bot.message_handler(commands=["gcs"])
+def cmd_gcs(message):
+    if not is_owner(message): return
+    groups = db.get_all_groups()
+    if not groups: return bot.reply_to(message, escape_md("The bot is not in any groups."))
+    text = f"🏢 *Groups \\({len(groups)}\\):*\n" + "\n".join(f"\\- `{gid}`" for gid in groups)
+    bot.reply_to(message, text, parse_mode="MarkdownV2")
+
+@bot.message_handler(commands=["allusers"])
+def cmd_allusers(message):
+    if not is_owner(message): return
+    users = db.get_all_users()
+    if not users: return bot.reply_to(message, escape_md("No registered trainers."))
+    text = f"👥 *Users \\({len(users)}\\):*\n" + "\n".join(f"\\- `{uid}`" for uid in users[:50])
+    if len(users) > 50: text += f"\n\n_...and {len(users)-50} more._"
+    bot.reply_to(message, text, parse_mode="MarkdownV2")
+
+@bot.message_handler(commands=["leave"])
+def cmd_leave(message):
+    if not is_owner(message): return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2: return bot.reply_to(message, escape_md("📝 Usage: /leave <group_id>"))
+    try:
+        group_id = int(parts[1])
+        bot.leave_chat(group_id)
+        db.remove_group(group_id)
+        bot.reply_to(message, escape_md(f"✅ Left group {group_id}."))
+    except Exception as e:
+        bot.reply_to(message, escape_md(f"Error: {str(e)}"))
+
+@bot.message_handler(commands=["reset"])
+def cmd_reset(message):
+    if not is_owner(message): return
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2: return bot.reply_to(message, escape_md("📝 Usage: /reset <user_id>"))
+    try:
+        uid = int(parts[1])
         conn = sqlite3.connect(DB_FILE)
         cur = conn.cursor()
-        user_count = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        pokemon_count = cur.execute("SELECT COUNT(*) FROM pokemons").fetchone()[0]
-        group_count = cur.execute("SELECT COUNT(*) FROM groups").fetchone()[0]
+        cur.execute("UPDATE users SET tries_left=300, last_reset=? WHERE user_id=?", (str(datetime.date.today()), uid))
+        conn.commit()
         conn.close()
-        
-        status = escape_markdown_v2(
-            f"*Bot Debug Info*\nRegistered trainers: {user_count}\nTotal Pokémon caught: {pokemon_count}\n"
-            f"Active hunts: {len(active_hunts)}\nGroups: {group_count}\n"
-        )
-        bot.reply_to(message, status, parse_mode="MarkdownV2")
-        
-    elif cmd == "/clearhunts":
-        for hunt in active_hunts.values():
-            if "timer" in hunt:
-                hunt["timer"].cancel()
-        active_hunts.clear()
-        bot.reply_to(message, escape_markdown_v2("All active hunts cleared."), parse_mode="MarkdownV2")
-        
-    elif cmd == "/backup":
-        if os.path.exists(DB_FILE):
-            with open(DB_FILE, "rb") as f:
-                bot.send_document(OWNER_ID, f, caption=escape_markdown_v2("Backup database"), parse_mode="MarkdownV2")
-        else:
-            bot.reply_to(message, escape_markdown_v2("No database file found."), parse_mode="MarkdownV2")
+        bot.reply_to(message, escape_md(f"🔄 Reset scouts for user {uid}."))
+    except Exception as e:
+        bot.reply_to(message, escape_md(f"Error: {str(e)}"))
+
+@bot.message_handler(commands=["backup"])
+def cmd_backup(message):
+    if not is_owner(message): return
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "rb") as f:
+            bot.send_document(OWNER_ID, f, caption=escape_md("📦 Database Backup"))
+    else:
+        bot.reply_to(message, escape_md("❌ No database file found."))
+
+@bot.message_handler(commands=["restore"])
+def cmd_restore(message):
+    if not is_owner(message): return
+    bot.reply_to(message, escape_md("📥 Send me the .db file to restore. Max size: 20MB."))
+
+@bot.message_handler(content_types=["document"])
+def handle_restore_file(message):
+    if not is_owner(message): return
+    if not message.document.file_name.endswith((".db", ".sqlite", ".db3")):
+        return bot.reply_to(message, escape_md("❌ Invalid file format. Need .db, .sqlite, or .db3"))
+    try:
+        if os.path.exists(DB_FILE): shutil.copy(DB_FILE, f"{DB_FILE}.backup_{int(time.time())}")
+        file_info = bot.get_file(message.document.file_id)
+        data = bot.download_file(file_info.file_path)
+        with open(DB_FILE, "wb") as f: f.write(data)
+        bot.reply_to(message, escape_md("✅ Database restored successfully."))
+    except Exception as e:
+        bot.reply_to(message, escape_md(f"Error restoring: {str(e)}"))
+
+@bot.message_handler(commands=["debug"])
+def cmd_debug(message):
+    if not is_owner(message): return
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    u_c = cur.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    p_c = cur.execute("SELECT COUNT(*) FROM pokemons").fetchone()[0]
+    g_c = cur.execute("SELECT COUNT(*) FROM groups").fetchone()[0]
+    conn.close()
+    
+    status = (
+        f"🛠 *Bot Debug Info*\n"
+        f"━━━━━━━━━━━━\n"
+        f"👥 *Trainers:* {u_c}\n"
+        f"🏆 *Pokémon:* {p_c}\n"
+        f"🎯 *Active Hunts:* {len(active_hunts)}\n"
+        f"🏢 *Groups:* {g_c}"
+    )
+    bot.reply_to(message, status, parse_mode="MarkdownV2")
+
+@bot.message_handler(commands=["clearhunts"])
+def cmd_clearhunts(message):
+    if not is_owner(message): return
+    for hunt in active_hunts.values():
+        if "timer" in hunt: hunt["timer"].cancel()
+    active_hunts.clear()
+    bot.reply_to(message, escape_md("🧹 All active hunts cleared."))
 
 # ================== GROUP TRACKING ==================
 @bot.chat_member_handler()
@@ -245,8 +446,7 @@ def cb_handler(call):
         if call.data.startswith("travel_"):
             _, uid_str, region = call.data.split("_", 2)
             if call.from_user.id != int(uid_str):
-                bot.answer_callback_query(call.id, escape_markdown_v2("This selection is not for you."), parse_mode="MarkdownV2")
-                return
+                return bot.answer_callback_query(call.id, "This selection is not for you.")
                 
             conn = sqlite3.connect(DB_FILE)
             cur = conn.cursor()
@@ -254,31 +454,32 @@ def cb_handler(call):
             conn.commit()
             conn.close()
             
-            bot.edit_message_text(escape_markdown_v2(f"You travelled to {region}."), call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+            bot.edit_message_text(f"✈️ You successfully travelled to *{escape_md(region)}*\\.", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
 
         elif call.data.startswith("catch_"):
             _, uid_str, pid_str, name = call.data.split("_", 3)
             uid, pid = int(uid_str), int(pid_str)
             
             if call.from_user.id != uid:
-                bot.answer_callback_query(call.id, escape_markdown_v2("This scout is not yours."), parse_mode="MarkdownV2")
-                return
-            if call.message.message_id not in active_hunts or active_hunts[call.message.message_id]["user_id"] != uid:
-                bot.answer_callback_query(call.id, escape_markdown_v2("This scout has expired."), parse_mode="MarkdownV2")
-                return
+                return bot.answer_callback_query(call.id, "Hands off! This scout is not yours.")
+            if call.message.message_id not in active_hunts:
+                return bot.answer_callback_query(call.id, "This scout has expired.")
                 
             active_hunts[call.message.message_id]["timer"].cancel()
-            bot.edit_message_caption(caption=escape_markdown_v2("Throwing Pokéball..."), chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+            bot.edit_message_caption(caption="🔴 *Throwing Pokéball\\.\\.\\.*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             
-            time.sleep(1.5)
-            catch_rate = asyncio.run(get_species_catch_rate(pid))
+            time.sleep(1.5) 
+            
+            catch_rate = get_species_catch_rate_sync(pid)
             success = random.random() < max(0.05, min(0.95, catch_rate / 255.0))
             
             if success:
                 db.add_caught_pokemon(uid, name.capitalize(), db.get_user(uid)[2])
-                bot.edit_message_caption(caption=escape_markdown_v2(f"You caught shiny {name.capitalize()}!"), chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+                success_text = f"✨ *Gotcha\\!* Shiny *{escape_md(name.capitalize())}* was caught\\!\n\nUse /pokedex `{escape_md(name.capitalize())}` to check its stats\\."
+                bot.edit_message_caption(caption=success_text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             else:
-                bot.edit_message_caption(caption=escape_markdown_v2(f"Oh no! Shiny {name.capitalize()} escaped!"), chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+                fail_text = f"💨 Oh no\\! Shiny *{escape_md(name.capitalize())}* broke free and fled\\!"
+                bot.edit_message_caption(caption=fail_text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
                 
             active_hunts.pop(call.message.message_id, None)
 
@@ -287,15 +488,42 @@ def cb_handler(call):
             uid = int(uid_str)
             
             if call.from_user.id != uid:
-                bot.answer_callback_query(call.id, escape_markdown_v2("This scout is not yours."), parse_mode="MarkdownV2")
-                return
+                return bot.answer_callback_query(call.id, "This scout is not yours.")
             if call.message.message_id not in active_hunts:
-                return
+                return bot.answer_callback_query(call.id, "This scout has expired.")
                 
             active_hunts[call.message.message_id]["timer"].cancel()
-            bot.edit_message_caption(caption=escape_markdown_v2(f"You ran away from shiny {name.capitalize()}."), chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+            bot.edit_message_caption(caption=f"🏃‍♂️ You got away safely from *{escape_md(name.capitalize())}*\\.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             active_hunts.pop(call.message.message_id, None)
+
+        elif call.data.startswith("mypoke_") or call.data.startswith("plist_"):
+            action, uid_str, page_str = call.data.split("_")
+            uid, page_idx = int(uid_str), int(page_str)
             
+            if action == "mypoke_" and call.from_user.id != uid:
+                return bot.answer_callback_query(call.id, "This is not your bag.")
+            if action == "plist_" and call.from_user.id != OWNER_ID:
+                return bot.answer_callback_query(call.id, "Owner only.")
+                
+            names = db.list_user_pokemon_names(uid)
+            if not names: return
+            
+            page_size = 20
+            pages = [names[i:i + page_size] for i in range(0, len(names), page_size)]
+            if page_idx < 0 or page_idx >= len(pages): return
+            
+            title = "🎒 *Your Pokémon*" if action == "mypoke_" else f"🎒 *Pokémon for User {uid}*"
+            text = f"{title} \\(Page {page_idx + 1}/{len(pages)}\\):\n\n" + "\n".join(f"➥ {escape_md(n)}" for n in pages[page_idx])
+            
+            kb = types.InlineKeyboardMarkup(row_width=4)
+            kb.add(
+                types.InlineKeyboardButton("<<", callback_data=f"{action}_{uid}_0"),
+                types.InlineKeyboardButton("<", callback_data=f"{action}_{uid}_{max(0, page_idx - 1)}"),
+                types.InlineKeyboardButton(">", callback_data=f"{action}_{uid}_{min(len(pages) - 1, page_idx + 1)}"),
+                types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
+            )
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
+
     except Exception as e:
         logger.error(f"Callback handler error: {e}")
 
