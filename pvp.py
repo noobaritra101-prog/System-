@@ -46,8 +46,7 @@ TYPE_CHART = {
 def challenge_timeout(bot, chat_id, message_id):
     chal = pending_challenges.pop(message_id, None)
     if chal:
-        try:
-            bot.edit_message_text("⏳ *Challenge expired\\.*", chat_id, message_id, parse_mode="MarkdownV2")
+        try: bot.edit_message_text("⏳ *Challenge expired\\.*", chat_id, message_id, parse_mode="MarkdownV2")
         except Exception: pass
 
 def battle_timeout(bot, chat_id, battle_id):
@@ -59,10 +58,7 @@ def battle_timeout(bot, chat_id, battle_id):
         
         pvp_battles.pop(battle_id, None)
         try:
-            bot.edit_message_text(
-                f"⏳ *{escape_md(loser_name)} ran out of time\\!*\n\n🏆 *{escape_md(winner_name)} WINS THE BATTLE\\!*", 
-                chat_id, battle_id, parse_mode="MarkdownV2"
-            )
+            bot.edit_message_text(f"⏳ *{escape_md(loser_name)} ran out of time\\!*\n\n🏆 *{escape_md(winner_name)} WINS THE BATTLE\\!*", chat_id, battle_id, parse_mode="MarkdownV2")
         except Exception: pass
 
 def end_battle(battle_id):
@@ -85,10 +81,8 @@ def is_in_battle(user_id):
     return False
 
 def is_in_pending_challenge(user_id):
-    """Prevents users from sending/receiving multiple challenges at once."""
     for chal in pending_challenges.values():
-        if chal["p1_id"] == user_id or chal["p2_id"] == user_id:
-            return True
+        if chal["p1_id"] == user_id or chal["p2_id"] == user_id: return True
     return False
 
 def get_hp_bar(current, maximum, length=14):
@@ -103,9 +97,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
     b = pvp_battles[battle_id]
     turn = b["current_turn"]
     
-    # 60 Second Turn Timer Reset
-    if "timer" in b and b["timer"]:
-        b["timer"].cancel()
+    if "timer" in b and b["timer"]: b["timer"].cancel()
     b["timer"] = threading.Timer(60.0, battle_timeout, args=(bot, chat_id, battle_id))
     b["timer"].start()
     
@@ -117,7 +109,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
         def_name, def_poke = b["p1_name"], b["p1_team"][b["p1_idx"]]
     
     log_content = escape_md(b['log']) if b['log'] else "The battle begins\\!"
-    
     act_types = escape_md(active_poke['types'].replace('/', ' / '))
     def_types = escape_md(def_poke['types'].replace('/', ' / '))
     
@@ -164,7 +155,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
     elif b["state"] in ["switch_menu", "force_switch"]:
         ui_text += f" 🔄 Choose a Pokémon to switch into:\n" if b["state"] == "switch_menu" else f" 💀 Choose a replacement Pokémon:\n"
-        
         buttons = []
         for i in range(6):
             p = b[turn + "_team"][i]
@@ -173,7 +163,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
         
         kb.add(buttons[0], buttons[1], buttons[2])
         kb.add(buttons[3], buttons[4], buttons[5])
-        
         kb.row(types.InlineKeyboardButton("📋 View Team", callback_data=f"pvp_viewteam_{battle_id}_{turn}"))
         if b["state"] == "switch_menu":
             kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
@@ -185,10 +174,8 @@ def render_pvp_ui(bot, chat_id, battle_id):
             types.InlineKeyboardButton("❌ Cancel", callback_data=f"pvp_back_{battle_id}_{turn}")
         )
 
-    try:
-        bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
-    except Exception as e:
-        logger.error(f"UI Update error: {e}")
+    try: bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
+    except Exception as e: logger.error(f"UI Update error: {e}")
 
 # --- COMMAND AND CALLBACK HANDLERS ---
 def handle_pvp_command(bot, message):
@@ -196,11 +183,23 @@ def handle_pvp_command(bot, message):
     p1_id, p2_id = message.from_user.id, message.reply_to_message.from_user.id
     if p1_id == p2_id: return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
     
-    # Check if either player is already busy
     if is_in_battle(p1_id) or is_in_battle(p2_id): 
         return bot.reply_to(message, escape_md("❌ Someone is already in a battle!"))
-    if is_in_pending_challenge(p1_id) or is_in_pending_challenge(p2_id): 
-        return bot.reply_to(message, escape_md("❌ Someone already has a pending challenge!"))
+
+    # Auto-cancel old outbound challenges from this user so they aren't stuck
+    to_remove = []
+    for m_id, chal in pending_challenges.items():
+        if chal["p1_id"] == p1_id:
+            to_remove.append(m_id)
+            chal["timer"].cancel()
+            try: bot.edit_message_text("❌ *Challenge revoked because sender started a new one\\.*", chal["chat_id"], m_id, parse_mode="MarkdownV2")
+            except Exception: pass
+    for m_id in to_remove: pending_challenges.pop(m_id, None)
+
+    if is_in_pending_challenge(p1_id): 
+        return bot.reply_to(message, escape_md("❌ You have a pending challenge from someone else! Respond to it first."))
+    if is_in_pending_challenge(p2_id): 
+        return bot.reply_to(message, escape_md("❌ That user already has a pending challenge!"))
 
     kb = types.InlineKeyboardMarkup()
     kb.add(
@@ -212,17 +211,15 @@ def handle_pvp_command(bot, message):
     
     sent = bot.reply_to(message, f"🥊 *{p1_name}* challenged *{p2_name}* to a 6v6 Random Battle\\!\n\n_You have 60 seconds to accept\\._", reply_markup=kb, parse_mode="MarkdownV2")
     
-    # Start Challenge Timer
     timer = threading.Timer(60.0, challenge_timeout, args=(bot, message.chat.id, sent.message_id))
     timer.start()
-    pending_challenges[sent.message_id] = {"name": message.from_user.first_name, "timer": timer, "p1_id": p1_id, "p2_id": p2_id}
+    pending_challenges[sent.message_id] = {"name": message.from_user.first_name, "timer": timer, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id}
 
 def handle_pvp_callback(bot, call):
     try:
         parts = call.data.split("_")
         action = parts[1]
         
-        # --- PRE-BATTLE ACTIONS ---
         if action == "accept":
             p1_id, p2_id = int(parts[2]), int(parts[3])
             if call.from_user.id != p2_id: return bot.answer_callback_query(call.id, "❌ Not your challenge!", show_alert=True)
@@ -264,11 +261,11 @@ def handle_pvp_callback(bot, call):
 
         elif action == "decline":
             if call.from_user.id != int(parts[3]): return bot.answer_callback_query(call.id, "❌ Only the challenged player can decline.", show_alert=True)
+                
             chal_data = pending_challenges.pop(call.message.message_id, None)
             if chal_data: chal_data["timer"].cancel()
             bot.edit_message_text("❌ *Challenge declined\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
             return
-
 
         # --- IN-BATTLE ACTIONS ---
         if action in ["viewteam", "mega", "confirmrun", "run", "swmenu", "back", "dosw", "move"]:
@@ -278,14 +275,12 @@ def handle_pvp_callback(bot, call):
             
             turn = parts[3]
             
-            # Security Check: Reject if the clicker does not own these buttons
             if call.from_user.id != b[turn + "_id"]:
                 if action == "viewteam":
                     return bot.answer_callback_query(call.id, "❌ You cannot view your opponent's team!", show_alert=True)
                 else:
                     return bot.answer_callback_query(call.id, "❌ These are not your buttons!", show_alert=True)
             
-            # Action Routing
             if action == "viewteam":
                 team_str = ""
                 for i, p in enumerate(b[turn + "_team"]):
