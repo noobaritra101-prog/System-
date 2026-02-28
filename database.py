@@ -5,7 +5,7 @@ import threading
 import datetime
 from config import DATABASE_URL, logger
 
-# Create a dedicated event loop for database operations
+# Create a dedicated event loop for database operations to prevent blocking the bot
 db_loop = asyncio.new_event_loop()
 pool = None
 
@@ -18,18 +18,18 @@ db_thread = threading.Thread(target=_run_db_loop, args=(db_loop,), daemon=True)
 db_thread.start()
 
 def run_sync(coro):
-    """Bridge: Runs an async function synchronously safely."""
+    """Bridge: Runs an async function synchronously safely from main.py."""
     return asyncio.run_coroutine_threadsafe(coro, db_loop).result()
 
 # ================== ASYNC INTERNAL FUNCTIONS ==================
 async def _init_db():
     global pool
-    # Create an efficient connection pool (Disabled statement cache for Supabase/PgBouncer)
+    # FIXED: statement_cache_size=0 is mandatory for Supabase PgBouncer (Port 6543)
     pool = await asyncpg.create_pool(
         DATABASE_URL, 
         min_size=1, 
         max_size=10,
-        statement_cache_size=0  # <--- FIX FOR SUPABASE PGBOUNCER
+        statement_cache_size=0 
     )
     async with pool.acquire() as conn:
         await conn.execute("""
@@ -150,7 +150,7 @@ async def _get_debug_stats():
 
 async def _restore_sqlite_data(users, pokemons, groups):
     async with pool.acquire() as conn:
-        # 1. Restore Users (upsert to handle if they already exist)
+        # Restore Users (upsert)
         await conn.executemany("""
             INSERT INTO users(user_id, tries_left, region, last_reset) 
             VALUES ($1, $2, $3, $4)
@@ -158,13 +158,13 @@ async def _restore_sqlite_data(users, pokemons, groups):
             tries_left = EXCLUDED.tries_left, region = EXCLUDED.region, last_reset = EXCLUDED.last_reset
         """, users)
         
-        # 2. Restore Groups
+        # Restore Groups
         if groups:
             await conn.executemany("""
                 INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING
             """, groups)
         
-        # 3. Restore Pokémons
+        # Restore Pokémons
         if pokemons:
             await conn.executemany("""
                 INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)
@@ -187,6 +187,6 @@ def reset_user(user_id): run_sync(_reset_user(user_id))
 def update_user_region(user_id, region): run_sync(_update_user_region(user_id, region))
 def get_debug_stats(): return run_sync(_get_debug_stats())
 
-# The migration bridge
+# The migration bridge for migrating local SQLite to Supabase
 def restore_sqlite_data(users, pokemons, groups): 
     run_sync(_restore_sqlite_data(users, pokemons, groups))
