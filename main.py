@@ -27,6 +27,7 @@ from api_utils import (
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
 active_hunts = {}  
 pvp_battles = {}
+pending_challenges = {} # Stores P1 names while waiting for P2 to accept
 last_api_call = 0  
 
 # ================== GAME LOGIC & UI Helpers ==================
@@ -321,7 +322,10 @@ def cmd_pvp(message):
         types.InlineKeyboardButton("❌ Decline", callback_data=f"pvp_decline_{p1_id}_{p2_id}")
     )
     
-    bot.reply_to(message, f"🥊 *{escape_md(message.from_user.first_name)}* challenged *{escape_md(p2_name)}* to a 6v6 Random Battle\\!\n\nDo you accept?", reply_markup=kb, parse_mode="MarkdownV2")
+    sent = bot.reply_to(message, f"🥊 *{escape_md(message.from_user.first_name)}* challenged *{escape_md(p2_name)}* to a 6v6 Random Battle\\!\n\nDo you accept?", reply_markup=kb, parse_mode="MarkdownV2")
+    
+    # Store the challenger's name safely so we can use it during the loading phase
+    pending_challenges[sent.message_id] = message.from_user.first_name
 
 # ================== ADMIN COMMANDS ==================
 def is_owner(message):
@@ -521,6 +525,7 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
+        # --- SCOUT & CATCH CALLBACKS ---
         if call.data.startswith("travel_"):
             _, uid_str, region = call.data.split("_", 2)
             if call.from_user.id != int(uid_str):
@@ -609,29 +614,50 @@ def cb_handler(call):
             
             if call.from_user.id != p2_id:
                 return bot.answer_callback_query(call.id, "Only the challenged player can accept!")
-                
-            bot.edit_message_text("🔄 *Generating 6v6 Random Teams\\.\\.\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
-            
-            p1_team = asyncio.run(generate_random_team())
-            p2_team = asyncio.run(generate_random_team())
-            
-            if len(p1_team) < 6 or len(p2_team) < 6:
-                return bot.edit_message_text("❌ Error connecting to PokeAPI. Try again.", call.message.chat.id, call.message.message_id)
+
+            # 1. Answer immediately so the Telegram loading circle stops
+            bot.answer_callback_query(call.id, "Challenge Accepted! Preparing the arena...")
 
             battle_id = call.message.message_id
+            chat_id = call.message.chat.id
             
-            # Use original message sender as P1 Name, current user as P2 Name
-            p1_name = "Player 1"  # Default fallback
-            if call.message.reply_to_message:
-                p1_name = call.message.reply_to_message.from_user.first_name
-            
-            pvp_battles[battle_id] = {
-                "p1_id": p1_id, "p1_name": p1_name, "p1_team": p1_team, "p1_idx": 0, "p1_action": None,
-                "p2_id": p2_id, "p2_name": call.from_user.first_name, "p2_team": p2_team, "p2_idx": 0, "p2_action": None,
-                "log": "⚔️ *Battle started\\! What will you do?*"
-            }
-            
-            render_pvp_ui(bot, call.message.chat.id, battle_id)
+            # Extract player names safely
+            p1_name = pending_challenges.pop(battle_id, "Player 1")
+            p2_name = call.from_user.first_name
+
+            # 2. Run the heavy team fetching logic in a background thread
+            def setup_battle():
+                try:
+                    bot.edit_message_text("🔄 *Connecting to the PvP Arena\\.\\.\\.*", chat_id, battle_id, parse_mode="MarkdownV2")
+                    time.sleep(1)
+
+                    bot.edit_message_text(f"🔍 *Choosing 6 random Pokémon for {escape_md(p1_name)}\\.\\.\\.*", chat_id, battle_id, parse_mode="MarkdownV2")
+                    p1_team = asyncio.run(generate_random_team())
+
+                    bot.edit_message_text(f"🔍 *Choosing 6 random Pokémon for {escape_md(p2_name)}\\.\\.\\.*", chat_id, battle_id, parse_mode="MarkdownV2")
+                    p2_team = asyncio.run(generate_random_team())
+
+                    bot.edit_message_text("⚙️ *Equipping random moves for both teams\\.\\.\\.*", chat_id, battle_id, parse_mode="MarkdownV2")
+                    time.sleep(1.5)
+
+                    if len(p1_team) < 6 or len(p2_team) < 6:
+                        return bot.edit_message_text("❌ *Error connecting to PokeAPI\\. Try again\\.*", chat_id, battle_id, parse_mode="MarkdownV2")
+
+                    # Initialize battle state
+                    pvp_battles[battle_id] = {
+                        "p1_id": p1_id, "p1_name": p1_name, "p1_team": p1_team, "p1_idx": 0, "p1_action": None,
+                        "p2_id": p2_id, "p2_name": p2_name, "p2_team": p2_team, "p2_idx": 0, "p2_action": None,
+                        "log": "⚔️ *Battle started\\! What will you do?*"
+                    }
+                    
+                    # Render the UI
+                    render_pvp_ui(bot, chat_id, battle_id)
+                except Exception as e:
+                    logger.error(f"PvP Setup Error: {e}")
+                    bot.edit_message_text("❌ *An error occurred while setting up the battle\\.*", chat_id, battle_id, parse_mode="MarkdownV2")
+
+            # Start the background thread
+            threading.Thread(target=setup_battle).start()
 
         elif call.data.startswith("pvp_decline_"):
             _, p1_id_str, p2_id_str = call.data.split("_")
@@ -662,7 +688,7 @@ def cb_handler(call):
             b[f"{player_num}_action"] = active_poke["moves"][move_idx]
             bot.answer_callback_query(call.id, f"Locked in {b[f'{player_num}_action']}!")
             
-            # Wait for both players
+            # Wait for both players to pick their moves
             if b["p1_action"] is None or b["p2_action"] is None:
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
                 return
@@ -671,7 +697,7 @@ def cb_handler(call):
             p1_poke = b["p1_team"][b["p1_idx"]]
             p2_poke = b["p2_team"][b["p2_idx"]]
             
-            # Determine turn order by speed
+            # Determine turn order by Base Speed
             first, second = ("p1", "p2") if p1_poke["spd"] >= p2_poke["spd"] else ("p2", "p1")
             log = f"⚔️ *Turn Resolved\\!*\n\n"
             
@@ -681,11 +707,12 @@ def cb_handler(call):
                 def_poke = b[f"{defender}_team"][b[f"{defender}_idx"]]
                 move_used = b[f"{attacker}_action"]
                 
-                # Simplified damage calc
+                # Deal Damage
                 dmg = max(1, int(((atk_poke["atk"] / def_poke["def"]) * random.randint(40, 100)) / 2))
                 def_poke["hp"] -= dmg
                 log += f"🔹 {escape_md(atk_poke['name'])} used {escape_md(move_used)}\\! Dealt {dmg} DMG\\.\n"
                 
+                # Check for death
                 if def_poke["hp"] <= 0:
                     log += f"💀 *{escape_md(def_poke['name'])} fainted\\!*\n"
                     b[f"{defender}_idx"] += 1
@@ -699,6 +726,7 @@ def cb_handler(call):
                         return
                     break # Stop turn if someone dies
             
+            # Reset actions for the next turn
             b["log"] = log
             b["p1_action"] = None
             b["p2_action"] = None
