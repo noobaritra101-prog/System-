@@ -66,44 +66,62 @@ def render_pvp_ui(bot, chat_id, battle_id):
     p1_status = f" \\[{p1_poke['status']}\\]" if p1_poke["status"] else ""
     p2_status = f" \\[{p2_poke['status']}\\]" if p2_poke["status"] else ""
 
-    moves_text = "\n".join([f"\\> 🔹 {escape_md(m['name'])} \\| Acc: {m['acc']}% \\| Pw: {m['power']} \\({escape_md(m['type'])}\\)" for m in active_poke["moves"]])
-    log_text = b['log'] if b['log'] else "⚔️ *Battle Started\\!*"
+    log_text = escape_md(b['log']) if b['log'] else "⚔️ *Battle Started\\!*"
 
-    # NEW BLOCKQUOTE UI
+    # NEW BLOCKQUOTE UI FORMAT
     ui_text = (
-        f"*{escape_md(p1_poke['name'])} vs {escape_md(p2_poke['name'])}*\n"
+        f"{log_text}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"\\> 👤 *{escape_md(b['p1_name'])}*\n"
-        f"\\> 🛡️ {escape_md(p1_poke['name'])} \\({escape_md(p1_poke['types'])}\\){escape_md(p1_status)}\n"
-        f"\\> 🌟 Level 100\n"
-        f"\\> HP {p1_hp_bar}\n"
-        f"\\> ❤️ {p1_poke['hp']}/{p1_poke['max_hp']}\n"
+        f"> 👤 *{escape_md(b['p1_name'])}*\n"
+        f"> 🛡️ {escape_md(p1_poke['name'])} \\({escape_md(p1_poke['types'])}\\){escape_md(p1_status)}\n"
+        f"> 🌟 Level 100\n"
+        f"> HP {p1_hp_bar}\n"
+        f"> ❤️ {p1_poke['hp']}/{p1_poke['max_hp']}\n"
         f"🆚\n"
-        f"\\> 👤 *{escape_md(b['p2_name'])}*\n"
-        f"\\> 🛡️ {escape_md(p2_poke['name'])} \\({escape_md(p2_poke['types'])}\\){escape_md(p2_status)}\n"
-        f"\\> 🌟 Level 100\n"
-        f"\\> HP {p2_hp_bar}\n"
-        f"\\> ❤️ {p2_poke['hp']}/{p2_poke['max_hp']}\n"
+        f"> 👤 *{escape_md(b['p2_name'])}*\n"
+        f"> 🛡️ {escape_md(p2_poke['name'])} \\({escape_md(p2_poke['types'])}\\){escape_md(p2_status)}\n"
+        f"> 🌟 Level 100\n"
+        f"> HP {p2_hp_bar}\n"
+        f"> ❤️ {p2_poke['hp']}/{p2_poke['max_hp']}\n"
         f"━━━━━━━━━━━━━━━━━\n"
-        f"{log_text}\n\n"
         f"🎯 Current Turn \\- *{escape_md(active_player_name)}*\n\n"
-        f"\\> *Moves Details:*\n"
-        f"{moves_text}"
     )
+
+    # Dynamic Menu States
+    if b["state"] == "menu":
+        # Unescaped inside triple backticks!
+        moves_block = "\n".join([f"> 🔹 {m['name']} | Acc: {m['acc']}% | Pw: {m['power']} ({m['type']})" for m in active_poke["moves"]])
+        ui_text += f"```Moves Details:\n{moves_block}\n```"
+    elif b["state"] == "switch_menu":
+        ui_text += f"```\n> 🔄 Choose a Pokémon to switch into:\n```"
+    elif b["state"] == "force_switch":
+        ui_text += f"```\n> 💀 Your Pokémon fainted! Choose a replacement:\n```"
     
+    # Inline Buttons
     kb = types.InlineKeyboardMarkup(row_width=2)
-    moves = active_poke["moves"]
     
-    kb.add(
-        types.InlineKeyboardButton(f"⚔️ {moves[0]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_0"),
-        types.InlineKeyboardButton(f"⚔️ {moves[1]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_1"),
-        types.InlineKeyboardButton(f"⚔️ {moves[2]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_2"),
-        types.InlineKeyboardButton(f"⚔️ {moves[3]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_3")
-    )
-    kb.add(
-        types.InlineKeyboardButton("🔄 Switch", callback_data=f"pvp_switch_{battle_id}_{turn}"),
-        types.InlineKeyboardButton("🏃‍♂️ Run", callback_data=f"pvp_run_{battle_id}_{turn}")
-    )
+    if b["state"] == "menu":
+        moves = active_poke["moves"]
+        kb.add(
+            types.InlineKeyboardButton(f"⚔️ {moves[0]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_0"),
+            types.InlineKeyboardButton(f"⚔️ {moves[1]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_1"),
+            types.InlineKeyboardButton(f"⚔️ {moves[2]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_2"),
+            types.InlineKeyboardButton(f"⚔️ {moves[3]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_3")
+        )
+        kb.row(types.InlineKeyboardButton("🔄 Switch", callback_data=f"pvp_switchmenu_{battle_id}_{turn}"))
+    
+    elif b["state"] in ["switch_menu", "force_switch"]:
+        team = b[turn + "_team"]
+        for i, poke in enumerate(team):
+            if poke["hp"] > 0 and i != b[turn + "_idx"]:
+                kb.row(types.InlineKeyboardButton(f"🔄 {poke['name']} ({poke['hp']}/{poke['max_hp']})", callback_data=f"pvp_doswitch_{battle_id}_{turn}_{i}"))
+        
+        # Only allow going back if the switch wasn't forced by a faint
+        if b["state"] == "switch_menu":
+            kb.row(types.InlineKeyboardButton("🔙 Back to Moves", callback_data=f"pvp_back_{battle_id}_{turn}"))
+            
+    # Any player can flee at any time
+    kb.row(types.InlineKeyboardButton("🏃‍♂️ Flee (Any Player)", callback_data=f"pvp_run_{battle_id}"))
         
     try:
         bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -148,7 +166,8 @@ def handle_pvp_callback(bot, call):
                     pvp_battles[battle_id] = {
                         "p1_id": p1_id, "p1_name": p1_name, "p1_team": p1_team, "p1_idx": 0, 
                         "p2_id": p2_id, "p2_name": p2_name, "p2_team": p2_team, "p2_idx": 0, 
-                        "current_turn": "p1", "log": ""
+                        "current_turn": "p1", "next_turn_after_switch": "p1",
+                        "state": "menu", "log": ""
                     }
                     render_pvp_ui(bot, chat_id, battle_id)
                 except Exception as e: logger.error(f"PvP Setup Error: {e}")
@@ -160,11 +179,26 @@ def handle_pvp_callback(bot, call):
 
         elif call.data.startswith("pvp_"):
             parts = call.data.split("_")
-            action, battle_id, player_num = parts[1], int(parts[2]), parts[3]
+            action = parts[1] # run, switchmenu, back, doswitch, move
+            battle_id = int(parts[2])
             
             if battle_id not in pvp_battles: return bot.answer_callback_query(call.id, "This battle is over.")
             b = pvp_battles[battle_id]
+
+            # ANY player can run at ANY time
+            if action == "run":
+                if call.from_user.id == b["p1_id"]: runner = b["p1_name"]
+                elif call.from_user.id == b["p2_id"]: runner = b["p2_name"]
+                else: return bot.answer_callback_query(call.id, "You are not in this battle!")
+                    
+                bot.answer_callback_query(call.id, "You fled!")
+                bot.edit_message_text(f"🏃‍♂️ *{escape_md(runner)} ran away from the battle\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                pvp_battles.pop(battle_id, None)
+                return
+
+            player_num = parts[3] # p1 or p2
             
+            # Authorization Checks for Moves and Switches
             if call.from_user.id != b[player_num + "_id"]: return bot.answer_callback_query(call.id, "These are not your buttons!")
             if b["current_turn"] != player_num: return bot.answer_callback_query(call.id, "It is not your turn!")
 
@@ -174,26 +208,31 @@ def handle_pvp_callback(bot, call):
             def_team = b[defender + "_team"]
             def_poke = def_team[b[defender + "_idx"]]
 
-            if action == "run":
-                bot.answer_callback_query(call.id, "You fled!")
-                bot.edit_message_text(f"🏃‍♂️ *{escape_md(b[player_num + '_name'])} ran away from the battle\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
-                pvp_battles.pop(battle_id, None)
+            if action == "switchmenu":
+                b["state"] = "switch_menu"
+                render_pvp_ui(bot, call.message.chat.id, battle_id)
                 return
-            
-            elif action == "switch":
-                next_idx = -1
-                for i in range(b[player_num + "_idx"] + 1, 6):
-                    if atk_team[i]["hp"] > 0: next_idx = i; break
-                if next_idx == -1: 
-                    for i in range(0, b[player_num + "_idx"]):
-                        if atk_team[i]["hp"] > 0: next_idx = i; break
-                            
-                if next_idx == -1: return bot.answer_callback_query(call.id, "You have no other Pokémon left to switch to!")
+
+            elif action == "back":
+                b["state"] = "menu"
+                render_pvp_ui(bot, call.message.chat.id, battle_id)
+                return
+
+            elif action == "doswitch":
+                idx = int(parts[4])
+                if atk_team[idx]["hp"] <= 0: return bot.answer_callback_query(call.id, "That Pokémon is fainted!")
                 
-                b[player_num + "_idx"] = next_idx
-                new_poke = atk_team[next_idx]
-                b["log"] = f"🔄 *{escape_md(b[player_num + '_name'])}* switched to *{escape_md(new_poke['name'])}*\\!"
-                b["current_turn"] = defender
+                b[player_num + "_idx"] = idx
+                b["log"] = f"🔄 *{escape_md(b[player_num + '_name'])}* sent out *{escape_md(atk_team[idx]['name'])}*\\!"
+                
+                if b["state"] == "force_switch":
+                    # If switch was forced by death, the NEXT person to go is the one who didn't die
+                    b["current_turn"] = b["next_turn_after_switch"]
+                else:
+                    # Manual switch consumes the turn
+                    b["current_turn"] = defender
+                    
+                b["state"] = "menu"
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
                 return
 
@@ -226,7 +265,7 @@ def handle_pvp_callback(bot, call):
 
                 if can_attack:
                     if random.randint(1, 100) > move_data["acc"]:
-                        b["log"] += f"💨 *{escape_md(atk_poke['name'])}* used *{escape_md(move_data['name'])}*, but it missed\\!\n"
+                        b["log"] += f"💨 *{escape_md(atk_poke['name'])}* used {escape_md(move_data['name'])}, but it missed\\!\n"
                     else:
                         stab = 1.5 if move_data["type"] in atk_poke["types"] else 1.0
                         type_mult = get_type_multiplier(move_data["type"], def_poke["types"])
@@ -242,7 +281,7 @@ def handle_pvp_callback(bot, call):
                             elif type_mult < 1: b["log"] += "🛡️ It's not very effective\\.\\.\\.\n"
                             
                             # Apply Status to Defender
-                            if not def_poke["status"] and move_data["status_chance"] > 0:
+                            if not def_poke["status"] and move_data["status_chance"] > 0 and def_poke["hp"] > 0:
                                 if random.randint(1, 100) <= move_data["status_chance"]:
                                     def_poke["status"] = move_data["status_type"]
                                     if move_data["status_type"] == "SLP": def_poke["sleep_turns"] = random.randint(1, 3)
@@ -259,28 +298,47 @@ def handle_pvp_callback(bot, call):
                         atk_poke["hp"] -= psn_dmg
                         b["log"] += f"☠️ *{escape_md(atk_poke['name'])}* is hurt by poison\\!\n"
 
-                # Check Faints
-                def check_faints(t_name, t_team, t_idx, enemy_name):
+                # Check Faints Helper
+                def check_faints(t_name, t_team, t_idx):
                     if t_team[t_idx]["hp"] <= 0:
+                        t_team[t_idx]["hp"] = 0
                         b["log"] += f"\n💀 *{escape_md(t_team[t_idx]['name'])} fainted\\!*"
                         t_team[t_idx]["status"] = None 
-                        b[t_name + "_idx"] += 1
-                        if b[t_name + "_idx"] >= 6: return True
-                        b["log"] += f"\n🔄 *{escape_md(b[t_name + '_name'])}* sent out *{escape_md(t_team[b[t_name + '_idx']]['name'])}*\\!"
-                    return False
+                        
+                        alive_count = sum(1 for p in t_team if p["hp"] > 0)
+                        if alive_count == 0: return "game_over"
+                        return "fainted"
+                    return "alive"
 
-                if check_faints(player_num, atk_team, b[player_num + "_idx"], b[defender + "_name"]):
-                    b["log"] += f"\n\n🏆 *{escape_md(b[defender + '_name'])} WINS THE BATTLE\\!*"
-                    bot.edit_message_text(b["log"], call.message.chat.id, battle_id, parse_mode="MarkdownV2")
-                    pvp_battles.pop(battle_id, None)
-                    return
-                
-                if check_faints(defender, def_team, b[defender + "_idx"], b[player_num + "_name"]):
+                # Did Defender Die?
+                def_state = check_faints(defender, def_team, b[defender + "_idx"])
+                if def_state == "game_over":
                     b["log"] += f"\n\n🏆 *{escape_md(b[player_num + '_name'])} WINS THE BATTLE\\!*"
                     bot.edit_message_text(b["log"], call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                     pvp_battles.pop(battle_id, None)
                     return
+                elif def_state == "fainted":
+                    b["state"] = "force_switch"
+                    b["current_turn"] = defender
+                    b["next_turn_after_switch"] = defender
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                    return
 
+                # Did Attacker Die (from Burn/Poison/Recoil)?
+                atk_state = check_faints(player_num, atk_team, b[player_num + "_idx"])
+                if atk_state == "game_over":
+                    b["log"] += f"\n\n🏆 *{escape_md(b[defender + '_name'])} WINS THE BATTLE\\!*"
+                    bot.edit_message_text(b["log"], call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                    pvp_battles.pop(battle_id, None)
+                    return
+                elif atk_state == "fainted":
+                    b["state"] = "force_switch"
+                    b["current_turn"] = player_num
+                    b["next_turn_after_switch"] = defender
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                    return
+
+                # No one fainted, turn goes to the other player
                 b["current_turn"] = defender
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
 
