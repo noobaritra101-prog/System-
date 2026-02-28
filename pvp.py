@@ -90,12 +90,12 @@ def render_pvp_ui(bot, chat_id, battle_id):
             m_name = escape_md(m['name'])
             m_type = escape_md(m['type'])
             # Using MarkdownV2 blockquote syntax (\>) and bolding the move name
-            moves_block += f"\\> *{m_name}* \\[{m_type}\\]\n\\> Power: {m['power']}, Accuracy: {m['acc']}\n"
+            moves_block += f"\\ *{m_name}* \\[{m_type}\\]\n\\ Power: {m['power']}, Accuracy: {m['acc']}\n"
         ui_text += moves_block
     elif b["state"] == "switch_menu":
-        ui_text += f"\\> 🔄 Choose a Pokémon to switch into:\n"
+        ui_text += f"\\ 🔄 Choose a Pokémon to switch into:\n"
     elif b["state"] == "force_switch":
-        ui_text += f"\\> 💀 Your Pokémon fainted\\! Choose a replacement:\n"
+        ui_text += f"\\ 💀 Your Pokémon fainted\\! Choose a replacement:\n"
     
     # Inline Keyboard Setup
     kb = types.InlineKeyboardMarkup(row_width=2)
