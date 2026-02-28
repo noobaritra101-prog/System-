@@ -1,37 +1,40 @@
 # database.py
-import sqlite3
+import psycopg2
 import datetime
-from config import DB_FILE, logger
+from config import DATABASE_URL, logger
+
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users(
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 tries_left INTEGER DEFAULT 300,
-                region TEXT DEFAULT 'Kanto',
+                region VARCHAR(50) DEFAULT 'Kanto',
                 last_reset DATE
             )
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pokemons(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                region TEXT NOT NULL
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                name VARCHAR(100) NOT NULL,
+                region VARCHAR(50) NOT NULL
             )
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS groups(
-                group_id INTEGER PRIMARY KEY
+                group_id BIGINT PRIMARY KEY
             )
         """)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_user_id ON pokemons(user_id)")
         conn.commit()
-        logger.info("Database initialized successfully")
+        logger.info("PostgreSQL Database initialized successfully")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
@@ -40,9 +43,9 @@ def init_db():
 
 def add_group(group_id):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
-        cur.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
+        cur.execute("INSERT INTO groups(group_id) VALUES (%s) ON CONFLICT (group_id) DO NOTHING", (group_id,))
         conn.commit()
     except Exception as e:
         logger.error(f"Error adding group {group_id}: {e}")
@@ -51,9 +54,9 @@ def add_group(group_id):
 
 def remove_group(group_id):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
-        cur.execute("DELETE FROM groups WHERE group_id=?", (group_id,))
+        cur.execute("DELETE FROM groups WHERE group_id=%s", (group_id,))
         conn.commit()
     except Exception as e:
         logger.error(f"Error removing group {group_id}: {e}")
@@ -62,7 +65,7 @@ def remove_group(group_id):
 
 def get_all_groups():
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT group_id FROM groups ORDER BY group_id")
         rows = cur.fetchall()
@@ -74,9 +77,9 @@ def get_all_groups():
 
 def get_user(user_id):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT user_id, tries_left, region, last_reset FROM users WHERE user_id=?", (user_id,))
+        cur.execute("SELECT user_id, tries_left, region, last_reset FROM users WHERE user_id=%s", (user_id,))
         row = cur.fetchone()
         conn.close()
         return row
@@ -88,9 +91,9 @@ def add_user_if_new(user_id):
     existed = get_user(user_id) is not None
     if not existed:
         try:
-            conn = sqlite3.connect(DB_FILE)
+            conn = get_conn()
             cur = conn.cursor()
-            cur.execute("INSERT INTO users(user_id, tries_left, region, last_reset) VALUES (?, ?, ?, ?)",
+            cur.execute("INSERT INTO users(user_id, tries_left, region, last_reset) VALUES (%s, %s, %s, %s)",
                         (user_id, 300, "Kanto", str(datetime.date.today())))
             conn.commit()
             logger.info(f"New user added: {user_id}")
@@ -102,21 +105,22 @@ def add_user_if_new(user_id):
 
 def update_user_tries(user_id):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT tries_left, region, last_reset FROM users WHERE user_id=?", (user_id,))
+        cur.execute("SELECT tries_left, region, last_reset FROM users WHERE user_id=%s", (user_id,))
         row = cur.fetchone()
         if not row:
             return None, None
         tries_left, region, last_reset = row
         today_str = str(datetime.date.today())
-        if last_reset != today_str:
+        
+        # Postgres returns datetime.date objects, so check properly
+        if str(last_reset) != today_str:
             tries_left = 300
-            cur.execute("UPDATE users SET tries_left=?, last_reset=? WHERE user_id=?", (tries_left, today_str, user_id))
+            cur.execute("UPDATE users SET tries_left=%s, last_reset=%s WHERE user_id=%s", (tries_left, today_str, user_id))
             conn.commit()
-            logger.info(f"Daily reset for user {user_id}")
         if tries_left > 0:
-            cur.execute("UPDATE users SET tries_left = tries_left - 1 WHERE user_id=?", (user_id,))
+            cur.execute("UPDATE users SET tries_left = tries_left - 1 WHERE user_id=%s", (user_id,))
             conn.commit()
         conn.close()
         return tries_left, region
@@ -126,9 +130,9 @@ def update_user_tries(user_id):
 
 def add_caught_pokemon(user_id, name, region):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
-        cur.execute("INSERT INTO pokemons(user_id, name, region) VALUES (?, ?, ?)", (user_id, name, region))
+        cur.execute("INSERT INTO pokemons(user_id, name, region) VALUES (%s, %s, %s)", (user_id, name, region))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -136,9 +140,9 @@ def add_caught_pokemon(user_id, name, region):
 
 def list_user_pokemon_names(user_id):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT name FROM pokemons WHERE user_id=? ORDER BY id DESC", (user_id,))
+        cur.execute("SELECT name FROM pokemons WHERE user_id=%s ORDER BY id DESC", (user_id,))
         rows = cur.fetchall()
         conn.close()
         return [r[0].capitalize() for r in rows]
@@ -148,9 +152,9 @@ def list_user_pokemon_names(user_id):
 
 def delete_pokemon(user_id, pokemon_name):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
-        cur.execute("DELETE FROM pokemons WHERE user_id=? AND name=?", (user_id, pokemon_name.capitalize()))
+        cur.execute("DELETE FROM pokemons WHERE user_id=%s AND name=%s", (user_id, pokemon_name.capitalize()))
         deleted = cur.rowcount
         conn.commit()
         conn.close()
@@ -161,7 +165,7 @@ def delete_pokemon(user_id, pokemon_name):
 
 def get_all_users():
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT user_id FROM users ORDER BY user_id")
         rows = cur.fetchall()
@@ -173,14 +177,14 @@ def get_all_users():
 
 def get_top_trainers(limit=5):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
             SELECT user_id, COUNT(*) as c
             FROM pokemons
             GROUP BY user_id
             ORDER BY c DESC
-            LIMIT ?
+            LIMIT %s
         """, (limit,))
         rows = cur.fetchall()
         conn.close()
