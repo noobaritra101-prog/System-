@@ -24,8 +24,13 @@ def run_sync(coro):
 # ================== ASYNC INTERNAL FUNCTIONS ==================
 async def _init_db():
     global pool
-    # Create an efficient connection pool
-    pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+    # Create an efficient connection pool (Disabled statement cache for Supabase/PgBouncer)
+    pool = await asyncpg.create_pool(
+        DATABASE_URL, 
+        min_size=1, 
+        max_size=10,
+        statement_cache_size=0  # <--- FIX FOR SUPABASE PGBOUNCER
+    )
     async with pool.acquire() as conn:
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS users(
@@ -154,7 +159,6 @@ async def _restore_sqlite_data(users, pokemons, groups):
         """, users)
         
         # 2. Restore Groups
-        # Groups might be empty depending on the SQLite file, so check if it has items first
         if groups:
             await conn.executemany("""
                 INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING
