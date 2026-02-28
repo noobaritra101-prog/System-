@@ -46,65 +46,66 @@ def is_in_battle(user_id):
         if user_id in (b["p1_id"], b["p2_id"]): return True
     return False
 
-def get_hp_bar(current, maximum, length=10):
-    if maximum <= 0: return "▱" * length
+def get_hp_bar(current, maximum, length=14):
+    if maximum <= 0: return "░" * length
     filled = int((current / maximum) * length)
     filled = max(0, min(length, filled))
-    # Escape these characters just in case
-    return escape_md("▰" * filled + "▱" * (length - filled))
+    # Using full blocks and light shades for a clean look
+    return escape_md("█" * filled + "░" * (length - filled))
 
 def render_pvp_ui(bot, chat_id, battle_id):
     if battle_id not in pvp_battles: return
     b = pvp_battles[battle_id]
     turn = b["current_turn"]
     
-    p1_poke, p2_poke = b["p1_team"][b["p1_idx"]], b["p2_team"][b["p2_idx"]]
+    # Determine active vs defending player based on turn
+    if turn == "p1":
+        active_name, active_poke = b["p1_name"], b["p1_team"][b["p1_idx"]]
+        def_name, def_poke = b["p2_name"], b["p2_team"][b["p2_idx"]]
+    else:
+        active_name, active_poke = b["p2_name"], b["p2_team"][b["p2_idx"]]
+        def_name, def_poke = b["p1_name"], b["p1_team"][b["p1_idx"]]
     
-    active_player_name = b[turn + "_name"]
-    active_poke = b[turn + "_team"][b[turn + "_idx"]]
-    
-    p1_status = f" \\[{escape_md(p1_poke['status'])}\\]" if p1_poke["status"] else ""
-    p2_status = f" \\[{escape_md(p2_poke['status'])}\\]" if p2_poke["status"] else ""
-
-    # Generate log and safely escape it
-    log_content = b['log'] if b['log'] else "Battle Started!"
+    log_content = b['log'] if b['log'] else "The battle begins!"
     safe_log = escape_md(log_content)
+    
+    # Replace slashes with spaced slashes for aesthetic [Dark / Flying]
+    def_types = escape_md(def_poke['types'].replace('/', ' / '))
+    act_types = escape_md(active_poke['types'].replace('/', ' / '))
 
     ui_text = (
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"\\> 👤 *{escape_md(b['p1_name'])}*\n"
-        f"\\> 🛡️ {escape_md(p1_poke['name'])} \\({escape_md(p1_poke['types'])}\\){p1_status}\n"
-        f"\\> 🌟 Level 100\n"
-        f"\\> HP {get_hp_bar(p1_poke['hp'], p1_poke['max_hp'])}\n"
-        f"\\> ❤️ {p1_poke['hp']}/{p1_poke['max_hp']}\n"
-        f"🆚\n"
-        f"\\> 👤 *{escape_md(b['p2_name'])}*\n"
-        f"\\> 🛡️ {escape_md(p2_poke['name'])} \\({escape_md(p2_poke['types'])}\\){p2_status}\n"
-        f"\\> 🌟 Level 100\n"
-        f"\\> HP {get_hp_bar(p2_poke['hp'], p2_poke['max_hp'])}\n"
-        f"\\> ❤️ {p2_poke['hp']}/{p2_poke['max_hp']}\n"
-        f"━━━━━━━━━━━━━━━━━\n"
-        f"🎯 Current Turn \\- *{escape_md(active_player_name)}*\n\n"
         f"{safe_log}\n\n"
+        f"*{escape_md(def_name)}*'s {escape_md(def_poke['name'])} \\[{def_types}\\]\n"
+        f"Lv\\. 100  •  HP {def_poke['hp']}/{def_poke['max_hp']}\n"
+        f"{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}\n\n"
+        f"Current turn: *{escape_md(active_name)}*\n"
+        f"*{escape_md(active_name)}*'s {escape_md(active_poke['name'])} \\[{act_types}\\]\n"
+        f"Lv\\. 100  •  HP {active_poke['hp']}/{active_poke['max_hp']}\n"
+        f"{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}\n\n"
     )
 
     if b["state"] == "menu":
-        # Characters inside code blocks usually don't need escaping, but the block itself needs to be clean
-        moves_block = "\n".join([f"> 🔹 {m['name']} | Acc: {m['acc']}% | Pw: {m['power']} ({m['type']})" for m in active_poke["moves"]])
-        ui_text += f"```Moves Details:\n{moves_block}\n```"
+        moves_block = ""
+        for m in active_poke["moves"]:
+            m_name = escape_md(m['name'])
+            m_type = escape_md(m['type'])
+            # Using MarkdownV2 blockquote syntax (\>) and bolding the move name
+            moves_block += f"\\> *{m_name}* \\[{m_type}\\]\n\\> Power: {m['power']}, Accuracy: {m['acc']}\n"
+        ui_text += moves_block
     elif b["state"] == "switch_menu":
-        ui_text += f"```\n> 🔄 Choose a Pokémon to switch into:\n```"
+        ui_text += f"\\> 🔄 Choose a Pokémon to switch into:\n"
     elif b["state"] == "force_switch":
-        ui_text += f"```\n> 💀 Your Pokémon fainted! Choose a replacement:\n```"
+        ui_text += f"\\> 💀 Your Pokémon fainted\\! Choose a replacement:\n"
     
+    # Inline Keyboard Setup
     kb = types.InlineKeyboardMarkup(row_width=2)
     if b["state"] == "menu":
         moves = active_poke["moves"]
         kb.add(
-            types.InlineKeyboardButton(f"⚔️ {moves[0]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_0"),
-            types.InlineKeyboardButton(f"⚔️ {moves[1]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_1"),
-            types.InlineKeyboardButton(f"⚔️ {moves[2]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_2"),
-            types.InlineKeyboardButton(f"⚔️ {moves[3]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_3")
+            types.InlineKeyboardButton(f"{moves[0]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_0"),
+            types.InlineKeyboardButton(f"{moves[1]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_1"),
+            types.InlineKeyboardButton(f"{moves[2]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_2"),
+            types.InlineKeyboardButton(f"{moves[3]['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_3")
         )
         kb.row(types.InlineKeyboardButton("🔄 Switch", callback_data=f"pvp_switchmenu_{battle_id}_{turn}"))
     
@@ -115,9 +116,9 @@ def render_pvp_ui(bot, chat_id, battle_id):
                 kb.row(types.InlineKeyboardButton(f"🔄 {poke['name']} ({poke['hp']}/{poke['max_hp']})", callback_data=f"pvp_doswitch_{battle_id}_{turn}_{i}"))
         
         if b["state"] == "switch_menu":
-            kb.row(types.InlineKeyboardButton("🔙 Back to Moves", callback_data=f"pvp_back_{battle_id}_{turn}"))
+            kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
             
-    kb.row(types.InlineKeyboardButton("🏃‍♂️ Run (Any Player)", callback_data=f"pvp_run_{battle_id}"))
+    kb.row(types.InlineKeyboardButton("🏃‍♂️ Run", callback_data=f"pvp_run_{battle_id}"))
         
     try:
         bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -330,3 +331,6 @@ def handle_pvp_callback(bot, call):
 
     except Exception as e:
         logger.error(f"PvP Callback error: {e}")
+
+
+
