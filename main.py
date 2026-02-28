@@ -20,14 +20,71 @@ from api_utils import (
     official_shiny_artwork_url, 
     default_pokemon_image, 
     get_species_catch_rate_sync,
-    get_pokemon_stats_sync
+    get_pokemon_stats_sync,
+    generate_random_team
 )
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
 active_hunts = {}  
+pvp_battles = {}
 last_api_call = 0  
 
-# ================== GAME LOGIC ==================
+# ================== GAME LOGIC & UI Helpers ==================
+def render_pvp_ui(bot_instance, chat_id, battle_id):
+    if battle_id not in pvp_battles: return
+    b = pvp_battles[battle_id]
+    
+    p1_poke = b["p1_team"][b["p1_idx"]]
+    p2_poke = b["p2_team"][b["p2_idx"]]
+    
+    # Generate Team Icons (🔴 alive, 💀 dead)
+    p1_team_ui = "".join(["🔴" if i >= b["p1_idx"] else "💀" for i in range(6)])
+    p2_team_ui = "".join(["🔴" if i >= b["p2_idx"] else "💀" for i in range(6)])
+    
+    p1_status = "⏳ Waiting\\.\\.\\." if b["p1_action"] is None else "✅ Ready\\!"
+    p2_status = "⏳ Waiting\\.\\.\\." if b["p2_action"] is None else "✅ Ready\\!"
+
+    ui_text = (
+        f"{b['log']}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🟦 *Player 1: {escape_md(b['p1_name'])}* [{p1_team_ui}]\n"
+        f"🛡️ *{escape_md(p1_poke['name'])}* \\| ❤️ {p1_poke['hp']}/{p1_poke['max_hp']} HP\n"
+        f"Status: {p1_status}\n\n"
+        f"🆚\n\n"
+        f"🟥 *Player 2: {escape_md(b['p2_name'])}* [{p2_team_ui}]\n"
+        f"🛡️ *{escape_md(p2_poke['name'])}* \\| ❤️ {p2_poke['hp']}/{p2_poke['max_hp']} HP\n"
+        f"Status: {p2_status}\n"
+    )
+    
+    kb = types.InlineKeyboardMarkup()
+    
+    # Player 1 Move Buttons (2x2 Grid)
+    if b["p1_action"] is None:
+        kb.row(
+            types.InlineKeyboardButton(f"🟦 {p1_poke['moves'][0]}", callback_data=f"p_move_{battle_id}_p1_0"),
+            types.InlineKeyboardButton(f"🟦 {p1_poke['moves'][1]}", callback_data=f"p_move_{battle_id}_p1_1")
+        )
+        kb.row(
+            types.InlineKeyboardButton(f"🟦 {p1_poke['moves'][2]}", callback_data=f"p_move_{battle_id}_p1_2"),
+            types.InlineKeyboardButton(f"🟦 {p1_poke['moves'][3]}", callback_data=f"p_move_{battle_id}_p1_3")
+        )
+    
+    # Player 2 Move Buttons (2x2 Grid)
+    if b["p2_action"] is None:
+        kb.row(
+            types.InlineKeyboardButton(f"🟥 {p2_poke['moves'][0]}", callback_data=f"p_move_{battle_id}_p2_0"),
+            types.InlineKeyboardButton(f"🟥 {p2_poke['moves'][1]}", callback_data=f"p_move_{battle_id}_p2_1")
+        )
+        kb.row(
+            types.InlineKeyboardButton(f"🟥 {p2_poke['moves'][2]}", callback_data=f"p_move_{battle_id}_p2_2"),
+            types.InlineKeyboardButton(f"🟥 {p2_poke['moves'][3]}", callback_data=f"p_move_{battle_id}_p2_3")
+        )
+        
+    try:
+        bot_instance.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"UI Update error: {e}")
+
 def auto_flee(message_id, chat_id, pokemon_name):
     if message_id not in active_hunts:
         return
@@ -97,7 +154,7 @@ def cmd_start(message):
         types.InlineKeyboardButton("Main Group ✨", url="https://t.me/sexagamechat"),
         types.InlineKeyboardButton("Owner 👑", url="https://t.me/Dark_monarchx")
     )
-    text = "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 Use /scout to search for shiny Pokémon\\.\n🌍 Use /travel to change your region\\.\n📱 Use /pokedex `<name>` to check stats\\."
+    text = "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 Use /scout to search for shiny Pokémon\\.\n🌍 Use /travel to change your region\\.\n📱 Use /pokedex `<name>` to check stats\\.\n🥊 Reply to a user with /pvp to battle\\!"
     bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
     
     if is_new and LOG_GROUP_ID is not None:
@@ -246,6 +303,25 @@ def cmd_flex(message):
     lines = [f"{rank}\\. 👤 *User {uid}* — {cnt} Pokémon" for rank, (uid, cnt) in enumerate(rows, start=1)]
     bot.reply_to(message, "🏆 *Top Trainers Leaderboard:*\n\n" + "\n".join(lines), parse_mode="MarkdownV2")
 
+@bot.message_handler(commands=["pvp"])
+def cmd_pvp(message):
+    if not message.reply_to_message:
+        return bot.reply_to(message, escape_md("⚠️ You must reply to another player's message to challenge them!"))
+    
+    p1_id = message.from_user.id
+    p2_id = message.reply_to_message.from_user.id
+    p2_name = message.reply_to_message.from_user.first_name
+
+    if p1_id == p2_id:
+        return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("⚔️ Accept Challenge", callback_data=f"pvp_accept_{p1_id}_{p2_id}"),
+        types.InlineKeyboardButton("❌ Decline", callback_data=f"pvp_decline_{p1_id}_{p2_id}")
+    )
+    
+    bot.reply_to(message, f"🥊 *{escape_md(message.from_user.first_name)}* challenged *{escape_md(p2_name)}* to a 6v6 Random Battle\\!\n\nDo you accept?", reply_markup=kb, parse_mode="MarkdownV2")
 
 # ================== ADMIN COMMANDS ==================
 def is_owner(message):
@@ -418,6 +494,7 @@ def cmd_debug(message):
         f"👥 *Trainers:* {u_c}\n"
         f"🏆 *Pokémon:* {p_c}\n"
         f"🎯 *Active Hunts:* {len(active_hunts)}\n"
+        f"⚔️ *Active PvP:* {len(pvp_battles)}\n"
         f"🏢 *Groups:* {g_c}"
     )
     bot.reply_to(message, status, parse_mode="MarkdownV2")
@@ -428,7 +505,8 @@ def cmd_clearhunts(message):
     for hunt in active_hunts.values():
         if "timer" in hunt: hunt["timer"].cancel()
     active_hunts.clear()
-    bot.reply_to(message, escape_md("🧹 All active hunts cleared."))
+    pvp_battles.clear()
+    bot.reply_to(message, escape_md("🧹 All active hunts and PvP battles cleared."))
 
 # ================== GROUP TRACKING ==================
 @bot.chat_member_handler()
@@ -523,6 +601,108 @@ def cb_handler(call):
                 types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
             )
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
+
+        # --- PvP BATTLE SYSTEM CALLBACKS ---
+        elif call.data.startswith("pvp_accept_"):
+            _, p1_id_str, p2_id_str = call.data.split("_")
+            p1_id, p2_id = int(p1_id_str), int(p2_id_str)
+            
+            if call.from_user.id != p2_id:
+                return bot.answer_callback_query(call.id, "Only the challenged player can accept!")
+                
+            bot.edit_message_text("🔄 *Generating 6v6 Random Teams\\.\\.\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+            
+            p1_team = asyncio.run(generate_random_team())
+            p2_team = asyncio.run(generate_random_team())
+            
+            if len(p1_team) < 6 or len(p2_team) < 6:
+                return bot.edit_message_text("❌ Error connecting to PokeAPI. Try again.", call.message.chat.id, call.message.message_id)
+
+            battle_id = call.message.message_id
+            
+            # Use original message sender as P1 Name, current user as P2 Name
+            p1_name = "Player 1"  # Default fallback
+            if call.message.reply_to_message:
+                p1_name = call.message.reply_to_message.from_user.first_name
+            
+            pvp_battles[battle_id] = {
+                "p1_id": p1_id, "p1_name": p1_name, "p1_team": p1_team, "p1_idx": 0, "p1_action": None,
+                "p2_id": p2_id, "p2_name": call.from_user.first_name, "p2_team": p2_team, "p2_idx": 0, "p2_action": None,
+                "log": "⚔️ *Battle started\\! What will you do?*"
+            }
+            
+            render_pvp_ui(bot, call.message.chat.id, battle_id)
+
+        elif call.data.startswith("pvp_decline_"):
+            _, p1_id_str, p2_id_str = call.data.split("_")
+            if call.from_user.id != int(p2_id_str):
+                return bot.answer_callback_query(call.id, "Only the challenged player can decline.")
+            bot.edit_message_text("❌ *Challenge declined\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+
+        elif call.data.startswith("p_move_"):
+            parts = call.data.split("_")
+            battle_id = int(parts[2])
+            player_num = parts[3] # "p1" or "p2"
+            move_idx = int(parts[4])
+            
+            if battle_id not in pvp_battles:
+                return bot.answer_callback_query(call.id, "This battle is over.")
+                
+            b = pvp_battles[battle_id]
+            user_id = call.from_user.id
+            
+            if (player_num == "p1" and user_id != b["p1_id"]) or (player_num == "p2" and user_id != b["p2_id"]):
+                return bot.answer_callback_query(call.id, "These are not your moves!")
+                
+            if b[f"{player_num}_action"] is not None:
+                return bot.answer_callback_query(call.id, "You already locked in your move!")
+                
+            # Lock in action
+            active_poke = b[f"{player_num}_team"][b[f"{player_num}_idx"]]
+            b[f"{player_num}_action"] = active_poke["moves"][move_idx]
+            bot.answer_callback_query(call.id, f"Locked in {b[f'{player_num}_action']}!")
+            
+            # Wait for both players
+            if b["p1_action"] is None or b["p2_action"] is None:
+                render_pvp_ui(bot, call.message.chat.id, battle_id)
+                return
+                
+            # --- RESOLVE TURN ---
+            p1_poke = b["p1_team"][b["p1_idx"]]
+            p2_poke = b["p2_team"][b["p2_idx"]]
+            
+            # Determine turn order by speed
+            first, second = ("p1", "p2") if p1_poke["spd"] >= p2_poke["spd"] else ("p2", "p1")
+            log = f"⚔️ *Turn Resolved\\!*\n\n"
+            
+            for attacker in [first, second]:
+                defender = "p2" if attacker == "p1" else "p1"
+                atk_poke = b[f"{attacker}_team"][b[f"{attacker}_idx"]]
+                def_poke = b[f"{defender}_team"][b[f"{defender}_idx"]]
+                move_used = b[f"{attacker}_action"]
+                
+                # Simplified damage calc
+                dmg = max(1, int(((atk_poke["atk"] / def_poke["def"]) * random.randint(40, 100)) / 2))
+                def_poke["hp"] -= dmg
+                log += f"🔹 {escape_md(atk_poke['name'])} used {escape_md(move_used)}\\! Dealt {dmg} DMG\\.\n"
+                
+                if def_poke["hp"] <= 0:
+                    log += f"💀 *{escape_md(def_poke['name'])} fainted\\!*\n"
+                    b[f"{defender}_idx"] += 1
+                    
+                    # Check for win condition
+                    if b[f"{defender}_idx"] >= 6:
+                        winner_name = b[f'{attacker}_name']
+                        log += f"\n🏆 *{escape_md(winner_name)} Wins the Battle\\!*"
+                        bot.edit_message_text(log, call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        pvp_battles.pop(battle_id, None)
+                        return
+                    break # Stop turn if someone dies
+            
+            b["log"] = log
+            b["p1_action"] = None
+            b["p2_action"] = None
+            render_pvp_ui(bot, call.message.chat.id, battle_id)
 
     except Exception as e:
         logger.error(f"Callback handler error: {e}")
