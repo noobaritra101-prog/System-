@@ -67,23 +67,25 @@ def render_pvp_ui(bot, chat_id, battle_id):
     p2_status = f" \\[{p2_poke['status']}\\]" if p2_poke["status"] else ""
 
     moves_text = "\n".join([f"\\> 🔹 {escape_md(m['name'])} \\| Acc: {m['acc']}% \\| Pw: {m['power']} \\({escape_md(m['type'])}\\)" for m in active_poke["moves"]])
-    log_text = escape_md(b['log']) if b['log'] else "⚔️ *Battle Started\\!*"
+    log_text = b['log'] if b['log'] else "⚔️ *Battle Started\\!*"
 
     # NEW BLOCKQUOTE UI
     ui_text = (
         f"*{escape_md(p1_poke['name'])} vs {escape_md(p2_poke['name'])}*\n"
-        f"{log_text}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"\\> 👤 *{escape_md(b['p1_name'])}*\n"
         f"\\> 🛡️ {escape_md(p1_poke['name'])} \\({escape_md(p1_poke['types'])}\\){escape_md(p1_status)}\n"
-        f"\\> 🌟 Level 100 {p1_hp_bar}\n"
+        f"\\> 🌟 Level 100\n"
+        f"\\> HP {p1_hp_bar}\n"
         f"\\> ❤️ {p1_poke['hp']}/{p1_poke['max_hp']}\n"
-        f"\\> ━━━━━━━━━━━━━━━\n"
+        f"🆚\n"
         f"\\> 👤 *{escape_md(b['p2_name'])}*\n"
         f"\\> 🛡️ {escape_md(p2_poke['name'])} \\({escape_md(p2_poke['types'])}\\){escape_md(p2_status)}\n"
-        f"\\> 🌟 Level 100 {p2_hp_bar}\n"
+        f"\\> 🌟 Level 100\n"
+        f"\\> HP {p2_hp_bar}\n"
         f"\\> ❤️ {p2_poke['hp']}/{p2_poke['max_hp']}\n"
         f"━━━━━━━━━━━━━━━━━\n"
+        f"{log_text}\n\n"
         f"🎯 Current Turn \\- *{escape_md(active_player_name)}*\n\n"
         f"\\> *Moves Details:*\n"
         f"{moves_text}"
@@ -189,9 +191,8 @@ def handle_pvp_callback(bot, call):
                 if next_idx == -1: return bot.answer_callback_query(call.id, "You have no other Pokémon left to switch to!")
                 
                 b[player_num + "_idx"] = next_idx
-                b["log"] = f"🔄 *{escape_md(b[player_num + '_name'])}* switched to *{escape_md(atk_team[next_idx]['name'])}*\\!"
-                
-                # Reset status of switching pokemon (Optional, but authentic to main games usually except for baton pass)
+                new_poke = atk_team[next_idx]
+                b["log"] = f"🔄 *{escape_md(b[player_num + '_name'])}* switched to *{escape_md(new_poke['name'])}*\\!"
                 b["current_turn"] = defender
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
                 return
@@ -225,9 +226,8 @@ def handle_pvp_callback(bot, call):
 
                 if can_attack:
                     if random.randint(1, 100) > move_data["acc"]:
-                        b["log"] += f"💨 *{escape_md(atk_poke['name'])}* used {escape_md(move_data['name'])}, but it missed\\!\n"
+                        b["log"] += f"💨 *{escape_md(atk_poke['name'])}* used *{escape_md(move_data['name'])}*, but it missed\\!\n"
                     else:
-                        # Damage Calculation
                         stab = 1.5 if move_data["type"] in atk_poke["types"] else 1.0
                         type_mult = get_type_multiplier(move_data["type"], def_poke["types"])
                         
@@ -236,7 +236,7 @@ def handle_pvp_callback(bot, call):
                         else:
                             dmg = max(1, int(((atk_poke["atk"] / def_poke["def"]) * move_data["power"] * stab * type_mult) / 2))
                             def_poke["hp"] -= dmg
-                            b["log"] += f"⚔️ *{escape_md(atk_poke['name'])}* used {escape_md(move_data['name'])}\\! \\({dmg} DMG\\)\n"
+                            b["log"] += f"⚔️ *{escape_md(atk_poke['name'])}* used *{escape_md(move_data['name'])}*\\! \\({dmg} DMG\\)\n"
                             
                             if type_mult > 1: b["log"] += "🔥 It's super effective\\!\n"
                             elif type_mult < 1: b["log"] += "🛡️ It's not very effective\\.\\.\\.\n"
@@ -248,7 +248,7 @@ def handle_pvp_callback(bot, call):
                                     if move_data["status_type"] == "SLP": def_poke["sleep_turns"] = random.randint(1, 3)
                                     b["log"] += f"🦠 *{escape_md(def_poke['name'])}* was inflicted with {escape_md(move_data['status_type'])}\\!\n"
 
-                # Post-Turn Status Damage (Burn / Poison)
+                # Post-Turn Status Damage
                 if atk_poke["hp"] > 0:
                     if atk_poke["status"] == "BRN":
                         burn_dmg = max(1, atk_poke["max_hp"] // 16)
@@ -263,20 +263,18 @@ def handle_pvp_callback(bot, call):
                 def check_faints(t_name, t_team, t_idx, enemy_name):
                     if t_team[t_idx]["hp"] <= 0:
                         b["log"] += f"\n💀 *{escape_md(t_team[t_idx]['name'])} fainted\\!*"
-                        t_team[t_idx]["status"] = None # clear status on death
+                        t_team[t_idx]["status"] = None 
                         b[t_name + "_idx"] += 1
                         if b[t_name + "_idx"] >= 6: return True
                         b["log"] += f"\n🔄 *{escape_md(b[t_name + '_name'])}* sent out *{escape_md(t_team[b[t_name + '_idx']]['name'])}*\\!"
                     return False
 
-                # Did attacker die to status?
                 if check_faints(player_num, atk_team, b[player_num + "_idx"], b[defender + "_name"]):
                     b["log"] += f"\n\n🏆 *{escape_md(b[defender + '_name'])} WINS THE BATTLE\\!*"
                     bot.edit_message_text(b["log"], call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                     pvp_battles.pop(battle_id, None)
                     return
                 
-                # Did defender die to attack?
                 if check_faints(defender, def_team, b[defender + "_idx"], b[player_num + "_name"]):
                     b["log"] += f"\n\n🏆 *{escape_md(b[player_num + '_name'])} WINS THE BATTLE\\!*"
                     bot.edit_message_text(b["log"], call.message.chat.id, battle_id, parse_mode="MarkdownV2")
