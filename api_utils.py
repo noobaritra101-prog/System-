@@ -4,6 +4,7 @@ import urllib.request
 import json
 import random
 import re
+import asyncio
 from config import logger, MEGA_POKEMON
 
 pokemon_cache = {}
@@ -14,6 +15,7 @@ def escape_md(text):
     return re.sub(special_chars, r'\\\1', str(text))
 
 async def fetch_random_pokemon_id_and_name():
+    """Fetches a single random Pokémon for the /scout command."""
     if random.random() < 0.05:
         poke_id, name, base_id = random.choice(MEGA_POKEMON)
         return poke_id, name, base_id
@@ -67,3 +69,43 @@ def get_pokemon_stats_sync(pokemon_name):
     except Exception as e:
         logger.error(f"Stats fetch failed for {pokemon_name}: {e}")
         return None, None
+
+async def fetch_random_pvp_pokemon():
+    """Fetches a random Pokémon, its stats, and 4 random moves for PvP battles."""
+    poke_id = random.randint(1, 898)
+    async with aiohttp.ClientSession() as session:
+        url = f"https://pokeapi.co/api/v2/pokemon/{poke_id}"
+        try:
+            async with session.get(url, timeout=10) as response:
+                if response.status != 200: return None
+                data = await response.json()
+                name = data["name"].capitalize()
+                stats = {s["stat"]["name"]: s["base_stat"] for s in data["stats"]}
+                
+                # Pick 4 random moves from their actual movepool
+                all_moves = data.get("moves", [])
+                selected_moves = random.sample(all_moves, min(4, len(all_moves)))
+                moves = [m["move"]["name"].replace("-", " ").capitalize() for m in selected_moves]
+                while len(moves) < 4: moves.append("Tackle") # Fallback
+                
+                # Inflate HP slightly so battles aren't 1-shots
+                hp = int(stats.get("hp", 50)) * 3 
+                
+                return {
+                    "name": name,
+                    "hp": hp,
+                    "max_hp": hp,
+                    "atk": stats.get("attack", 50),
+                    "def": stats.get("defense", 50),
+                    "spd": stats.get("speed", 50),
+                    "moves": moves
+                }
+        except Exception as e:
+            logger.error(f"PvP Fetch Error: {e}")
+            return None
+
+async def generate_random_team():
+    """Fetches 6 random Pokémon simultaneously for a PvP team."""
+    tasks = [fetch_random_pvp_pokemon() for _ in range(6)]
+    team = await asyncio.gather(*tasks)
+    return [p for p in team if p is not None]
