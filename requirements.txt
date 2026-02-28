@@ -1,3 +1,13 @@
-python-telegram-bot==20.8
-requests==2.31.0
-cryptography==42.0.2
+# --- Telegram Bot Framework ---
+aiogram>=3.10.0
+
+# --- NEW: Modern Google Gen AI SDK ---
+# This replaces the old 'google-generativeai'
+google-genai>=1.0.0
+
+# --- Web Scraping ---
+# For Pinterest character portraits
+playwright>=1.40.0
+
+# --- Utilities ---
+requests>=2.31.0
