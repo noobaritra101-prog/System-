@@ -1,16 +1,33 @@
 # database.py
-import psycopg2
+import asyncpg
+import asyncio
+import threading
 import datetime
 from config import DATABASE_URL, logger
 
-def get_conn():
-    return psycopg2.connect(DATABASE_URL)
+# Create a dedicated event loop for database operations
+db_loop = asyncio.new_event_loop()
+pool = None
 
-def init_db():
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
+def _run_db_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+# Start the background database thread
+db_thread = threading.Thread(target=_run_db_loop, args=(db_loop,), daemon=True)
+db_thread.start()
+
+def run_sync(coro):
+    """Bridge: Runs an async function synchronously safely."""
+    return asyncio.run_coroutine_threadsafe(coro, db_loop).result()
+
+# ================== ASYNC INTERNAL FUNCTIONS ==================
+async def _init_db():
+    global pool
+    # Create an efficient connection pool
+    pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+    async with pool.acquire() as conn:
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS users(
                 user_id BIGINT PRIMARY KEY,
                 tries_left INTEGER DEFAULT 300,
@@ -18,7 +35,7 @@ def init_db():
                 last_reset DATE
             )
         """)
-        cur.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS pokemons(
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
@@ -26,169 +43,122 @@ def init_db():
                 region VARCHAR(50) NOT NULL
             )
         """)
-        cur.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS groups(
                 group_id BIGINT PRIMARY KEY
             )
         """)
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_user_id ON pokemons(user_id)")
-        conn.commit()
-        logger.info("PostgreSQL Database initialized successfully")
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-        raise
-    finally:
-        conn.close()
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_user_id ON pokemons(user_id)")
+    logger.info("asyncpg Database & Connection Pool initialized successfully")
 
-def add_group(group_id):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("INSERT INTO groups(group_id) VALUES (%s) ON CONFLICT (group_id) DO NOTHING", (group_id,))
-        conn.commit()
-    except Exception as e:
-        logger.error(f"Error adding group {group_id}: {e}")
-    finally:
-        conn.close()
+async def _add_group(group_id):
+    async with pool.acquire() as conn:
+        await conn.execute("INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING", group_id)
 
-def remove_group(group_id):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM groups WHERE group_id=%s", (group_id,))
-        conn.commit()
-    except Exception as e:
-        logger.error(f"Error removing group {group_id}: {e}")
-    finally:
-        conn.close()
+async def _remove_group(group_id):
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM groups WHERE group_id=$1", group_id)
 
-def get_all_groups():
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT group_id FROM groups ORDER BY group_id")
-        rows = cur.fetchall()
-        conn.close()
-        return [row[0] for row in rows]
-    except Exception as e:
-        logger.error(f"Error fetching all groups: {e}")
-        return []
+async def _get_all_groups():
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT group_id FROM groups ORDER BY group_id")
+        return [r['group_id'] for r in rows]
 
-def get_user(user_id):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT user_id, tries_left, region, last_reset FROM users WHERE user_id=%s", (user_id,))
-        row = cur.fetchone()
-        conn.close()
-        return row
-    except Exception as e:
-        logger.error(f"Error fetching user {user_id}: {e}")
-        return None
+async def _get_user(user_id):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("SELECT user_id, tries_left, region, last_reset FROM users WHERE user_id=$1", user_id)
 
-def add_user_if_new(user_id):
-    existed = get_user(user_id) is not None
-    if not existed:
-        try:
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("INSERT INTO users(user_id, tries_left, region, last_reset) VALUES (%s, %s, %s, %s)",
-                        (user_id, 300, "Kanto", str(datetime.date.today())))
-            conn.commit()
-            logger.info(f"New user added: {user_id}")
-        except Exception as e:
-            logger.error(f"Error adding user {user_id}: {e}")
-        finally:
-            conn.close()
-    return not existed
-
-def update_user_tries(user_id):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT tries_left, region, last_reset FROM users WHERE user_id=%s", (user_id,))
-        row = cur.fetchone()
+async def _add_user_if_new(user_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT 1 FROM users WHERE user_id=$1", user_id)
         if not row:
-            return None, None
-        tries_left, region, last_reset = row
-        today_str = str(datetime.date.today())
-        
-        # Postgres returns datetime.date objects, so check properly
-        if str(last_reset) != today_str:
-            tries_left = 300
-            cur.execute("UPDATE users SET tries_left=%s, last_reset=%s WHERE user_id=%s", (tries_left, today_str, user_id))
-            conn.commit()
-        if tries_left > 0:
-            cur.execute("UPDATE users SET tries_left = tries_left - 1 WHERE user_id=%s", (user_id,))
-            conn.commit()
-        conn.close()
-        return tries_left, region
-    except Exception as e:
-        logger.error(f"Error updating user tries for {user_id}: {e}")
-        return None, None
-
-def add_caught_pokemon(user_id, name, region):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("INSERT INTO pokemons(user_id, name, region) VALUES (%s, %s, %s)", (user_id, name, region))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Error adding Pokémon {name} for {user_id}: {e}")
-
-def list_user_pokemon_names(user_id):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM pokemons WHERE user_id=%s ORDER BY id DESC", (user_id,))
-        rows = cur.fetchall()
-        conn.close()
-        return [r[0].capitalize() for r in rows]
-    except Exception as e:
-        logger.error(f"Error listing Pokémon for {user_id}: {e}")
-        return []
-
-def delete_pokemon(user_id, pokemon_name):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM pokemons WHERE user_id=%s AND name=%s", (user_id, pokemon_name.capitalize()))
-        deleted = cur.rowcount
-        conn.commit()
-        conn.close()
-        return deleted > 0
-    except Exception as e:
-        logger.error(f"Error deleting Pokémon {pokemon_name} for {user_id}: {e}")
+            await conn.execute("INSERT INTO users(user_id, tries_left, region, last_reset) VALUES ($1, $2, $3, $4)",
+                               user_id, 300, "Kanto", datetime.date.today())
+            logger.info(f"New user added: {user_id}")
+            return True
         return False
 
-def get_all_users():
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT user_id FROM users ORDER BY user_id")
-        rows = cur.fetchall()
-        conn.close()
-        return [row[0] for row in rows]
-    except Exception as e:
-        logger.error(f"Error fetching all users: {e}")
-        return []
+async def _update_user_tries(user_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT tries_left, region, last_reset FROM users WHERE user_id=$1", user_id)
+        if not row:
+            return None, None
+        
+        tries_left, region, last_reset = row['tries_left'], row['region'], row['last_reset']
+        today = datetime.date.today()
+        
+        if last_reset != today:
+            tries_left = 300
+            await conn.execute("UPDATE users SET tries_left=$1, last_reset=$2 WHERE user_id=$3", tries_left, today, user_id)
+        
+        if tries_left > 0:
+            await conn.execute("UPDATE users SET tries_left = tries_left - 1 WHERE user_id=$1", user_id)
+            
+        return tries_left, region
 
-def get_top_trainers(limit=5):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
+async def _add_caught_pokemon(user_id, name, region):
+    async with pool.acquire() as conn:
+        await conn.execute("INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)", user_id, name, region)
+
+async def _list_user_pokemon_names(user_id):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT name FROM pokemons WHERE user_id=$1 ORDER BY id DESC", user_id)
+        return [r['name'].capitalize() for r in rows]
+
+async def _delete_pokemon(user_id, pokemon_name):
+    async with pool.acquire() as conn:
+        status = await conn.execute("DELETE FROM pokemons WHERE id IN (SELECT id FROM pokemons WHERE user_id=$1 AND name=$2 LIMIT 1)", 
+                                    user_id, pokemon_name.capitalize())
+        # status looks like "DELETE 1" or "DELETE 0"
+        return int(status.split()[-1]) > 0
+
+async def _get_all_users():
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT user_id FROM users ORDER BY user_id")
+        return [r['user_id'] for r in rows]
+
+async def _get_top_trainers(limit=5):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
             SELECT user_id, COUNT(*) as c
             FROM pokemons
             GROUP BY user_id
             ORDER BY c DESC
-            LIMIT %s
-        """, (limit,))
-        rows = cur.fetchall()
-        conn.close()
-        return rows
-    except Exception as e:
-        logger.error(f"Error fetching top trainers: {e}")
-        return []
+            LIMIT $1
+        """, limit)
+        return [(r['user_id'], r['c']) for r in rows]
+
+async def _reset_user(user_id):
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET tries_left=300, last_reset=$1 WHERE user_id=$2", datetime.date.today(), user_id)
+
+async def _update_user_region(user_id, region):
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE users SET region=$1 WHERE user_id=$2", region, user_id)
+
+async def _get_debug_stats():
+    async with pool.acquire() as conn:
+        u_c = await conn.fetchval("SELECT COUNT(*) FROM users")
+        p_c = await conn.fetchval("SELECT COUNT(*) FROM pokemons")
+        g_c = await conn.fetchval("SELECT COUNT(*) FROM groups")
+        return u_c, p_c, g_c
+
+# ================== SYNC EXPOSED API ==================
+def init_db(): run_sync(_init_db())
+def add_group(group_id): run_sync(_add_group(group_id))
+def remove_group(group_id): run_sync(_remove_group(group_id))
+def get_all_groups(): return run_sync(_get_all_groups())
+def get_user(user_id): return run_sync(_get_user(user_id))
+def add_user_if_new(user_id): return run_sync(_add_user_if_new(user_id))
+def update_user_tries(user_id): return run_sync(_update_user_tries(user_id))
+def add_caught_pokemon(user_id, name, region): run_sync(_add_caught_pokemon(user_id, name, region))
+def list_user_pokemon_names(user_id): return run_sync(_list_user_pokemon_names(user_id))
+def delete_pokemon(user_id, pokemon_name): return run_sync(_delete_pokemon(user_id, pokemon_name))
+def get_all_users(): return run_sync(_get_all_users())
+def get_top_trainers(limit=5): return run_sync(_get_top_trainers(limit))
+
+# New explicit handlers to keep main.py clean
+def reset_user(user_id): run_sync(_reset_user(user_id))
+def update_user_region(user_id, region): run_sync(_update_user_region(user_id, region))
+def get_debug_stats(): return run_sync(_get_debug_stats())
