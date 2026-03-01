@@ -184,8 +184,8 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                     # Fetch authentic moves from their real movepool
                     all_move_urls = [m["move"]["url"] for m in data.get("moves", [])]
                     
-                    # Sample up to 35 random moves to increase chances of finding 80+ power moves
-                    sample_urls = random.sample(all_move_urls, min(35, len(all_move_urls)))
+                    # Sample up to 45 random moves to ensure we find Dual-STABs
+                    sample_urls = random.sample(all_move_urls, min(45, len(all_move_urls)))
                     
                     fetched_moves = await asyncio.gather(*(fetch_real_move_data(session, u) for u in sample_urls))
                     valid_moves = [m for m in fetched_moves if m is not None]
@@ -194,21 +194,23 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                     strong_moves = [m for m in valid_moves if m["power"] >= 80]
                     final_moves = []
                     
-                    # Step 1: Force a real STAB move with power >= 80
-                    strong_stab = [m for m in strong_moves if m["type"] in types_list]
-                    if strong_stab:
-                        chosen_stab = random.choice(strong_stab)
-                        final_moves.append(chosen_stab)
-                        strong_moves.remove(chosen_stab)
-                        valid_moves.remove(chosen_stab)
-                    else:
-                        # Fallback: Just grab the strongest real STAB move they have
-                        any_stab = [m for m in valid_moves if m["type"] in types_list]
-                        if any_stab:
-                            chosen_stab = sorted(any_stab, key=lambda x: x["power"], reverse=True)[0]
+                    # Step 1: Force a STAB move for EACH of the Pokemon's types (Dual STAB feature)
+                    for p_type in types_list:
+                        # Find strong moves matching this specific type
+                        type_strong_moves = [m for m in strong_moves if m["type"] == p_type]
+                        if type_strong_moves:
+                            chosen_stab = random.choice(type_strong_moves)
                             final_moves.append(chosen_stab)
+                            strong_moves.remove(chosen_stab)
                             valid_moves.remove(chosen_stab)
-                            if chosen_stab in strong_moves: strong_moves.remove(chosen_stab)
+                        else:
+                            # Fallback: Just grab the strongest real STAB move of this type
+                            type_any_moves = [m for m in valid_moves if m["type"] == p_type]
+                            if type_any_moves:
+                                chosen_stab = sorted(type_any_moves, key=lambda x: x["power"], reverse=True)[0]
+                                final_moves.append(chosen_stab)
+                                valid_moves.remove(chosen_stab)
+                                if chosen_stab in strong_moves: strong_moves.remove(chosen_stab)
 
                     # Step 2: Fill the remaining slots strictly with other 80+ power moves
                     random.shuffle(strong_moves)
@@ -230,7 +232,7 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                     while len(final_moves) < 4: 
                         final_moves.append({"name": "Struggle", "power": 50, "acc": 100, "type": "Normal", "status_type": None, "status_chance": 0})
                     
-                    # Shuffle moves so the STAB move isn't always button #1
+                    # Shuffle moves so the STAB moves aren't always buttons #1 and #2
                     random.shuffle(final_moves)
                     
                     hp = int(stats.get("hp", 50)) * 3 
