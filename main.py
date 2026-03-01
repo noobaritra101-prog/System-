@@ -94,7 +94,7 @@ def cmd_start(message):
     if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Main Group ✨", url="https://t.me/sexagamechat"), types.InlineKeyboardButton("Owner 👑", url="https://t.me/Dark_monarchx"))
-    bot.reply_to(message, "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 /scout \\- Search for shiny Pokémon\n🌍 /travel \\- Change region\n📱 /pokedex `<name>` \\- Check stats\n🥊 /pvp \\- Reply to a user to battle\n⌨️ /open \\- Open scout button \\(DM only\\)", reply_markup=kb, parse_mode="MarkdownV2")
+    bot.reply_to(message, "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 /scout \\- Search for shiny Pokémon\n🌍 /travel \\- Change region\n📱 /pokedex `<name>` \\- Check stats\n🥊 /pvp \\- Reply to a user to battle\n🏆 /flex \\- View the Global Leaderboard\n⌨️ /open \\- Open scout button \\(DM only\\)", reply_markup=kb, parse_mode="MarkdownV2")
     
     if is_new and LOG_GROUP_ID is not None:
         try: bot.send_message(LOG_GROUP_ID, escape_md(f"🔔 New Trainer: {message.from_user.first_name} (ID: {message.from_user.id}) started the bot."))
@@ -106,7 +106,6 @@ def cmd_open(message):
     if message.chat.type != "private":
         return bot.reply_to(message, escape_md("⚠️ The /open command only works in private messages (DM)."))
     
-    # Create persistent keyboard menu
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
     kb.add(types.KeyboardButton("🔎 Scout"))
     bot.send_message(message.chat.id, escape_md("⌨️ Action menu opened! Use /close to hide it."), reply_markup=kb, parse_mode="MarkdownV2")
@@ -116,13 +115,11 @@ def cmd_close(message):
     if message.chat.type != "private":
         return bot.reply_to(message, escape_md("⚠️ The /close command only works in private messages (DM)."))
     
-    # Remove the persistent keyboard
     remove_kb = types.ReplyKeyboardRemove()
     bot.send_message(message.chat.id, escape_md("⌨️ Action menu closed! Use /open to bring it back."), reply_markup=remove_kb, parse_mode="MarkdownV2")
 
 @bot.message_handler(func=lambda message: message.text == "🔎 Scout" and message.chat.type == "private")
 def text_scout(message):
-    """Triggers scout when the user taps the ReplyKeyboard button"""
     threading.Thread(target=start_scout, args=(message.chat.id, message.from_user.id, message.message_id)).start()
 # ------------------------
 
@@ -178,7 +175,6 @@ def cmd_inspect(message):
     names = [n.lower() for n in db.list_user_pokemon_names(message.from_user.id)]
     if name not in names: return bot.reply_to(message, escape_md("❌ You don't own this Pokémon."))
         
-    # Translate text name into numeric ID using our fast API cache
     poke_id = get_pokemon_id_sync(name)
     if not poke_id:
         return bot.reply_to(message, escape_md("❌ Error finding Pokémon ID from API."))
@@ -195,13 +191,6 @@ def cmd_release(message):
     if db.delete_pokemon(message.from_user.id, poke_name): bot.reply_to(message, escape_md(f"👋 You released {poke_name} back into the wild."))
     else: bot.reply_to(message, escape_md(f"❌ You don't have a {poke_name} to release."))
 
-@bot.message_handler(commands=["flex", "top"])
-def cmd_flex(message):
-    rows = db.get_top_trainers(5)
-    if not rows: return bot.reply_to(message, escape_md("📉 No trainers on the leaderboard yet."))
-    lines = [f"{rank}\\. 👤 *User {uid}* — {cnt} Pokémon" for rank, (uid, cnt) in enumerate(rows, start=1)]
-    bot.reply_to(message, "🏆 *Top Trainers Leaderboard:*\n\n" + "\n".join(lines), parse_mode="MarkdownV2")
-
 @bot.message_handler(commands=["pvp"])
 def cmd_pvp(message):
     pvp.handle_pvp_command(bot, message)
@@ -209,6 +198,38 @@ def cmd_pvp(message):
 @bot.message_handler(commands=["getid"])
 def cmd_getid(message):
     bot.reply_to(message, escape_md(f"🆔 Chat ID: {message.chat.id}\n📁 Chat Type: {message.chat.type}"))
+
+
+# ================== NEW DYNAMIC LEADERBOARD ==================
+def send_leaderboard(chat_id, user_id, message_id=None):
+    top_trainers = db.get_top_trainers(5)
+    text = "🏆 *Top Trainers Leaderboard:*\n\n"
+    
+    for i, (uid, count) in enumerate(top_trainers):
+        try:
+            user_obj = bot.get_chat(uid)
+            name = user_obj.first_name if user_obj.first_name else "Trainer"
+        except:
+            name = "Trainer"
+            
+        text += f"{i+1}\\. [{escape_md(name)}](tg://user?id={uid}) — {count} Pokémon\n"
+        
+    rank = db.get_user_rank(user_id)
+    text += f"\nYour Rank — *{rank}*"
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("REFRESH 🌀", callback_data=f"refresh_flex_{user_id}"))
+    
+    if message_id:
+        try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
+        except: pass
+    else:
+        bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
+
+@bot.message_handler(commands=["flex", "top", "leaderboard"])
+def cmd_flex(message):
+    db.add_user_if_new(message.from_user.id)
+    send_leaderboard(message.chat.id, message.from_user.id)
 
 
 # ================== ADMIN COMMANDS ==================
@@ -286,27 +307,55 @@ def cmd_plist(message):
         bot.reply_to(message, f"🎒 *Pokémon for User {uid}* \\(Page 1/{len(pages)}\\):\n\n" + "\n".join(f"\\- {escape_md(n)}" for n in pages[0]), reply_markup=make_kb(uid, len(pages)) if len(pages) > 1 else None, parse_mode="MarkdownV2")
     except Exception as e: bot.reply_to(message, escape_md(f"Error: {str(e)}"))
 
+
+# --- REPLY-BASED ADMIN COMMANDS ---
 @bot.message_handler(commands=["take"])
 def cmd_take(message):
     if not is_owner(message): return
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3: return bot.reply_to(message, escape_md("📝 Usage: /take <user_id> <pokemon_name>"))
-    try:
-        uid, poke_name = int(parts[1]), parts[2].strip().capitalize()
-        if db.delete_pokemon(uid, poke_name): bot.reply_to(message, escape_md(f"✅ Removed {poke_name} from user {uid}."))
-        else: bot.reply_to(message, escape_md(f"❌ User {uid} does not have {poke_name}."))
-    except Exception as e: bot.reply_to(message, escape_md(f"Error: {str(e)}"))
+    if not message.reply_to_message:
+        return bot.reply_to(message, "⚠️ *Please reply to a user's message to take their Pokémon\\!*", parse_mode="MarkdownV2")
+        
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        return bot.reply_to(message, "⚠️ *Format:* `/take <pokemon_name>`", parse_mode="MarkdownV2")
+        
+    target_id = message.reply_to_message.from_user.id
+    target_name = message.reply_to_message.from_user.first_name
+    pokemon_name = args[1].strip().title()
+    
+    if db.delete_pokemon(target_id, pokemon_name):
+        bot.reply_to(message, f"🗑️ Successfully took *{escape_md(pokemon_name)}* from [{escape_md(target_name)}](tg://user?id={target_id})\\!", parse_mode="MarkdownV2")
+    else:
+        bot.reply_to(message, f"❌ [{escape_md(target_name)}](tg://user?id={target_id}) doesn't own a *{escape_md(pokemon_name)}*\\.", parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["give"])
 def cmd_give(message):
     if not is_owner(message): return
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3: return bot.reply_to(message, escape_md("📝 Usage: /give <user_id> <pokemon_name>"))
-    try:
-        uid, poke_name = int(parts[1]), parts[2].strip().capitalize()
-        db.add_caught_pokemon(uid, poke_name, "Gift")
-        bot.reply_to(message, escape_md(f"🎁 Gave {poke_name} to user {uid}."))
-    except Exception as e: bot.reply_to(message, escape_md(f"Error: {str(e)}"))
+    if not message.reply_to_message:
+        return bot.reply_to(message, "⚠️ *Please reply to a user's message to give them a Pokémon\\!*", parse_mode="MarkdownV2")
+        
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        return bot.reply_to(message, "⚠️ *Format:* `/give <pokemon_name>`", parse_mode="MarkdownV2")
+        
+    target_id = message.reply_to_message.from_user.id
+    target_name = message.reply_to_message.from_user.first_name
+    pokemon_name = args[1].strip().title()
+    
+    db.add_caught_pokemon(target_id, pokemon_name, "Gift")
+    bot.reply_to(message, f"🎁 Successfully gave *{escape_md(pokemon_name)}* to [{escape_md(target_name)}](tg://user?id={target_id})\\!", parse_mode="MarkdownV2")
+
+@bot.message_handler(commands=["reset"])
+def cmd_reset(message):
+    if not is_owner(message): return
+    if not message.reply_to_message:
+        return bot.reply_to(message, "⚠️ *Please reply to a user's message to reset their tries\\!*", parse_mode="MarkdownV2")
+        
+    target_id = message.reply_to_message.from_user.id
+    target_name = message.reply_to_message.from_user.first_name
+    
+    db.reset_user(target_id)
+    bot.reply_to(message, f"🔄 Successfully reset scouts for [{escape_md(target_name)}](tg://user?id={target_id})\\!", parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["bcast", "gcast"])
 def cmd_broadcasts(message):
@@ -350,16 +399,6 @@ def cmd_leave(message):
         bot.reply_to(message, escape_md(f"✅ Left group {group_id}."))
     except Exception as e: bot.reply_to(message, escape_md(f"Error: {str(e)}"))
 
-@bot.message_handler(commands=["reset"])
-def cmd_reset(message):
-    if not is_owner(message): return
-    parts = message.text.split(maxsplit=1)
-    if len(parts) < 2: return bot.reply_to(message, escape_md("📝 Usage: /reset <user_id>"))
-    try:
-        db.reset_user(int(parts[1]))
-        bot.reply_to(message, escape_md(f"🔄 Reset scouts for user {parts[1]}."))
-    except Exception as e: bot.reply_to(message, escape_md(f"Error: {str(e)}"))
-
 @bot.message_handler(commands=["debug"])
 def cmd_debug(message):
     if not is_owner(message): return
@@ -393,6 +432,14 @@ def cb_handler(call):
         # Route PvP callbacks to the dedicated PvP file
         if call.data.startswith("pvp_"):
             return pvp.handle_pvp_callback(bot, call)
+            
+        # Route to Flex Refresh
+        if call.data.startswith("refresh_flex_"):
+            owner_id = int(call.data.split("_")[2])
+            if call.from_user.id != owner_id:
+                return bot.answer_callback_query(call.id, "❌ You cannot refresh someone else's flex menu!", show_alert=True)
+            bot.answer_callback_query(call.id, "🔄 Refreshing Leaderboard...")
+            return send_leaderboard(call.message.chat.id, owner_id, call.message.message_id)
 
         if call.data.startswith("travel_"):
             parts = call.data.split("_", 2)
