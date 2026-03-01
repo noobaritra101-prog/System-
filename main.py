@@ -18,12 +18,12 @@ from api_utils import (
     fetch_random_pokemon_id_and_name_sync, 
     official_shiny_artwork_url, 
     get_species_catch_rate_sync,
-    get_pokemon_stats_sync
+    get_pokemon_stats_sync,
+    get_pokemon_id_sync
 )
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
 active_hunts = {}  
-last_api_call = 0  
 
 # ================== GAME LOGIC ==================
 def auto_flee(message_id, chat_id, pokemon_name):
@@ -38,7 +38,6 @@ def auto_flee(message_id, chat_id, pokemon_name):
     active_hunts.pop(message_id, None)
 
 def start_scout(chat_id, user_id, reply_to_id=None):
-    global last_api_call
     if not db.get_user(user_id):
         return bot.send_message(chat_id, escape_md("⚠️ Please /start the bot first."), reply_to_message_id=reply_to_id)
         
@@ -53,7 +52,7 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
         return bot.send_message(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_message_id=reply_to_id)
 
-    # Ultra-fast synchronous API fetch
+    # NOW INSTANT DUE TO CACHING!
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync()
     if not poke_id:
         return bot.send_message(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_message_id=reply_to_id)
@@ -66,10 +65,6 @@ def start_scout(chat_id, user_id, reply_to_id=None):
         types.InlineKeyboardButton("🔴 Catch", callback_data=f"catch_{user_id}_{poke_id}_{name[:16]}"),
         types.InlineKeyboardButton("🏃‍♂️ Run", callback_data=f"run_{user_id}_{name[:16]}")
     )
-
-    current_time = time.time()
-    if current_time - last_api_call < 0.2: time.sleep(0.2)
-    last_api_call = current_time
 
     try:
         sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -86,7 +81,7 @@ def process_catch(call, uid, pid, name):
         catch_rate = get_species_catch_rate_sync(pid)
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
             db.add_caught_pokemon(uid, name.capitalize(), db.get_user(uid)[2])
-            bot.edit_message_caption(caption=f"✨ *Gotcha\\!* Shiny *{escape_md(name.capitalize())}* was caught\\!\n\nUse /pokedex `{escape_md(name.capitalize())}` to check its stats\\.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+            bot.edit_message_caption(caption=f"✨ *Gotcha\\!* Shiny *{escape_md(name.capitalize())}* was caught\\!\n\nUse /inspect `{escape_md(name.capitalize())}` to view it\\.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
         else:
             bot.edit_message_caption(caption=f"💨 Oh no\\! Shiny *{escape_md(name.capitalize())}* broke free and fled\\!", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
     except Exception as e:
@@ -99,11 +94,37 @@ def cmd_start(message):
     if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Main Group ✨", url="https://t.me/sexagamechat"), types.InlineKeyboardButton("Owner 👑", url="https://t.me/Dark_monarchx"))
-    bot.reply_to(message, "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 /scout \\- Search for shiny Pokémon\n🌍 /travel \\- Change region\n📱 /pokedex `<name>` \\- Check stats\n🥊 /pvp \\- Reply to a user to battle", reply_markup=kb, parse_mode="MarkdownV2")
+    bot.reply_to(message, "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 /scout \\- Search for shiny Pokémon\n🌍 /travel \\- Change region\n📱 /pokedex `<name>` \\- Check stats\n🥊 /pvp \\- Reply to a user to battle\n⌨️ /open \\- Open scout button \\(DM only\\)", reply_markup=kb, parse_mode="MarkdownV2")
     
     if is_new and LOG_GROUP_ID is not None:
         try: bot.send_message(LOG_GROUP_ID, escape_md(f"🔔 New Trainer: {message.from_user.first_name} (ID: {message.from_user.id}) started the bot."))
         except Exception: pass
+
+# --- DM KEYBOARD MENU ---
+@bot.message_handler(commands=["open"])
+def cmd_open(message):
+    if message.chat.type != "private":
+        return bot.reply_to(message, escape_md("⚠️ The /open command only works in private messages (DM)."))
+    
+    # Create persistent keyboard menu
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    kb.add(types.KeyboardButton("🔎 Scout"))
+    bot.send_message(message.chat.id, escape_md("⌨️ Action menu opened! Use /close to hide it."), reply_markup=kb, parse_mode="MarkdownV2")
+
+@bot.message_handler(commands=["close"])
+def cmd_close(message):
+    if message.chat.type != "private":
+        return bot.reply_to(message, escape_md("⚠️ The /close command only works in private messages (DM)."))
+    
+    # Remove the persistent keyboard
+    remove_kb = types.ReplyKeyboardRemove()
+    bot.send_message(message.chat.id, escape_md("⌨️ Action menu closed! Use /open to bring it back."), reply_markup=remove_kb, parse_mode="MarkdownV2")
+
+@bot.message_handler(func=lambda message: message.text == "🔎 Scout" and message.chat.type == "private")
+def text_scout(message):
+    """Triggers scout when the user taps the ReplyKeyboard button"""
+    threading.Thread(target=start_scout, args=(message.chat.id, message.from_user.id, message.message_id)).start()
+# ------------------------
 
 @bot.message_handler(commands=["profile"])
 def cmd_profile(message):
@@ -122,7 +143,6 @@ def cmd_travel(message):
 
 @bot.message_handler(commands=["scout"])
 def cmd_scout(message):
-    # Run in a background thread so the bot remains ultra fast!
     threading.Thread(target=start_scout, args=(message.chat.id, message.from_user.id, message.message_id)).start()
 
 @bot.message_handler(commands=["pokedex"])
@@ -158,7 +178,12 @@ def cmd_inspect(message):
     names = [n.lower() for n in db.list_user_pokemon_names(message.from_user.id)]
     if name not in names: return bot.reply_to(message, escape_md("❌ You don't own this Pokémon."))
         
-    img_url = official_shiny_artwork_url(name) # Simplification since API provides sprite IDs
+    # Translate text name into numeric ID using our fast API cache
+    poke_id = get_pokemon_id_sync(name)
+    if not poke_id:
+        return bot.reply_to(message, escape_md("❌ Error finding Pokémon ID from API."))
+
+    img_url = official_shiny_artwork_url(poke_id) 
     bot.send_photo(message.chat.id, img_url, caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["release"])
