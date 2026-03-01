@@ -5,7 +5,7 @@ import threading
 import datetime
 from config import DATABASE_URL, logger
 
-# Create a dedicated event loop for database operations to prevent blocking the bot
+# Dedicated event loop for database operations
 db_loop = asyncio.new_event_loop()
 pool = None
 
@@ -18,13 +18,13 @@ db_thread = threading.Thread(target=_run_db_loop, args=(db_loop,), daemon=True)
 db_thread.start()
 
 def run_sync(coro):
-    """Bridge: Runs an async function synchronously safely from main.py."""
+    """Bridge: Runs an async function synchronously safely from main.py or pvp.py."""
     return asyncio.run_coroutine_threadsafe(coro, db_loop).result()
 
 # ================== ASYNC INTERNAL FUNCTIONS ==================
 async def _init_db():
     global pool
-    # FIXED: statement_cache_size=0 is mandatory for Supabase PgBouncer
+    # statement_cache_size=0 is required for Supabase PgBouncer compatibility
     pool = await asyncpg.create_pool(
         DATABASE_URL, 
         min_size=1, 
@@ -54,31 +54,36 @@ async def _init_db():
             )
         """)
         
-        # NEW TABLE FOR PVP SETTINGS
+        # NEW: Updated pvp_settings with can_switch column
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS pvp_settings(
                 user_id BIGINT PRIMARY KEY, 
                 mode VARCHAR(10) DEFAULT 'Mix', 
-                team_size INTEGER DEFAULT 6
+                team_size INTEGER DEFAULT 6,
+                can_switch BOOLEAN DEFAULT TRUE
             )
         """)
         
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_user_id ON pokemons(user_id)")
-    logger.info("asyncpg Database & Connection Pool initialized successfully")
+    logger.info("asyncpg Database initialized with Switch Support")
 
 async def _get_pvp_settings(user_id):
     async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT mode, team_size FROM pvp_settings WHERE user_id=$1", user_id)
-        if row: return row['mode'], row['team_size']
-        return 'Mix', 6
+        row = await conn.fetchrow("SELECT mode, team_size, can_switch FROM pvp_settings WHERE user_id=$1", user_id)
+        if row: 
+            return row['mode'], row['team_size'], row['can_switch']
+        return 'Mix', 6, True
 
-async def _update_pvp_settings(user_id, mode, size):
+async def _update_pvp_settings(user_id, mode, size, can_switch):
     async with pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO pvp_settings(user_id, mode, team_size) VALUES ($1, $2, $3)
-            ON CONFLICT (user_id) DO UPDATE SET mode = EXCLUDED.mode, team_size = EXCLUDED.team_size
-        """, user_id, mode, size)
+            INSERT INTO pvp_settings(user_id, mode, team_size, can_switch) VALUES ($1, $2, $3, $4)
+            ON CONFLICT (user_id) DO UPDATE SET 
+                mode = EXCLUDED.mode, 
+                team_size = EXCLUDED.team_size, 
+                can_switch = EXCLUDED.can_switch
+        """, user_id, mode, size, can_switch)
 
 async def _add_group(group_id):
     async with pool.acquire() as conn:
@@ -103,15 +108,13 @@ async def _add_user_if_new(user_id):
         if not row:
             await conn.execute("INSERT INTO users(user_id, tries_left, region, last_reset) VALUES ($1, $2, $3, $4)",
                                user_id, 300, "Kanto", datetime.date.today())
-            logger.info(f"New user added: {user_id}")
             return True
         return False
 
 async def _update_user_tries(user_id):
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT tries_left, region, last_reset FROM users WHERE user_id=$1", user_id)
-        if not row:
-            return None, None
+        if not row: return None, None
         
         tries_left, region, last_reset = row['tries_left'], row['region'], row['last_reset']
         today = datetime.date.today()
@@ -147,13 +150,7 @@ async def _get_all_users():
 
 async def _get_top_trainers(limit=5):
     async with pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT user_id, COUNT(*) as c
-            FROM pokemons
-            GROUP BY user_id
-            ORDER BY c DESC
-            LIMIT $1
-        """, limit)
+        rows = await conn.fetch("SELECT user_id, COUNT(*) as c FROM pokemons GROUP BY user_id ORDER BY c DESC LIMIT $1", limit)
         return [(r['user_id'], r['c']) for r in rows]
 
 async def _reset_user(user_id):
@@ -173,25 +170,9 @@ async def _get_debug_stats():
 
 async def _restore_sqlite_data(users, pokemons, groups):
     async with pool.acquire() as conn:
-        # Restore Users (upsert)
-        await conn.executemany("""
-            INSERT INTO users(user_id, tries_left, region, last_reset) 
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id) DO UPDATE SET 
-            tries_left = EXCLUDED.tries_left, region = EXCLUDED.region, last_reset = EXCLUDED.last_reset
-        """, users)
-        
-        # Restore Groups
-        if groups:
-            await conn.executemany("""
-                INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING
-            """, groups)
-        
-        # Restore Pokémons
-        if pokemons:
-            await conn.executemany("""
-                INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)
-            """, pokemons)
+        await conn.executemany("INSERT INTO users(user_id, tries_left, region, last_reset) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO UPDATE SET tries_left = EXCLUDED.tries_left, region = EXCLUDED.region, last_reset = EXCLUDED.last_reset", users)
+        if groups: await conn.executemany("INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING", groups)
+        if pokemons: await conn.executemany("INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)", pokemons)
 
 # ================== SYNC EXPOSED API ==================
 def init_db(): run_sync(_init_db())
@@ -209,11 +190,11 @@ def get_top_trainers(limit=5): return run_sync(_get_top_trainers(limit))
 def reset_user(user_id): run_sync(_reset_user(user_id))
 def update_user_region(user_id, region): run_sync(_update_user_region(user_id, region))
 def get_debug_stats(): return run_sync(_get_debug_stats())
+def restore_sqlite_data(users, pokemons, groups): run_sync(_restore_sqlite_data(users, pokemons, groups))
 
-# The migration bridge for migrating local SQLite to Supabase
-def restore_sqlite_data(users, pokemons, groups): 
-    run_sync(_restore_sqlite_data(users, pokemons, groups))
+# PvP Settings Sync Bridge
+def get_pvp_settings(user_id): 
+    return run_sync(_get_pvp_settings(user_id))
 
-# PvP Settings
-def get_pvp_settings(user_id): return run_sync(_get_pvp_settings(user_id))
-def update_pvp_settings(user_id, mode, size): run_sync(_update_pvp_settings(user_id, mode, size))
+def update_pvp_settings(user_id, mode, size, can_switch): 
+    run_sync(_update_pvp_settings(user_id, mode, size, can_switch))
