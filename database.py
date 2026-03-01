@@ -54,7 +54,7 @@ async def _init_db():
             )
         """)
         
-        # NEW: Updated pvp_settings with can_switch column
+        # Updated pvp_settings with can_switch column
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS pvp_settings(
                 user_id BIGINT PRIMARY KEY, 
@@ -66,7 +66,7 @@ async def _init_db():
         
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_user_id ON pokemons(user_id)")
-    logger.info("asyncpg Database initialized with Switch Support")
+    logger.info("asyncpg Database initialized with Settings Support")
 
 async def _get_pvp_settings(user_id):
     async with pool.acquire() as conn:
