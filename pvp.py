@@ -6,7 +6,8 @@ import asyncio
 from telebot import types
 import database as db
 from api_utils import escape_md, generate_random_team
-from config import logger, MEGA_POKEMON
+from config import logger, MEGA_POKEMON, LOG_GROUP_ID # <-- Added LOG_GROUP_ID
+import tasks # <-- Added Tasks
 
 pvp_battles = {}
 pending_challenges = {} 
@@ -290,6 +291,11 @@ def handle_pvp_callback(bot, call):
             
             chal_data["timer"].cancel()
             bot.answer_callback_query(call.id, "Preparing the arena...")
+
+            # --- START BATTLE LOG ---
+            if LOG_GROUP_ID:
+                try: bot.send_message(LOG_GROUP_ID, f"⚔️ *Battle Started:* [{escape_md(chal_data['name'])}](tg://user?id={chal_data['p1_id']}) 🆚 [{escape_md(chal_data['p2_name'])}](tg://user?id={chal_data['p2_id']})", parse_mode="MarkdownV2")
+                except: pass
             
             def setup():
                 bot.edit_message_text("🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
@@ -417,6 +423,11 @@ def handle_pvp_callback(bot, call):
                     b["log"] += f"\n💀 {dfn['name']} fainted!"
                     if all(p["hp"] <= 0 for p in b[defender + "_team"]):
                         bot.edit_message_text(f"{escape_md(b['log'])}\n\n🏆 *{escape_md(b[turn+'_name'])} WINS\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        # --- END BATTLE LOG & TASK PROGRESS ---
+                        if LOG_GROUP_ID:
+                            try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[turn+'_name'])}](tg://user?id={b[turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
+                            except: pass
+                        tasks.add_pvp_win(b[turn + "_id"])
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = defender
                 elif atk["hp"] <= 0:
@@ -424,6 +435,11 @@ def handle_pvp_callback(bot, call):
                     b["log"] += f"\n💀 {atk['name']} fainted from status effect!"
                     if all(p["hp"] <= 0 for p in b[turn + "_team"]):
                         bot.edit_message_text(f"{escape_md(b['log'])}\n\n🏆 *{escape_md(b[defender+'_name'])} WINS\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        # --- END BATTLE LOG & TASK PROGRESS ---
+                        if LOG_GROUP_ID:
+                            try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
+                            except: pass
+                        tasks.add_pvp_win(b[defender + "_id"])
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = turn
                 else:
@@ -462,7 +478,12 @@ def handle_pvp_callback(bot, call):
                 b["state"] = "run_confirm"; render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
             elif action == "run": 
-                end_battle(battle_id); bot.edit_message_text(f"🏃 *{escape_md(b[turn+'_name'])} fled\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                end_battle(battle_id)
+                bot.edit_message_text(f"🏃 *{escape_md(b[turn+'_name'])} fled\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                # --- FLEE LOG ---
+                if LOG_GROUP_ID:
+                    try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[turn+'_name'])}](tg://user?id={b[turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
+                    except: pass
                 
             elif action == "back": 
                 b["state"] = "menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
