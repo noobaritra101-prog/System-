@@ -54,7 +54,7 @@ async def _init_db():
             )
         """)
         
-        # Updated pvp_settings with can_switch column
+        # Create the pvp_settings table if it doesn't exist
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS pvp_settings(
                 user_id BIGINT PRIMARY KEY, 
@@ -62,6 +62,12 @@ async def _init_db():
                 team_size INTEGER DEFAULT 6,
                 can_switch BOOLEAN DEFAULT TRUE
             )
+        """)
+        
+        # 💥 THE FIX: Force PostgreSQL to add the missing column if the table already existed!
+        await conn.execute("""
+            ALTER TABLE pvp_settings 
+            ADD COLUMN IF NOT EXISTS can_switch BOOLEAN DEFAULT TRUE
         """)
         
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
