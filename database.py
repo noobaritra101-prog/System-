@@ -64,7 +64,7 @@ async def _init_db():
             )
         """)
         
-        # 💥 THE FIX: Force PostgreSQL to add the missing column if the table already existed!
+        # Force PostgreSQL to add the missing column if the table already existed
         await conn.execute("""
             ALTER TABLE pvp_settings 
             ADD COLUMN IF NOT EXISTS can_switch BOOLEAN DEFAULT TRUE
@@ -72,7 +72,7 @@ async def _init_db():
         
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_user_id ON pokemons(user_id)")
-    logger.info("asyncpg Database initialized with Settings Support")
+    logger.info("✅ asyncpg Database initialized successfully")
 
 async def _get_pvp_settings(user_id):
     async with pool.acquire() as conn:
@@ -159,6 +159,19 @@ async def _get_top_trainers(limit=5):
         rows = await conn.fetch("SELECT user_id, COUNT(*) as c FROM pokemons GROUP BY user_id ORDER BY c DESC LIMIT $1", limit)
         return [(r['user_id'], r['c']) for r in rows]
 
+# NEW: Calculates exact global rank for a specific user
+async def _get_user_rank(user_id):
+    async with pool.acquire() as conn:
+        query = """
+            SELECT rank FROM (
+                SELECT user_id, RANK() OVER (ORDER BY COUNT(*) DESC) as rank
+                FROM pokemons
+                GROUP BY user_id
+            ) sub WHERE user_id=$1
+        """
+        rank = await conn.fetchval(query, user_id)
+        return rank or "N/A"
+
 async def _reset_user(user_id):
     async with pool.acquire() as conn:
         await conn.execute("UPDATE users SET tries_left=300, last_reset=$1 WHERE user_id=$2", datetime.date.today(), user_id)
@@ -180,6 +193,7 @@ async def _restore_sqlite_data(users, pokemons, groups):
         if groups: await conn.executemany("INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING", groups)
         if pokemons: await conn.executemany("INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)", pokemons)
 
+
 # ================== SYNC EXPOSED API ==================
 def init_db(): run_sync(_init_db())
 def add_group(group_id): run_sync(_add_group(group_id))
@@ -193,6 +207,7 @@ def list_user_pokemon_names(user_id): return run_sync(_list_user_pokemon_names(u
 def delete_pokemon(user_id, pokemon_name): return run_sync(_delete_pokemon(user_id, pokemon_name))
 def get_all_users(): return run_sync(_get_all_users())
 def get_top_trainers(limit=5): return run_sync(_get_top_trainers(limit))
+def get_user_rank(user_id): return run_sync(_get_user_rank(user_id))  # NEW EXPOSED API
 def reset_user(user_id): run_sync(_reset_user(user_id))
 def update_user_region(user_id, region): run_sync(_update_user_region(user_id, region))
 def get_debug_stats(): return run_sync(_get_debug_stats())
