@@ -297,7 +297,21 @@ def handle_pvp_callback(bot, call):
                 t2 = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
                 
                 for team in [t1, t2]:
-                    for p in team: p.update({"nature": random.choice(NATURES), "can_mega": any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON), "is_mega": False})
+                    for p in team: 
+                        n = random.choice(NATURES)
+                        p["nature"] = n
+                        p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON)
+                        p["is_mega"] = False
+                        
+                        # Apply Nature Stat Boosts (+10% / -10%)
+                        if n in ["Adamant", "Modest"]: 
+                            p["atk"] = int(p["atk"] * 1.1); p["def"] = int(p["def"] * 0.9)
+                        elif n in ["Bold", "Impish"]: 
+                            p["def"] = int(p["def"] * 1.1); p["atk"] = int(p["atk"] * 0.9)
+                        elif n in ["Calm", "Careful"]: 
+                            p["def"] = int(p["def"] * 1.1); p["spd"] = int(p["spd"] * 0.9)
+                        elif n in ["Jolly", "Timid"]: 
+                            p["spd"] = int(p["spd"] * 1.1); p["atk"] = int(p["atk"] * 0.9)
                 
                 pvp_battles[battle_id] = {
                     "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1, "p1_idx": 0,
@@ -454,8 +468,14 @@ def handle_pvp_callback(bot, call):
                 b["state"] = "menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
             elif action == "viewteam":
-                t_str = "\n".join([f"{i+1}. {p['name']} {'💀' if p['hp']<=0 else ('💤' if p.get('status')=='SLP' else '🟢')}" for i,p in enumerate(b[turn+'_team'])])
-                bot.answer_callback_query(call.id, t_str, show_alert=True)
+                # Build the beautiful new View Team strings with Types, Nature, and Status Icons
+                lines = []
+                for i, p in enumerate(b[turn + '_team']):
+                    emojis = "/".join([TYPE_EMOJIS.get(t.strip(), '⚪') for t in p['types'].split('/')])
+                    status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
+                    lines.append(f"{i+1}. {p['name']} [{emojis}] - {p['nature']} {status_icon}")
+                
+                bot.answer_callback_query(call.id, "\n".join(lines), show_alert=True)
 
     except Exception as e: 
         logger.error(f"PvP Callback Error: {e}")
