@@ -458,8 +458,9 @@ def cb_handler(call):
             return send_leaderboard(call.message.chat.id, owner_id, call.message.message_id)
 
         # Route to Daily Tasks
-        if call.data.startswith("taskclaim_"):
+        if call.data.startswith("task"):
             return tasks.handle_task_callback(bot, call)
+            
 
         if call.data.startswith("travel_"):
             parts = call.data.split("_", 2)
