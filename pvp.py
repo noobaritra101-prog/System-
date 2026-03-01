@@ -1,5 +1,4 @@
-                                    def_p["status"] = move["status_type"]
-                             # pvp.py
+# pvp.py
 import time
 import random
 import threading
@@ -446,50 +445,3 @@ def handle_pvp_callback(bot, call):
 
     except Exception as e: 
         logger.error(f"PvP Callback Error: {e}")
-       if move["status_type"] == "SLP": def_p["sleep_turns"] = random.randint(1, 3)
-                                    b["log"] += f"🦠 {def_p['name']} was {move['status_type']}!\n"
-
-                if atk_p["hp"] > 0:
-                    if atk_p.get("status") == "BRN":
-                        burn_dmg = max(1, atk_p["max_hp"] // 16)
-                        atk_p["hp"] = max(0, atk_p["hp"] - burn_dmg)
-                        b["log"] += f"🔥 {atk_p['name']} is hurt by its burn!\n"
-                    elif atk_p.get("status") == "PSN":
-                        psn_dmg = max(1, atk_p["max_hp"] // 8)
-                        atk_p["hp"] = max(0, atk_p["hp"] - psn_dmg)
-                        b["log"] += f"☠️ {atk_p['name']} is hurt by poison!\n"
-
-                def check_faints(t_name, t_team, t_idx):
-                    if t_team[t_idx]["hp"] <= 0:
-                        t_team[t_idx]["hp"] = 0
-                        b["log"] += f"\n💀 {t_team[t_idx]['name']} fainted!"
-                        t_team[t_idx]["status"] = None 
-                        if sum(1 for p in t_team if p["hp"] > 0) == 0: return "game_over"
-                        return "fainted"
-                    return "alive"
-
-                def_state = check_faints(defender, def_team, b[defender + "_idx"])
-                if def_state == "game_over":
-                    bot.edit_message_text(f"{escape_md(b['log'])}\n\n🏆 *{escape_md(b[turn + '_name'])} WINS THE BATTLE\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
-                    end_battle(battle_id)
-                    return
-                elif def_state == "fainted":
-                    b["state"] = "force_switch"; b["current_turn"] = defender; b["next_turn_after_switch"] = defender
-                    render_pvp_ui(bot, call.message.chat.id, battle_id)
-                    return
-
-                atk_state = check_faints(turn, atk_team, b[turn + "_idx"])
-                if atk_state == "game_over":
-                    bot.edit_message_text(f"{escape_md(b['log'])}\n\n🏆 *{escape_md(b[defender + '_name'])} WINS THE BATTLE\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
-                    end_battle(battle_id)
-                    return
-                elif atk_state == "fainted":
-                    b["state"] = "force_switch"; b["current_turn"] = turn; b["next_turn_after_switch"] = defender
-                    render_pvp_ui(bot, call.message.chat.id, battle_id)
-                    return
-
-                b["current_turn"] = defender
-                render_pvp_ui(bot, call.message.chat.id, battle_id)
-
-    except Exception as e:
-        logger.error(f"PvP Callback error: {e}")
