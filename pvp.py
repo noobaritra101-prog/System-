@@ -402,14 +402,14 @@ def handle_pvp_callback(bot, call):
                     dfn["hp"] = 0; dfn["status"] = None
                     b["log"] += f"\n💀 {dfn['name']} fainted!"
                     if all(p["hp"] <= 0 for p in b[defender + "_team"]):
-                        bot.edit_message_text(f"{escape_md(b['log'])}\n\n🏆 *{escape_md(b[turn+'_name'])} WINS!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        bot.edit_message_text(f"{escape_md(b['log'])}\n\n🏆 *{escape_md(b[turn+'_name'])} WINS\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = defender
                 elif atk["hp"] <= 0:
                     atk["hp"] = 0; atk["status"] = None
                     b["log"] += f"\n💀 {atk['name']} fainted from status effect!"
                     if all(p["hp"] <= 0 for p in b[turn + "_team"]):
-                        bot.edit_message_text(f"{escape_md(b['log'])}\n\n🏆 *{escape_md(b[defender+'_name'])} WINS!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        bot.edit_message_text(f"{escape_md(b['log'])}\n\n🏆 *{escape_md(b[defender+'_name'])} WINS\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = turn
                 else:
@@ -448,7 +448,7 @@ def handle_pvp_callback(bot, call):
                 b["state"] = "run_confirm"; render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
             elif action == "run": 
-                end_battle(battle_id); bot.edit_message_text(f"🏃 *{escape_md(b[turn+'_name'])} fled!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                end_battle(battle_id); bot.edit_message_text(f"🏃 *{escape_md(b[turn+'_name'])} fled\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                 
             elif action == "back": 
                 b["state"] = "menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
