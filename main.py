@@ -12,7 +12,8 @@ import random
 # Import from our modular files
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
-import pvp # Import the dedicated PvP engine
+import pvp 
+import tasks # <-- New Tasks Engine
 from api_utils import (
     escape_md, 
     fetch_random_pokemon_id_and_name_sync, 
@@ -52,7 +53,6 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
         return bot.send_message(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_message_id=reply_to_id)
 
-    # NOW INSTANT DUE TO CACHING!
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync()
     if not poke_id:
         return bot.send_message(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_message_id=reply_to_id)
@@ -80,8 +80,20 @@ def process_catch(call, uid, pid, name):
         time.sleep(1.5) 
         catch_rate = get_species_catch_rate_sync(pid)
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
-            db.add_caught_pokemon(uid, name.capitalize(), db.get_user(uid)[2])
-            bot.edit_message_caption(caption=f"✨ *Gotcha\\!* Shiny *{escape_md(name.capitalize())}* was caught\\!\n\nUse /inspect `{escape_md(name.capitalize())}` to view it\\.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+            poke_name_capped = name.capitalize()
+            db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
+            
+            # 1. Update Daily Task Progress
+            tasks.check_and_update_catch(uid, poke_name_capped)
+            
+            # 2. Add LIVE log to admin group!
+            if LOG_GROUP_ID:
+                try: 
+                    u_name = call.from_user.first_name
+                    bot.send_message(LOG_GROUP_ID, f"🟢 *Catch Log:* [{escape_md(u_name)}](tg://user?id={uid}) caught a ✨ Shiny {escape_md(poke_name_capped)}\\!", parse_mode="MarkdownV2")
+                except: pass
+            
+            bot.edit_message_caption(caption=f"✨ *Gotcha\\!* Shiny *{escape_md(poke_name_capped)}* was caught\\!\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
         else:
             bot.edit_message_caption(caption=f"💨 Oh no\\! Shiny *{escape_md(name.capitalize())}* broke free and fled\\!", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
     except Exception as e:
@@ -94,7 +106,7 @@ def cmd_start(message):
     if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Main Group ✨", url="https://t.me/sexagamechat"), types.InlineKeyboardButton("Owner 👑", url="https://t.me/Dark_monarchx"))
-    bot.reply_to(message, "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 /scout \\- Search for shiny Pokémon\n🌍 /travel \\- Change region\n📱 /pokedex `<name>` \\- Check stats\n🥊 /pvp \\- Reply to a user to battle\n🏆 /flex \\- View the Global Leaderboard\n⌨️ /open \\- Open scout button \\(DM only\\)", reply_markup=kb, parse_mode="MarkdownV2")
+    bot.reply_to(message, "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 /scout \\- Search for shiny Pokémon\n🌍 /travel \\- Change region\n📱 /pokedex `<name>` \\- Check stats\n🥊 /pvp \\- Reply to a user to battle\n🏆 /flex \\- View the Global Leaderboard\n📋 /task \\- Daily Rewards\n⌨️ /open \\- Open scout button \\(DM only\\)", reply_markup=kb, parse_mode="MarkdownV2")
     
     if is_new and LOG_GROUP_ID is not None:
         try: bot.send_message(LOG_GROUP_ID, escape_md(f"🔔 New Trainer: {message.from_user.first_name} (ID: {message.from_user.id}) started the bot."))
@@ -121,7 +133,12 @@ def cmd_close(message):
 @bot.message_handler(func=lambda message: message.text == "🔎 Scout" and message.chat.type == "private")
 def text_scout(message):
     threading.Thread(target=start_scout, args=(message.chat.id, message.from_user.id, message.message_id)).start()
-# ------------------------
+
+# --- DAILY TASKS ---
+@bot.message_handler(commands=["task", "tasks"])
+def cmd_task(message):
+    db.add_user_if_new(message.from_user.id)
+    tasks.render_tasks_ui(bot, message.chat.id, message.from_user.id)
 
 @bot.message_handler(commands=["profile"])
 def cmd_profile(message):
@@ -151,7 +168,7 @@ def cmd_pokedex(message):
     stats_str = "\n".join([f"🔸 *{escape_md(k)}:* {v}" for k, v in stats.items()])
     bot.reply_to(message, f"📱 *Pokédex Data: {escape_md(parts[1].capitalize())}*\n🧬 *Type:* {escape_md(' | '.join(types_list))}\n\n📊 *Base Stats:*\n{stats_str}", parse_mode="MarkdownV2")
 
-@bot.message_handler(commands=["mypokemon"])
+@bot.message_handler(commands=["mypokemon", "mypokemons"])
 def cmd_mypokemon(message):
     user_id = message.from_user.id
     if not db.get_user(user_id): return bot.reply_to(message, escape_md("⚠️ Please /start the bot first."))
@@ -307,7 +324,6 @@ def cmd_plist(message):
         bot.reply_to(message, f"🎒 *Pokémon for User {uid}* \\(Page 1/{len(pages)}\\):\n\n" + "\n".join(f"\\- {escape_md(n)}" for n in pages[0]), reply_markup=make_kb(uid, len(pages)) if len(pages) > 1 else None, parse_mode="MarkdownV2")
     except Exception as e: bot.reply_to(message, escape_md(f"Error: {str(e)}"))
 
-
 # --- REPLY-BASED ADMIN COMMANDS ---
 @bot.message_handler(commands=["take"])
 def cmd_take(message):
@@ -440,6 +456,10 @@ def cb_handler(call):
                 return bot.answer_callback_query(call.id, "❌ You cannot refresh someone else's flex menu!", show_alert=True)
             bot.answer_callback_query(call.id, "🔄 Refreshing Leaderboard...")
             return send_leaderboard(call.message.chat.id, owner_id, call.message.message_id)
+
+        # Route to Daily Tasks
+        if call.data.startswith("taskclaim_"):
+            return tasks.handle_task_callback(bot, call)
 
         if call.data.startswith("travel_"):
             parts = call.data.split("_", 2)
