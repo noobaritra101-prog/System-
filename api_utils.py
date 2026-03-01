@@ -5,9 +5,30 @@ import json
 import random
 import re
 import asyncio
+import threading
 from config import logger, MEGA_POKEMON
 
 pokemon_cache = {}
+pokemon_name_to_id_cache = {}
+
+# --- CACHE BUILDER (MAKES /SCOUT INSTANT) ---
+def build_cache():
+    """Fetches all 898 Pokemon names/IDs once on startup so /scout has 0 latency."""
+    try:
+        url = "https://pokeapi.co/api/v2/pokemon?limit=898"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+            for i, result in enumerate(data['results'], start=1):
+                name = result['name'].capitalize()
+                pokemon_cache[i] = name
+                pokemon_name_to_id_cache[name.lower()] = i
+        logger.info("✅ Pokémon cache built! /scout is now instant.")
+    except Exception as e:
+        logger.error(f"Failed to build cache: {e}")
+
+# Start caching in the background immediately
+threading.Thread(target=build_cache, daemon=True).start()
 
 def escape_md(text):
     """Safely escape text for MarkdownV2 without breaking formatting."""
@@ -15,15 +36,18 @@ def escape_md(text):
     return re.sub(special_chars, r'\\\1', str(text))
 
 def fetch_random_pokemon_id_and_name_sync():
-    """Ultra-fast synchronous fetch for /scout to avoid asyncio overhead."""
+    """Ultra-fast lookup from memory cache."""
     if random.random() < 0.05:
         poke_id, name, base_id = random.choice(MEGA_POKEMON)
         return poke_id, name, base_id
     
     poke_id = random.randint(1, 898)
+    
+    # 99.9% of the time, this will instantly return from memory
     if poke_id in pokemon_cache:
         return poke_id, pokemon_cache[poke_id], poke_id
         
+    # Fallback if cache is still building
     try:
         url = f"https://pokeapi.co/api/v2/pokemon/{poke_id}"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -31,10 +55,30 @@ def fetch_random_pokemon_id_and_name_sync():
             data = json.loads(response.read().decode())
             name = data["name"].capitalize()
             pokemon_cache[poke_id] = name
+            pokemon_name_to_id_cache[name.lower()] = poke_id
             return poke_id, name, poke_id
     except Exception as e:
         logger.error(f"PokeAPI sync request failed: {e}")
         return None, None, None
+
+def get_pokemon_id_sync(pokemon_name):
+    """Translates a name back to an ID for /inspect."""
+    name_lower = pokemon_name.lower()
+    if name_lower in pokemon_name_to_id_cache:
+        return pokemon_name_to_id_cache[name_lower]
+    
+    # Fallback
+    try:
+        url = f"https://pokeapi.co/api/v2/pokemon/{name_lower}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            poke_id = data["id"]
+            pokemon_name_to_id_cache[name_lower] = poke_id
+            pokemon_cache[poke_id] = data["name"].capitalize()
+            return poke_id
+    except:
+        return None
 
 def official_shiny_artwork_url(poke_id):
     return f"https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/shiny/{poke_id}.png"
@@ -60,7 +104,6 @@ def get_pokemon_stats_sync(pokemon_name):
     except: return None, None
 
 async def fetch_move_type(session, url):
-    """Fetches the element type of a specific move."""
     try:
         async with session.get(url, timeout=5) as response:
             if response.status == 200:
@@ -70,7 +113,6 @@ async def fetch_move_type(session, url):
     return "Normal"
 
 async def fetch_random_pvp_pokemon():
-    """Fetches a random Pokémon, its stats, types, and detailed moves for PvP."""
     poke_id = random.randint(1, 898)
     async with aiohttp.ClientSession() as session:
         url = f"https://pokeapi.co/api/v2/pokemon/{poke_id}"
@@ -89,7 +131,6 @@ async def fetch_random_pvp_pokemon():
                     m_name = m["move"]["name"].replace("-", " ").capitalize()
                     m_type = await fetch_move_type(session, m["move"]["url"])
                     
-                    # Assign Status Effects based on Move Type
                     s_type, s_chance = None, 0
                     if m_type == "Fire": s_type, s_chance = "BRN", 15
                     elif m_type == "Electric": s_type, s_chance = "PAR", 15
@@ -121,7 +162,7 @@ async def fetch_random_pvp_pokemon():
                     "def": stats.get("defense", 50),
                     "spd": stats.get("speed", 50),
                     "moves": moves,
-                    "status": None,       # BRN, PAR, PSN, FRZ, SLP
+                    "status": None,       
                     "sleep_turns": 0
                 }
         except Exception as e:
