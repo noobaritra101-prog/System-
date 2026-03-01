@@ -149,19 +149,23 @@ async def fetch_random_pvp_pokemon():
                     
                     # Fetch authentic moves from their real movepool
                     all_move_urls = [m["move"]["url"] for m in data.get("moves", [])]
-                    # Sample 25 random moves from their pool to check
-                    sample_urls = random.sample(all_move_urls, min(25, len(all_move_urls)))
+                    
+                    # Sample up to 35 random moves to increase chances of finding 80+ power moves
+                    sample_urls = random.sample(all_move_urls, min(35, len(all_move_urls)))
                     
                     fetched_moves = await asyncio.gather(*(fetch_real_move_data(session, u) for u in sample_urls))
                     valid_moves = [m for m in fetched_moves if m is not None]
                     
+                    # Filter for moves specifically 80 power or higher
+                    strong_moves = [m for m in valid_moves if m["power"] >= 80]
                     final_moves = []
                     
-                    # REQUIREMENT 2: Find a real STAB move with power >= 80
-                    strong_stab = [m for m in valid_moves if m["type"] in types_list and m["power"] >= 80]
+                    # 1. Force a real STAB move with power >= 80
+                    strong_stab = [m for m in strong_moves if m["type"] in types_list]
                     if strong_stab:
                         chosen_stab = random.choice(strong_stab)
                         final_moves.append(chosen_stab)
+                        strong_moves.remove(chosen_stab)
                         valid_moves.remove(chosen_stab)
                     else:
                         # Fallback: Just grab the strongest real STAB move they have if they don't have an 80+ one
@@ -170,15 +174,25 @@ async def fetch_random_pvp_pokemon():
                             chosen_stab = sorted(any_stab, key=lambda x: x["power"], reverse=True)[0]
                             final_moves.append(chosen_stab)
                             valid_moves.remove(chosen_stab)
+                            if chosen_stab in strong_moves: strong_moves.remove(chosen_stab)
 
-                    # Fill the remaining slots with other real damaging moves
-                    random.shuffle(valid_moves)
-                    for m in valid_moves:
+                    # 2. Fill the remaining slots strictly with other 80+ power moves
+                    random.shuffle(strong_moves)
+                    for m in strong_moves:
                         if len(final_moves) >= 4: break
                         if m["name"] not in [fm["name"] for fm in final_moves]:
                             final_moves.append(m)
+                            if m in valid_moves: valid_moves.remove(m)
                     
-                    # Extreme edge case safety net
+                    # 3. If they don't have enough 80+ power moves, sort the rest by HIGHEST power available
+                    if len(final_moves) < 4:
+                        valid_moves.sort(key=lambda x: x["power"], reverse=True)
+                        for m in valid_moves:
+                            if len(final_moves) >= 4: break
+                            if m["name"] not in [fm["name"] for fm in final_moves]:
+                                final_moves.append(m)
+                    
+                    # 4. Extreme edge case safety net
                     while len(final_moves) < 4: 
                         final_moves.append({"name": "Struggle", "power": 50, "acc": 100, "type": "Normal", "status_type": None, "status_chance": 0})
                     
