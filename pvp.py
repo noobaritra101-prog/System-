@@ -53,7 +53,10 @@ def battle_timeout(bot, chat_id, battle_id):
     b = pvp_battles.get(battle_id)
     if b:
         turn = b["current_turn"]
-        loser_name = b[turn + "_name"]
+        # Make sure we don't timeout while processing a move
+        if turn == "processing": return 
+        
+        loser_name = b.get(turn + "_name", "Player")
         winner_name = b["p2_name"] if turn == "p1" else b["p1_name"]
         
         pvp_battles.pop(battle_id, None)
@@ -96,6 +99,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
     if battle_id not in pvp_battles: return
     b = pvp_battles[battle_id]
     turn = b["current_turn"]
+    if turn == "processing": return
     
     if "timer" in b and b["timer"]: b["timer"].cancel()
     b["timer"] = threading.Timer(60.0, battle_timeout, args=(bot, chat_id, battle_id))
@@ -186,7 +190,6 @@ def handle_pvp_command(bot, message):
     if is_in_battle(p1_id) or is_in_battle(p2_id): 
         return bot.reply_to(message, escape_md("❌ Someone is already in a battle!"))
 
-    # Auto-cancel old outbound challenges from this user so they aren't stuck
     to_remove = []
     for m_id, chal in pending_challenges.items():
         if chal["p1_id"] == p1_id:
@@ -275,11 +278,16 @@ def handle_pvp_callback(bot, call):
             
             turn = parts[3]
             
+            # 1. Ownership Security Check
             if call.from_user.id != b[turn + "_id"]:
                 if action == "viewteam":
                     return bot.answer_callback_query(call.id, "❌ You cannot view your opponent's team!", show_alert=True)
                 else:
                     return bot.answer_callback_query(call.id, "❌ These are not your buttons!", show_alert=True)
+            
+            # 2. Strict Turn-Lock (Anti-Spam / Double Execute fix)
+            if action != "viewteam" and b.get("current_turn") != turn:
+                return bot.answer_callback_query(call.id, "⏳ Please wait for your turn!", show_alert=False)
             
             if action == "viewteam":
                 team_str = ""
@@ -293,6 +301,7 @@ def handle_pvp_callback(bot, call):
 
             elif action == "mega":
                 p = b[turn + "_team"][b[turn + "_idx"]]
+                if p.get("is_mega"): return bot.answer_callback_query(call.id, "Already Mega Evolved!") # Double tap fix
                 p["is_mega"] = True
                 p["name"] = f"Mega {p['name']}"
                 p["atk"] = int(p["atk"] * 1.3)
@@ -324,6 +333,9 @@ def handle_pvp_callback(bot, call):
                 if p["hp"] <= 0: return bot.answer_callback_query(call.id, "That Pokémon is fainted!")
                 if idx == b[turn + "_idx"]: return bot.answer_callback_query(call.id, "That Pokémon is already out!")
                 
+                # Lock turn processing
+                b["current_turn"] = "processing"
+                
                 old_name = b[turn+"_team"][b[turn+"_idx"]]["name"]
                 b[turn+"_idx"] = idx
                 b["log"] = f"🔄 {old_name} switched out, {p['name']} took the field!"
@@ -337,6 +349,9 @@ def handle_pvp_callback(bot, call):
                 render_pvp_ui(bot, call.message.chat.id, call.message.message_id)
 
             elif action == "move":
+                # Lock turn processing immediately to block double taps
+                b["current_turn"] = "processing" 
+                
                 m_idx = int(parts[4])
                 atk_team = b[turn + "_team"]
                 atk_p = atk_team[b[turn + "_idx"]]
@@ -425,6 +440,7 @@ def handle_pvp_callback(bot, call):
                     render_pvp_ui(bot, call.message.chat.id, battle_id)
                     return
 
+                # Safely pass the turn to the defender
                 b["current_turn"] = defender
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
 
