@@ -24,7 +24,7 @@ def run_sync(coro):
 # ================== ASYNC INTERNAL FUNCTIONS ==================
 async def _init_db():
     global pool
-    # FIXED: statement_cache_size=0 is mandatory for Supabase PgBouncer (Port 6543)
+    # FIXED: statement_cache_size=0 is mandatory for Supabase PgBouncer
     pool = await asyncpg.create_pool(
         DATABASE_URL, 
         min_size=1, 
@@ -53,9 +53,32 @@ async def _init_db():
                 group_id BIGINT PRIMARY KEY
             )
         """)
+        
+        # NEW TABLE FOR PVP SETTINGS
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS pvp_settings(
+                user_id BIGINT PRIMARY KEY, 
+                mode VARCHAR(10) DEFAULT 'Mix', 
+                team_size INTEGER DEFAULT 6
+            )
+        """)
+        
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_user_id ON pokemons(user_id)")
     logger.info("asyncpg Database & Connection Pool initialized successfully")
+
+async def _get_pvp_settings(user_id):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT mode, team_size FROM pvp_settings WHERE user_id=$1", user_id)
+        if row: return row['mode'], row['team_size']
+        return 'Mix', 6
+
+async def _update_pvp_settings(user_id, mode, size):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO pvp_settings(user_id, mode, team_size) VALUES ($1, $2, $3)
+            ON CONFLICT (user_id) DO UPDATE SET mode = EXCLUDED.mode, team_size = EXCLUDED.team_size
+        """, user_id, mode, size)
 
 async def _add_group(group_id):
     async with pool.acquire() as conn:
@@ -190,3 +213,7 @@ def get_debug_stats(): return run_sync(_get_debug_stats())
 # The migration bridge for migrating local SQLite to Supabase
 def restore_sqlite_data(users, pokemons, groups): 
     run_sync(_restore_sqlite_data(users, pokemons, groups))
+
+# PvP Settings
+def get_pvp_settings(user_id): return run_sync(_get_pvp_settings(user_id))
+def update_pvp_settings(user_id, mode, size): run_sync(_update_pvp_settings(user_id, mode, size))
