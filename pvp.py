@@ -16,9 +16,9 @@ NATURES = ["Adamant", "Jolly", "Modest", "Timid", "Bold", "Calm", "Careful", "Im
 
 TYPE_EMOJIS = {
     'Normal': '⚪', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
-    'Ice': '🧊', 'Fighting': '🥊', 'Poison': '☠️', 'Ground': '⛰️', 'Flying': '🪽', 
-    'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
-    'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
+    'Ice': '❄️', 'Fighting': '🥊', 'Poison': '☠️', 'Ground': '🪨', 'Flying': '🪽', 
+    'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🗿', 'Ghost': '👻', 'Dragon': '🐉', 
+    'Dark': '🌑', 'Steel': '⚙️', 'Fairy': '✨'
 }
 
 TYPE_CHART = {
@@ -241,8 +241,8 @@ def handle_pvp_command(bot, message):
 
     mode, size = db.get_pvp_settings(p1_id)
 
-    # Temporary placeholder text, instantly replaced by update_challenge_message
-    sent = bot.reply_to(message, "🔄 Loading challenge...")
+    # 💥 THE FIX IS HERE: Added escape_md so MarkdownV2 doesn't crash on the dots!
+    sent = bot.reply_to(message, escape_md("🔄 Loading challenge..."), parse_mode="MarkdownV2")
     
     timer = threading.Timer(60.0, challenge_timeout, args=(bot, message.chat.id, sent.message_id))
     timer.start()
