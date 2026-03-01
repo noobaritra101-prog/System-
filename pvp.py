@@ -215,7 +215,7 @@ def handle_pvp_command(bot, message):
         if p1_id in [c["p1_id"], c["p2_id"]]:
             c["timer"].cancel()
             to_remove.append(mid)
-            try: bot.edit_message_text("❌ *Challenge cancelled because sender started a new one\\.*", c["chat_id"], mid, parse_mode="MarkdownV2")
+            try: bot.edit_message_text("❌ *Challenge cancelled because a new one was started\\.*", c["chat_id"], mid, parse_mode="MarkdownV2")
             except: pass
     for mid in to_remove: pending_challenges.pop(mid, None)
 
@@ -275,10 +275,18 @@ def handle_pvp_callback(bot, call):
 
         # --- PRE-BATTLE ---
         if action == "accept":
+            p1_id, p2_id = int(parts[2]), int(parts[3])
+            
+            # 1. Check ID BEFORE popping from memory!
+            if call.from_user.id != p2_id: 
+                return bot.answer_callback_query(call.id, "❌ Not your challenge!", show_alert=True)
+            
             battle_id = call.message.message_id
             chal_data = pending_challenges.pop(battle_id, None)
-            if not chal_data or call.from_user.id != chal_data["p2_id"]: 
-                return bot.answer_callback_query(call.id, "❌ Not your challenge!", show_alert=True)
+            
+            # 2. Check if it actually exists/expired
+            if not chal_data: 
+                return bot.answer_callback_query(call.id, "This challenge has expired or was already answered!")
             
             chal_data["timer"].cancel()
             bot.answer_callback_query(call.id, "Preparing the arena...")
@@ -297,7 +305,7 @@ def handle_pvp_callback(bot, call):
                     "can_switch": chal_data["can_switch"], "state": "menu", "log": "", "timer": None
                 }
                 
-                # Check Speed immediately at start of battle
+                # Dynamic Speed Check Immediately
                 pvp_battles[battle_id]["current_turn"] = get_faster_player(pvp_battles[battle_id])
                 faster_name = pvp_battles[battle_id][pvp_battles[battle_id]['current_turn'] + '_name']
                 pvp_battles[battle_id]["log"] = f"⚡ {faster_name}'s speed allows them to move first!"
@@ -307,9 +315,15 @@ def handle_pvp_callback(bot, call):
             return
 
         elif action == "decline":
-            chal = pending_challenges.pop(call.message.message_id, None)
-            if chal and call.from_user.id == chal["p2_id"]: 
-                chal["timer"].cancel()
+            p1_id, p2_id = int(parts[2]), int(parts[3])
+            
+            # Check ID BEFORE popping from memory!
+            if call.from_user.id != p2_id: 
+                return bot.answer_callback_query(call.id, "❌ Only the challenged player can decline.", show_alert=True)
+                
+            chal_data = pending_challenges.pop(call.message.message_id, None)
+            if chal_data: 
+                chal_data["timer"].cancel()
                 bot.edit_message_text("❌ *Challenge declined\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
             return
 
