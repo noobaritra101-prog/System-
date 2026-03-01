@@ -15,10 +15,10 @@ pending_challenges = {}
 NATURES = ["Adamant", "Jolly", "Modest", "Timid", "Bold", "Calm", "Careful", "Impish"]
 
 TYPE_EMOJIS = {
-    'Normal': '⚪', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
-    'Ice': '❄️', 'Fighting': '🥊', 'Poison': '☠️', 'Ground': '🪨', 'Flying': '🪽', 
-    'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🗿', 'Ghost': '👻', 'Dragon': '🐉', 
-    'Dark': '🌑', 'Steel': '⚙️', 'Fairy': '✨'
+    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
+    'Ice': '🧊', 'Fighting': '🥊', 'Poison': '☣️', 'Ground': '⛰️', 'Flying': '🪽', 
+    'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
+    'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
 }
 
 TYPE_CHART = {
