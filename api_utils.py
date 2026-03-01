@@ -11,16 +11,6 @@ from config import logger, MEGA_POKEMON
 pokemon_cache = {}
 pokemon_name_to_id_cache = {}
 
-# --- GUARANTEED STAB MOVES FOR FULLY EVOLVED POKEMON ---
-STRONG_STAB_MOVES = {
-    'Normal': 'Hyper Voice', 'Fire': 'Flamethrower', 'Water': 'Hydro Pump',
-    'Electric': 'Thunderbolt', 'Grass': 'Energy Ball', 'Ice': 'Ice Beam',
-    'Fighting': 'Close Combat', 'Poison': 'Sludge Bomb', 'Ground': 'Earthquake',
-    'Flying': 'Hurricane', 'Psychic': 'Psychic', 'Bug': 'Bug Buzz',
-    'Rock': 'Stone Edge', 'Ghost': 'Shadow Ball', 'Dragon': 'Dragon Pulse',
-    'Dark': 'Dark Pulse', 'Steel': 'Flash Cannon', 'Fairy': 'Moonblast'
-}
-
 def build_cache():
     """Fetches all 898 Pokemon names/IDs once on startup so /scout is instant."""
     try:
@@ -102,14 +92,40 @@ def get_pokemon_stats_sync(pokemon_name):
             return types, stats
     except: return None, None
 
-async def fetch_move_type(session, url):
+async def fetch_real_move_data(session, url):
+    """Fetches authentic power, accuracy, and type for a specific move."""
     try:
         async with session.get(url, timeout=5) as response:
             if response.status == 200:
                 data = await response.json()
-                return data["type"]["name"].capitalize()
+                power = data.get("power")
+                
+                # Filter out status moves (0 power)
+                if not power: 
+                    return None
+                
+                m_type = data["type"]["name"].capitalize()
+                # If accuracy is null (like Swift or Aura Sphere), it never misses (100)
+                acc = data.get("accuracy") or 100 
+                name = data["name"].replace("-", " ").title()
+                
+                s_type, s_chance = None, 0
+                if m_type == "Fire": s_type, s_chance = "BRN", 10
+                elif m_type == "Electric": s_type, s_chance = "PAR", 10
+                elif m_type == "Poison": s_type, s_chance = "PSN", 20
+                elif m_type == "Ice": s_type, s_chance = "FRZ", 10
+                elif m_type == "Grass": s_type, s_chance = "SLP", 10
+                
+                return {
+                    "name": name,
+                    "power": power,
+                    "acc": acc,
+                    "type": m_type,
+                    "status_type": s_type,
+                    "status_chance": s_chance
+                }
     except: pass
-    return "Normal"
+    return None
 
 async def fetch_random_pvp_pokemon():
     async with aiohttp.ClientSession() as session:
@@ -121,8 +137,7 @@ async def fetch_random_pvp_pokemon():
                     if response.status != 200: continue
                     data = await response.json()
                     
-                    # REQUIREMENT 1: Only Fully Evolved Pokemon
-                    # Base experience > 150 filters out weak babies and mid-stages!
+                    # REQUIREMENT 1: Only Fully Evolved Pokemon (Base XP > 150)
                     if data.get("base_experience", 0) < 150:
                         continue 
 
@@ -131,52 +146,43 @@ async def fetch_random_pvp_pokemon():
                     
                     types_list = [t["type"]["name"].capitalize() for t in data.get("types", [])]
                     types_str = "/".join(types_list)
-                    primary_type = types_list[0]
                     
-                    # REQUIREMENT 2: Guaranteed STAB move with 80-120 Power
-                    moves = []
-                    guaranteed_move_name = STRONG_STAB_MOVES.get(primary_type, "Hyper Beam")
-                    moves.append({
-                        "name": guaranteed_move_name,
-                        "power": random.randint(80, 120),
-                        "acc": random.choice([85, 90, 95, 100]),
-                        "type": primary_type,
-                        "status_type": None,
-                        "status_chance": 0
-                    })
+                    # Fetch authentic moves from their real movepool
+                    all_move_urls = [m["move"]["url"] for m in data.get("moves", [])]
+                    # Sample 25 random moves from their pool to check
+                    sample_urls = random.sample(all_move_urls, min(25, len(all_move_urls)))
                     
-                    # Fetch 3 other random moves to fill the rest of the slots
-                    all_moves = data.get("moves", [])
-                    selected_moves = random.sample(all_moves, min(3, len(all_moves)))
+                    fetched_moves = await asyncio.gather(*(fetch_real_move_data(session, u) for u in sample_urls))
+                    valid_moves = [m for m in fetched_moves if m is not None]
                     
-                    async def build_move(m):
-                        m_name = m["move"]["name"].replace("-", " ").capitalize()
-                        m_type = await fetch_move_type(session, m["move"]["url"])
-                        
-                        s_type, s_chance = None, 0
-                        if m_type == "Fire": s_type, s_chance = "BRN", 15
-                        elif m_type == "Electric": s_type, s_chance = "PAR", 15
-                        elif m_type == "Poison": s_type, s_chance = "PSN", 20
-                        elif m_type == "Ice": s_type, s_chance = "FRZ", 10
-                        elif m_type == "Grass": s_type, s_chance = "SLP", 15
-                        
-                        return {
-                            "name": m_name,
-                            "power": random.randint(50, 110),
-                            "acc": random.choice([80, 85, 90, 95, 100, 100]),
-                            "type": m_type,
-                            "status_type": s_type,
-                            "status_chance": s_chance
-                        }
-                        
-                    fetched_moves = await asyncio.gather(*(build_move(m) for m in selected_moves))
-                    moves.extend(fetched_moves)
+                    final_moves = []
                     
-                    while len(moves) < 4: 
-                        moves.append({"name": "Tackle", "power": 40, "acc": 100, "type": "Normal", "status_type": None, "status_chance": 0})
+                    # REQUIREMENT 2: Find a real STAB move with power >= 80
+                    strong_stab = [m for m in valid_moves if m["type"] in types_list and m["power"] >= 80]
+                    if strong_stab:
+                        chosen_stab = random.choice(strong_stab)
+                        final_moves.append(chosen_stab)
+                        valid_moves.remove(chosen_stab)
+                    else:
+                        # Fallback: Just grab the strongest real STAB move they have if they don't have an 80+ one
+                        any_stab = [m for m in valid_moves if m["type"] in types_list]
+                        if any_stab:
+                            chosen_stab = sorted(any_stab, key=lambda x: x["power"], reverse=True)[0]
+                            final_moves.append(chosen_stab)
+                            valid_moves.remove(chosen_stab)
+
+                    # Fill the remaining slots with other real damaging moves
+                    random.shuffle(valid_moves)
+                    for m in valid_moves:
+                        if len(final_moves) >= 4: break
+                        if m["name"] not in [fm["name"] for fm in final_moves]:
+                            final_moves.append(m)
                     
-                    # Shuffle so the guaranteed strong STAB move isn't always in the first button
-                    random.shuffle(moves)
+                    # Extreme edge case safety net
+                    while len(final_moves) < 4: 
+                        final_moves.append({"name": "Struggle", "power": 50, "acc": 100, "type": "Normal", "status_type": None, "status_chance": 0})
+                    
+                    random.shuffle(final_moves)
                     
                     hp = int(stats.get("hp", 50)) * 3 
                     
@@ -188,7 +194,7 @@ async def fetch_random_pvp_pokemon():
                         "atk": stats.get("attack", 50),
                         "def": stats.get("defense", 50),
                         "spd": stats.get("speed", 50),
-                        "moves": moves,
+                        "moves": final_moves,
                         "status": None,       
                         "sleep_turns": 0
                     }
