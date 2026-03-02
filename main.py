@@ -13,7 +13,7 @@ import random
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
 import pvp 
-import tasks # <-- Tasks Engine
+import tasks # <-- New Tasks Engine
 from api_utils import (
     escape_md, 
     fetch_random_pokemon_id_and_name_sync, 
@@ -53,14 +53,9 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
         return bot.send_message(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_message_id=reply_to_id)
 
-    # Assigns poke_id based on the user's specific region!
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
-    
     if not poke_id:
         return bot.send_message(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_message_id=reply_to_id)
-
-    # 1. Update Daily Task Progress for Scouting
-    tasks.add_progress(user_id, "scout")
 
     img_url = official_shiny_artwork_url(base_id)
     caption = f"🌍 A wild ✨ *{escape_md(name)}* appeared in *{escape_md(region)}*\\!\n\n🎒 What will you do?"
@@ -88,10 +83,10 @@ def process_catch(call, uid, pid, name):
             poke_name_capped = name.capitalize()
             db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
             
-            # Update Daily Task Progress
+            # 1. Update Daily Task Progress (Catching is the only tracker needed here now!)
             tasks.check_and_update_catch(uid, poke_name_capped)
             
-            # Add LIVE log to admin group
+            # 2. Add LIVE log to admin group!
             if LOG_GROUP_ID:
                 try: 
                     u_name = call.from_user.first_name
@@ -200,9 +195,6 @@ def cmd_inspect(message):
     poke_id = get_pokemon_id_sync(name)
     if not poke_id:
         return bot.reply_to(message, escape_md("❌ Error finding Pokémon ID from API."))
-
-    # Task Progress for Inspecting
-    tasks.add_progress(message.from_user.id, "inspect")
 
     img_url = official_shiny_artwork_url(poke_id) 
     bot.send_photo(message.chat.id, img_url, caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
@@ -474,10 +466,6 @@ def cb_handler(call):
             uid, region = int(parts[1]), parts[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu.")
             db.update_user_region(uid, region)
-            
-            # Task Hook
-            tasks.add_progress(uid, "travel")
-            
             bot.edit_message_text(f"✈️ Travelled to *{escape_md(region)}*\\.", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
 
         elif call.data.startswith("catch_"):
