@@ -5,42 +5,42 @@ from api_utils import escape_md
 
 active_trades = {}
 
-def get_trade_bar(t):
-    p1_off = t['p1_offer'] or "Nothing yet"
-    p2_off = t['p2_offer'] or "Nothing yet"
-    p1_rdy = "✅ Ready" if t['p1_confirm'] else "⏳ Choosing\\.\\.\\."
-    p2_rdy = "✅ Ready" if t['p2_confirm'] else "⏳ Choosing\\.\\.\\."
-    
-    text = (
-        "🔄 *Pokémon Trade Center*\n"
-        "━━━━━━━━━━━━━━\n"
-        f"👤 *{escape_md(t['p1_name'])}* offers:\n"
-        f"🔸 {escape_md(p1_off)} \\({p1_rdy}\\)\n\n"
-        f"👤 *{escape_md(t['p2_name'])}* offers:\n"
-        f"🔸 {escape_md(p2_off)} \\({p2_rdy}\\)\n"
-        "━━━━━━━━━━━━━━\n"
-    )
-    return text
-
-def render_trade_hub(bot, chat_id, trade_id):
+def render_trade_state(bot, chat_id, trade_id, page=0):
     t = active_trades.get(trade_id)
     if not t: return
-    
-    text = get_trade_bar(t)
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    
-    kb.row(
-        types.InlineKeyboardButton(f"🎒 {t['p1_name']}'s Box", callback_data=f"tr_box_{trade_id}_p1_0"),
-        types.InlineKeyboardButton(f"🎒 {t['p2_name']}'s Box", callback_data=f"tr_box_{trade_id}_p2_0")
-    )
-    kb.row(
-        types.InlineKeyboardButton(f"✅ {t['p1_name']} Confirm", callback_data=f"tr_rdy_{trade_id}_p1"),
-        types.InlineKeyboardButton(f"✅ {t['p2_name']} Confirm", callback_data=f"tr_rdy_{trade_id}_p2")
-    )
-    kb.row(types.InlineKeyboardButton("❌ Cancel Trade", callback_data=f"tr_cancel_{trade_id}"))
-    
-    try: bot.edit_message_text(text, chat_id, trade_id, reply_markup=kb, parse_mode="MarkdownV2")
-    except Exception: pass
+
+    status = t["status"]
+
+    if status == "p1_choosing":
+        render_trade_box(bot, chat_id, trade_id, "p1", page)
+
+    elif status == "p2_choosing":
+        render_trade_box(bot, chat_id, trade_id, "p2", page)
+
+    elif status == "confirming":
+        p1_rdy = "✅ Ready" if t['p1_confirm'] else "⏳ Pending"
+        p2_rdy = "✅ Ready" if t['p2_confirm'] else "⏳ Pending"
+
+        text = (
+            "🔄 *Finalize Trade*\n"
+            "━━━━━━━━━━━━━━\n"
+            f"👤 *{escape_md(t['p1_name'])}* offers:\n"
+            f"🔸 {escape_md(t['p1_offer'])} \\({p1_rdy}\\)\n\n"
+            f"👤 *{escape_md(t['p2_name'])}* offers:\n"
+            f"🔸 {escape_md(t['p2_offer'])} \\({p2_rdy}\\)\n"
+            "━━━━━━━━━━━━━━\n"
+            "_Both players must confirm to complete the trade\\._"
+        )
+
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.row(
+            types.InlineKeyboardButton(f"✅ {t['p1_name']} Confirm", callback_data=f"tr_rdy_{trade_id}_p1"),
+            types.InlineKeyboardButton(f"✅ {t['p2_name']} Confirm", callback_data=f"tr_rdy_{trade_id}_p2")
+        )
+        kb.row(types.InlineKeyboardButton("❌ Cancel Trade", callback_data=f"tr_cancel_{trade_id}"))
+
+        try: bot.edit_message_text(text, chat_id, trade_id, reply_markup=kb, parse_mode="MarkdownV2")
+        except Exception: pass
 
 def render_trade_box(bot, chat_id, trade_id, player_str, page):
     t = active_trades.get(trade_id)
@@ -48,18 +48,26 @@ def render_trade_box(bot, chat_id, trade_id, player_str, page):
     
     uid = t[player_str + "_id"]
     inv = db.list_user_pokemon_names(uid)
-    t[player_str + "_inv"] = inv  # Cache it for selection
+    t[player_str + "_inv"] = inv  
         
     if not inv:
-        return bot.answer_callback_query(trade_id, "You don't have any Pokémon to trade!", show_alert=True)
+        active_trades.pop(trade_id, None)
+        bot.edit_message_text(f"❌ *Trade Cancelled:* {escape_md(t[player_str + '_name'])} has no Pokémon to trade\\!", chat_id, trade_id, parse_mode="MarkdownV2")
+        return
         
     ITEMS_PER_PAGE = 10
     pages = [inv[i:i + ITEMS_PER_PAGE] for i in range(0, len(inv), ITEMS_PER_PAGE)]
     if page >= len(pages): page = len(pages) - 1
+    if page < 0: page = 0
     
     current_page = pages[page]
     
-    text = f"🎒 *{escape_md(t[player_str + '_name'])}'s PC Box* \\(Page {page+1}/{len(pages)}\\)\n\n"
+    text = (
+        "🔄 *Pokémon Trade Center*\n"
+        "━━━━━━━━━━━━━━\n"
+        f"It is *{escape_md(t[player_str + '_name'])}*'s turn to choose\\!\n\n"
+        f"🎒 *PC Box* \\(Page {page+1}/{len(pages)}\\)\n"
+    )
     for i, poke in enumerate(current_page):
         text += f"`[{i+1}]` {escape_md(poke)}\n"
         
@@ -72,11 +80,12 @@ def render_trade_box(bot, chat_id, trade_id, player_str, page):
     # Navigation buttons
     nav = []
     if page > 0: nav.append(types.InlineKeyboardButton("⏪ Prev", callback_data=f"tr_box_{trade_id}_{player_str}_{page-1}"))
-    nav.append(types.InlineKeyboardButton("🔙 Back", callback_data=f"tr_hub_{trade_id}"))
+    nav.append(types.InlineKeyboardButton("❌ Cancel", callback_data=f"tr_cancel_{trade_id}"))
     if page < len(pages) - 1: nav.append(types.InlineKeyboardButton("Next ⏩", callback_data=f"tr_box_{trade_id}_{player_str}_{page+1}"))
     kb.row(*nav)
     
-    bot.edit_message_text(text, chat_id, trade_id, reply_markup=kb, parse_mode="MarkdownV2")
+    try: bot.edit_message_text(text, chat_id, trade_id, reply_markup=kb, parse_mode="MarkdownV2")
+    except Exception: pass
 
 def handle_trade_command(bot, message):
     if not message.reply_to_message:
@@ -113,8 +122,10 @@ def handle_trade_callback(bot, call):
         if call.from_user.id != int(parts[3]): return bot.answer_callback_query(call.id, "❌ Not your trade request!", show_alert=True)
         trade_id = call.message.message_id
         if trade_id not in active_trades: return bot.answer_callback_query(call.id, "Trade expired.", show_alert=True)
-        active_trades[trade_id]["status"] = "active"
-        return render_trade_hub(bot, call.message.chat.id, trade_id)
+        
+        # Start Step 1: P1 Choosing
+        active_trades[trade_id]["status"] = "p1_choosing"
+        return render_trade_state(bot, call.message.chat.id, trade_id, 0)
         
     elif action == "dec":
         if call.from_user.id != int(parts[3]): return bot.answer_callback_query(call.id, "❌ Not your trade request!", show_alert=True)
@@ -122,36 +133,43 @@ def handle_trade_callback(bot, call):
         active_trades.pop(trade_id, None)
         return bot.edit_message_text("❌ *Trade declined\\.*", call.message.chat.id, trade_id, parse_mode="MarkdownV2")
         
-    # Hub & Selection Phase
+    # Active Phases
     trade_id = int(parts[2])
     t = active_trades.get(trade_id)
     if not t: return bot.answer_callback_query(call.id, "Trade session ended.", show_alert=True)
         
-    if action == "hub":
-        render_trade_hub(bot, call.message.chat.id, trade_id)
-        
-    elif action == "box":
+    if action == "box":
         player_str, page = parts[3], int(parts[4])
-        if call.from_user.id != t[player_str + "_id"]: return bot.answer_callback_query(call.id, "❌ Not your box!", show_alert=True)
-        render_trade_box(bot, call.message.chat.id, trade_id, player_str, page)
+        if call.from_user.id != t[player_str + "_id"]: return bot.answer_callback_query(call.id, "❌ Not your turn/box!", show_alert=True)
+        render_trade_state(bot, call.message.chat.id, trade_id, page)
         
     elif action == "pick":
         player_str, page, idx = parts[3], int(parts[4]), int(parts[5])
-        if call.from_user.id != t[player_str + "_id"]: return bot.answer_callback_query(call.id, "❌ Not your box!", show_alert=True)
+        
+        if call.from_user.id != t[player_str + "_id"]: 
+            return bot.answer_callback_query(call.id, "❌ It is not your turn!", show_alert=True)
             
         inv = t.get(player_str + "_inv", [])
         abs_idx = (page * 10) + idx
+        
         if abs_idx < len(inv):
             t[player_str + "_offer"] = inv[abs_idx]
-            # SECURE ANTI-SCAM: Un-ready both players if an offer changes!
-            t["p1_confirm"] = False 
-            t["p2_confirm"] = False
-            render_trade_hub(bot, call.message.chat.id, trade_id)
+            
+            # Step 2: Switch to P2 choosing
+            if player_str == "p1":
+                t["status"] = "p2_choosing"
+                render_trade_state(bot, call.message.chat.id, trade_id, 0)
+                
+            # Step 3: Move to Final Confirm Hub
+            elif player_str == "p2":
+                t["status"] = "confirming"
+                render_trade_state(bot, call.message.chat.id, trade_id)
             
     elif action == "rdy":
+        if t["status"] != "confirming": return
+        
         player_str = parts[3]
         if call.from_user.id != t[player_str + "_id"]: return bot.answer_callback_query(call.id, "❌ Not your button!", show_alert=True)
-        if not t[player_str + "_offer"]: return bot.answer_callback_query(call.id, "❌ Select a Pokémon first!", show_alert=True)
             
         t[player_str + "_confirm"] = True
         
@@ -173,7 +191,8 @@ def handle_trade_callback(bot, call):
                 active_trades.pop(trade_id, None)
                 bot.edit_message_text("❌ *Trade Failed:* Someone doesn't own the Pokémon they offered anymore\\!", call.message.chat.id, trade_id, parse_mode="MarkdownV2")
         else:
-            render_trade_hub(bot, call.message.chat.id, trade_id)
+            # Re-render hub to show "Ready" status
+            render_trade_state(bot, call.message.chat.id, trade_id)
             
     elif action == "cancel":
         if call.from_user.id not in [t["p1_id"], t["p2_id"]]: return bot.answer_callback_query(call.id, "❌ Not your trade!", show_alert=True)
