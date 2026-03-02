@@ -13,18 +13,27 @@ import random
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
 import pvp 
-import tasks # <-- New Tasks Engine
+import tasks # <-- Tasks Engine
 from api_utils import (
     escape_md, 
     fetch_random_pokemon_id_and_name_sync, 
     official_shiny_artwork_url, 
     get_species_catch_rate_sync,
     get_pokemon_stats_sync,
-    get_pokemon_id_sync
+    get_pokemon_id_sync,
+    REGION_DEX # <-- Added for Pokedex Region tracking
 )
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
 active_hunts = {}  
+
+# Emojis for the Pokedex UI
+TYPE_EMOJIS = {
+    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
+    'Ice': '🧊', 'Fighting': '🥊', 'Poison': '☣️', 'Ground': '⛰️', 'Flying': '🪽', 
+    'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
+    'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
+}
 
 # ================== GAME LOGIC ==================
 def auto_flee(message_id, chat_id, pokemon_name):
@@ -83,10 +92,10 @@ def process_catch(call, uid, pid, name):
             poke_name_capped = name.capitalize()
             db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
             
-            # 1. Update Daily Task Progress (Catching is the only tracker needed here now!)
+            # Update Daily Task Progress 
             tasks.check_and_update_catch(uid, poke_name_capped)
             
-            # 2. Add LIVE log to admin group!
+            # Add LIVE log to admin group
             if LOG_GROUP_ID:
                 try: 
                     u_name = call.from_user.first_name
@@ -98,6 +107,51 @@ def process_catch(call, uid, pid, name):
             bot.edit_message_caption(caption=f"💨 Oh no\\! Shiny *{escape_md(name.capitalize())}* broke free and fled\\!", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
     except Exception as e:
         logger.error(f"Catch error: {e}")
+
+# ================== POKEDEX HELPER ==================
+def get_dex_text(name, page="info"):
+    poke_id = get_pokemon_id_sync(name)
+    if not poke_id: return None
+    
+    types_list, stats = get_pokemon_stats_sync(name)
+    if not stats: return None
+    
+    if page == "info":
+        catch_rate = get_species_catch_rate_sync(poke_id)
+        if catch_rate <= 45: prob = "Very Low"
+        elif catch_rate <= 90: prob = "Low"
+        elif catch_rate <= 150: prob = "Medium"
+        else: prob = "High"
+        
+        region_found = "Unknown"
+        for r, (min_id, max_id) in REGION_DEX.items():
+            if min_id <= poke_id <= max_id:
+                region_found = r
+                break
+                
+        types_str = " / ".join([f"{t} {TYPE_EMOJIS.get(t, '')}" for t in types_list])
+        
+        text = (
+            f"📱 *Pokédex Data*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🔢 *Pokédex No\\.:* {poke_id}\n"
+            f"📛 *Name:* {escape_md(name.capitalize())}\n"
+            f"🧬 *Types:* \\[{escape_md(types_str)}\\]\n"
+            f"🎯 *Catch probability:* {prob}\n"
+            f"🌍 *Regions found:* {escape_md(region_found)}"
+        )
+        return text
+    else:
+        stats_str = "\n".join([f"🔸 *{escape_md(k)}:* {v}" for k, v in stats.items()])
+        total_stats = sum(stats.values())
+        text = (
+            f"📊 *Base Stats: {escape_md(name.capitalize())}*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"{stats_str}\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"📈 *Total:* {total_stats}"
+        )
+        return text
 
 # ================== USER COMMANDS ==================
 @bot.message_handler(commands=["start"])
@@ -112,12 +166,10 @@ def cmd_start(message):
         try: bot.send_message(LOG_GROUP_ID, escape_md(f"🔔 New Trainer: {message.from_user.first_name} (ID: {message.from_user.id}) started the bot."))
         except Exception: pass
 
-# --- DM KEYBOARD MENU ---
 @bot.message_handler(commands=["open"])
 def cmd_open(message):
     if message.chat.type != "private":
         return bot.reply_to(message, escape_md("⚠️ The /open command only works in private messages (DM)."))
-    
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
     kb.add(types.KeyboardButton("🔎 Scout"))
     bot.send_message(message.chat.id, escape_md("⌨️ Action menu opened! Use /close to hide it."), reply_markup=kb, parse_mode="MarkdownV2")
@@ -126,7 +178,6 @@ def cmd_open(message):
 def cmd_close(message):
     if message.chat.type != "private":
         return bot.reply_to(message, escape_md("⚠️ The /close command only works in private messages (DM)."))
-    
     remove_kb = types.ReplyKeyboardRemove()
     bot.send_message(message.chat.id, escape_md("⌨️ Action menu closed! Use /open to bring it back."), reply_markup=remove_kb, parse_mode="MarkdownV2")
 
@@ -134,7 +185,6 @@ def cmd_close(message):
 def text_scout(message):
     threading.Thread(target=start_scout, args=(message.chat.id, message.from_user.id, message.message_id)).start()
 
-# --- DAILY TASKS ---
 @bot.message_handler(commands=["task", "tasks"])
 def cmd_task(message):
     db.add_user_if_new(message.from_user.id)
@@ -159,14 +209,27 @@ def cmd_travel(message):
 def cmd_scout(message):
     threading.Thread(target=start_scout, args=(message.chat.id, message.from_user.id, message.message_id)).start()
 
-@bot.message_handler(commands=["pokedex"])
+@bot.message_handler(commands=["pokedex", "dex"])
 def cmd_pokedex(message):
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2: return bot.reply_to(message, escape_md("📝 Usage: /pokedex <pokemon_name>"))
-    types_list, stats = get_pokemon_stats_sync(parts[1].strip())
-    if not stats: return bot.reply_to(message, f"❌ Could not find data for *{escape_md(parts[1])}*\\.", parse_mode="MarkdownV2")
-    stats_str = "\n".join([f"🔸 *{escape_md(k)}:* {v}" for k, v in stats.items()])
-    bot.reply_to(message, f"📱 *Pokédex Data: {escape_md(parts[1].capitalize())}*\n🧬 *Type:* {escape_md(' | '.join(types_list))}\n\n📊 *Base Stats:*\n{stats_str}", parse_mode="MarkdownV2")
+    
+    name = parts[1].strip().lower()
+    poke_id = get_pokemon_id_sync(name)
+    if not poke_id: return bot.reply_to(message, f"❌ Could not find data for *{escape_md(parts[1])}*\\.", parse_mode="MarkdownV2")
+    
+    text = get_dex_text(name, "info")
+    if not text: return bot.reply_to(message, f"❌ Error formatting data for *{escape_md(parts[1])}*\\.", parse_mode="MarkdownV2")
+    
+    img_url = official_shiny_artwork_url(poke_id)
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"),
+        types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}")
+    )
+    
+    bot.send_photo(message.chat.id, img_url, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["mypokemon", "mypokemons"])
 def cmd_mypokemon(message):
@@ -445,6 +508,32 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
+        # Route Pokedex UI clicks
+        if call.data == "ignore":
+            return bot.answer_callback_query(call.id)
+            
+        elif call.data.startswith("dex_"):
+            parts = call.data.split("_", 2)
+            page = parts[1]
+            name = parts[2]
+            
+            text = get_dex_text(name, page)
+            if text:
+                kb = types.InlineKeyboardMarkup(row_width=2)
+                if page == "info":
+                    kb.add(
+                        types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"),
+                        types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}")
+                    )
+                else:
+                    kb.add(
+                        types.InlineKeyboardButton("ℹ️ Info", callback_data=f"dex_info_{name}"),
+                        types.InlineKeyboardButton("✅ 📊 Stats", callback_data="ignore")
+                    )
+                try: bot.edit_message_caption(caption=text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except: pass
+            return
+
         # Route PvP callbacks to the dedicated PvP file
         if call.data.startswith("pvp_"):
             return pvp.handle_pvp_callback(bot, call)
@@ -466,6 +555,8 @@ def cb_handler(call):
             uid, region = int(parts[1]), parts[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu.")
             db.update_user_region(uid, region)
+            
+            # Task Hook
             bot.edit_message_text(f"✈️ Travelled to *{escape_md(region)}*\\.", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
 
         elif call.data.startswith("catch_"):
@@ -509,7 +600,7 @@ def cb_handler(call):
                 types.InlineKeyboardButton("<<", callback_data=f"{action}_{uid}_0"),
                 types.InlineKeyboardButton("<", callback_data=f"{action}_{uid}_{max(0, page_idx - 1)}"),
                 types.InlineKeyboardButton(">", callback_data=f"{action}_{uid}_{min(len(pages) - 1, page_idx + 1)}"),
-                types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
+                types.KeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
             )
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
 
