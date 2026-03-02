@@ -13,7 +13,7 @@ import random
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
 import pvp 
-import tasks # <-- New Tasks Engine
+import tasks # <-- Tasks Engine
 from api_utils import (
     escape_md, 
     fetch_random_pokemon_id_and_name_sync, 
@@ -53,9 +53,14 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
         return bot.send_message(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_message_id=reply_to_id)
 
-        poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
+    # Assigns poke_id based on the user's specific region!
+    poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
+    
     if not poke_id:
         return bot.send_message(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_message_id=reply_to_id)
+
+    # 1. Update Daily Task Progress for Scouting
+    tasks.add_progress(user_id, "scout")
 
     img_url = official_shiny_artwork_url(base_id)
     caption = f"🌍 A wild ✨ *{escape_md(name)}* appeared in *{escape_md(region)}*\\!\n\n🎒 What will you do?"
@@ -83,10 +88,10 @@ def process_catch(call, uid, pid, name):
             poke_name_capped = name.capitalize()
             db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
             
-            # 1. Update Daily Task Progress
+            # Update Daily Task Progress
             tasks.check_and_update_catch(uid, poke_name_capped)
             
-            # 2. Add LIVE log to admin group!
+            # Add LIVE log to admin group
             if LOG_GROUP_ID:
                 try: 
                     u_name = call.from_user.first_name
@@ -195,6 +200,9 @@ def cmd_inspect(message):
     poke_id = get_pokemon_id_sync(name)
     if not poke_id:
         return bot.reply_to(message, escape_md("❌ Error finding Pokémon ID from API."))
+
+    # Task Progress for Inspecting
+    tasks.add_progress(message.from_user.id, "inspect")
 
     img_url = official_shiny_artwork_url(poke_id) 
     bot.send_photo(message.chat.id, img_url, caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
@@ -460,13 +468,16 @@ def cb_handler(call):
         # Route to Daily Tasks
         if call.data.startswith("task"):
             return tasks.handle_task_callback(bot, call)
-            
 
         if call.data.startswith("travel_"):
             parts = call.data.split("_", 2)
             uid, region = int(parts[1]), parts[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu.")
             db.update_user_region(uid, region)
+            
+            # Task Hook
+            tasks.add_progress(uid, "travel")
+            
             bot.edit_message_text(f"✈️ Travelled to *{escape_md(region)}*\\.", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
 
         elif call.data.startswith("catch_"):
@@ -475,11 +486,8 @@ def cb_handler(call):
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Hands off! This scout is not yours.")
             if call.message.message_id not in active_hunts: return bot.answer_callback_query(call.id, "This scout has expired.")
             
-            # Cancel timer and remove from active hunts immediately
             active_hunts[call.message.message_id]["timer"].cancel()
             active_hunts.pop(call.message.message_id, None)
-            
-            # Offload animation and math to a background thread
             threading.Thread(target=process_catch, args=(call, uid, pid, name)).start()
 
         elif call.data.startswith("run_"):
