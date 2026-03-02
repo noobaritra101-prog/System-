@@ -28,6 +28,18 @@ LEGENDARY_NAMES = {
     "Regieleki", "Regidrago", "Glastrier", "Spectrier", "Calyrex"
 }
 
+# --- REGION BOUNDARIES (Generations 1 to 8) ---
+REGION_DEX = {
+    "Kanto": (1, 151),
+    "Johto": (152, 251),
+    "Hoenn": (252, 386),
+    "Sinnoh": (387, 493),
+    "Unova": (494, 649),
+    "Kalos": (650, 721),
+    "Alola": (722, 809),
+    "Galar": (810, 898)
+}
+
 def build_cache():
     """Fetches all 898 Pokemon names/IDs once on startup so /scout is instant."""
     try:
@@ -51,13 +63,16 @@ def escape_md(text):
     special_chars = r'([_\*\[\]\(\)~`>\#\+\-=\|\{\}\.\!])'
     return re.sub(special_chars, r'\\\1', str(text))
 
-def fetch_random_pokemon_id_and_name_sync():
-    """Used for /scout. Ultra-fast lookup from memory cache."""
+def fetch_random_pokemon_id_and_name_sync(region="Kanto"):
+    """Used for /scout. Ultra-fast lookup restricted by Region!"""
+    # 5% chance to encounter a Mega Evolution (appears in all regions)
     if random.random() < 0.05:
         poke_id, name, base_id = random.choice(MEGA_POKEMON)
         return poke_id, name, base_id
     
-    poke_id = random.randint(1, 898)
+    # Get the ID boundaries for the user's current region
+    min_id, max_id = REGION_DEX.get(region, (1, 898))
+    poke_id = random.randint(min_id, max_id)
     
     if poke_id in pokemon_cache:
         return poke_id, pokemon_cache[poke_id], poke_id
@@ -196,7 +211,6 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                     
                     # Step 1: Force a STAB move for EACH of the Pokemon's types (Dual STAB feature)
                     for p_type in types_list:
-                        # Find strong moves matching this specific type
                         type_strong_moves = [m for m in strong_moves if m["type"] == p_type]
                         if type_strong_moves:
                             chosen_stab = random.choice(type_strong_moves)
@@ -204,7 +218,6 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                             strong_moves.remove(chosen_stab)
                             valid_moves.remove(chosen_stab)
                         else:
-                            # Fallback: Just grab the strongest real STAB move of this type
                             type_any_moves = [m for m in valid_moves if m["type"] == p_type]
                             if type_any_moves:
                                 chosen_stab = sorted(type_any_moves, key=lambda x: x["power"], reverse=True)[0]
@@ -220,7 +233,7 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                             final_moves.append(m)
                             if m in valid_moves: valid_moves.remove(m)
                     
-                    # Step 3: If they don't have enough 80+ power moves, sort the rest by HIGHEST power available
+                    # Step 3: If they don't have enough 80+ power moves, sort the rest by HIGHEST power
                     if len(final_moves) < 4:
                         valid_moves.sort(key=lambda x: x["power"], reverse=True)
                         for m in valid_moves:
@@ -228,13 +241,11 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                             if m["name"] not in [fm["name"] for fm in final_moves]:
                                 final_moves.append(m)
                     
-                    # Step 4: Extreme edge case safety net (should rarely happen)
+                    # Step 4: Extreme edge case safety net
                     while len(final_moves) < 4: 
                         final_moves.append({"name": "Struggle", "power": 50, "acc": 100, "type": "Normal", "status_type": None, "status_chance": 0})
                     
-                    # Shuffle moves so the STAB moves aren't always buttons #1 and #2
                     random.shuffle(final_moves)
-                    
                     hp = int(stats.get("hp", 50)) * 3 
                     
                     return {
@@ -267,8 +278,5 @@ async def generate_random_team(mode="Mix", size=6):
                 
     team = await asyncio.gather(*tasks)
     valid_team = [p for p in team if p is not None]
-    
-    # Shuffle the drafted team so the player doesn't know what order they come out
     random.shuffle(valid_team) 
-    
     return valid_team
