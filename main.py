@@ -53,7 +53,7 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
         return bot.send_message(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_message_id=reply_to_id)
 
-    poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync()
+        poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
     if not poke_id:
         return bot.send_message(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_message_id=reply_to_id)
 
