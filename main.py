@@ -13,7 +13,8 @@ import random
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
 import pvp 
-import tasks # <-- Tasks Engine
+import tasks 
+import trade # <-- New Trade Engine
 from api_utils import (
     escape_md, 
     fetch_random_pokemon_id_and_name_sync, 
@@ -21,7 +22,7 @@ from api_utils import (
     get_species_catch_rate_sync,
     get_pokemon_stats_sync,
     get_pokemon_id_sync,
-    REGION_DEX # <-- Added for Pokedex Region tracking
+    REGION_DEX
 )
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
@@ -154,13 +155,25 @@ def get_dex_text(name, page="info"):
         return text
 
 # ================== USER COMMANDS ==================
-@bot.message_handler(commands=["start"])
+@bot.message_handler(commands=["start", "help"])
 def cmd_start(message):
     is_new = db.add_user_if_new(message.from_user.id)
     if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Main Group ✨", url="https://t.me/sexagamechat"), types.InlineKeyboardButton("Owner 👑", url="https://t.me/Dark_monarchx"))
-    bot.reply_to(message, "🌟 *Welcome to the Pokémon Safari* 🌟\n\n🔎 /scout \\- Search for shiny Pokémon\n🌍 /travel \\- Change region\n📱 /pokedex `<name>` \\- Check stats\n🥊 /pvp \\- Reply to a user to battle\n🏆 /flex \\- View the Global Leaderboard\n📋 /task \\- Daily Rewards\n⌨️ /open \\- Open scout button \\(DM only\\)", reply_markup=kb, parse_mode="MarkdownV2")
+    
+    text = (
+        "🌟 *Welcome to the Pokémon Safari* 🌟\n\n"
+        "🔎 `/scout` \\- Search for shiny Pokémon\n"
+        "🌍 `/travel` \\- Change region\n"
+        "📱 `/pokedex <name>` \\- Check stats\n"
+        "🥊 `/pvp` \\- Reply to a user to battle\n"
+        "🔄 `/trade` \\- Reply to a user to trade\n"
+        "🏆 `/flex` \\- View the Global Leaderboard\n"
+        "📋 `/task` \\- Daily Rewards\n"
+        "⌨️ `/open` \\- Open scout button \\(DM only\\)"
+    )
+    bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
     
     if is_new and LOG_GROUP_ID is not None:
         try: bot.send_message(LOG_GROUP_ID, escape_md(f"🔔 New Trainer: {message.from_user.first_name} (ID: {message.from_user.id}) started the bot."))
@@ -274,6 +287,11 @@ def cmd_release(message):
 @bot.message_handler(commands=["pvp"])
 def cmd_pvp(message):
     pvp.handle_pvp_command(bot, message)
+
+@bot.message_handler(commands=["trade"])
+def cmd_trade(message):
+    db.add_user_if_new(message.from_user.id)
+    trade.handle_trade_command(bot, message)
 
 @bot.message_handler(commands=["getid"])
 def cmd_getid(message):
@@ -493,7 +511,8 @@ def cmd_clearhunts(message):
         if "timer" in hunt: hunt["timer"].cancel()
     active_hunts.clear()
     pvp.pvp_battles.clear()
-    bot.reply_to(message, escape_md("🧹 All active hunts and PvP battles cleared."))
+    trade.active_trades.clear()
+    bot.reply_to(message, escape_md("🧹 All active hunts, trades, and PvP battles cleared."))
 
 # ================== GROUP TRACKING ==================
 @bot.chat_member_handler()
@@ -508,6 +527,10 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
+        # Route Trade Engine callbacks
+        if call.data.startswith("tr_"):
+            return trade.handle_trade_callback(bot, call)
+            
         # Route Pokedex UI clicks
         if call.data == "ignore":
             return bot.answer_callback_query(call.id)
@@ -555,8 +578,6 @@ def cb_handler(call):
             uid, region = int(parts[1]), parts[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu.")
             db.update_user_region(uid, region)
-            
-            # Task Hook
             bot.edit_message_text(f"✈️ Travelled to *{escape_md(region)}*\\.", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
 
         elif call.data.startswith("catch_"):
@@ -600,7 +621,7 @@ def cb_handler(call):
                 types.InlineKeyboardButton("<<", callback_data=f"{action}_{uid}_0"),
                 types.InlineKeyboardButton("<", callback_data=f"{action}_{uid}_{max(0, page_idx - 1)}"),
                 types.InlineKeyboardButton(">", callback_data=f"{action}_{uid}_{min(len(pages) - 1, page_idx + 1)}"),
-                types.KeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
+                types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
             )
             bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
 
