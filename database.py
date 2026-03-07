@@ -19,7 +19,7 @@ db_thread = threading.Thread(target=_run_db_loop, args=(db_loop,), daemon=True)
 db_thread.start()
 
 def run_sync(coro):
-    """Bridge: Runs an async function synchronously safely from main.py or pvp.py."""
+    """Bridge: Runs an async function synchronously safely from main.py, pvp.py, or trade.py."""
     return asyncio.run_coroutine_threadsafe(coro, db_loop).result()
 
 # --- 5:30 AM IST RESET LOGIC ---
@@ -194,6 +194,23 @@ async def _restore_sqlite_data(users, pokemons, groups):
         if groups: await conn.executemany("INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING", groups)
         if pokemons: await conn.executemany("INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)", pokemons)
 
+# --- EXPORT SYSTEM ---
+async def _export_all_data():
+    async with pool.acquire() as conn:
+        users = [dict(r) for r in await conn.fetch("SELECT * FROM users")]
+        pokemons = [dict(r) for r in await conn.fetch("SELECT * FROM pokemons")]
+        groups = [dict(r) for r in await conn.fetch("SELECT * FROM groups")]
+        pvp = [dict(r) for r in await conn.fetch("SELECT * FROM pvp_settings")]
+        tasks = [dict(r) for r in await conn.fetch("SELECT * FROM user_tasks")]
+        
+        return {
+            "users": users,
+            "pokemons": pokemons,
+            "groups": groups,
+            "pvp_settings": pvp,
+            "user_tasks": tasks
+        }
+
 # ================== SYNC EXPOSED API ==================
 def init_db(): run_sync(_init_db())
 def add_group(group_id): run_sync(_add_group(group_id))
@@ -220,3 +237,6 @@ def get_daily_tasks(user_id): return run_sync(_get_daily_tasks(user_id))
 def update_task_catch(user_id, pokemon_name): run_sync(_update_task_catch(user_id, pokemon_name))
 def update_task_pvp(user_id): run_sync(_update_task_pvp(user_id))
 def claim_daily_reward(user_id): return run_sync(_claim_daily_reward(user_id))
+
+# --- EXPORT DATA EXPOSED ---
+def export_all_data(): return run_sync(_export_all_data())
