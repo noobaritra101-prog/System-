@@ -8,13 +8,14 @@ import threading
 import os
 import sqlite3
 import random
+import json # <-- Added for /export command
 
 # Import from our modular files
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
 import pvp 
 import tasks 
-import trade # <-- New Trade Engine
+import trade 
 from api_utils import (
     escape_md, 
     fetch_random_pokemon_id_and_name_sync, 
@@ -382,6 +383,35 @@ def handle_restore_file(message):
 def cmd_backup(message):
     if not is_owner(message): return
     bot.reply_to(message, escape_md("☁️ You are on a cloud database now! Backups are handled automatically via Supabase."))
+
+@bot.message_handler(commands=["export"])
+def cmd_export(message):
+    if not is_owner(message): return
+    
+    status_msg = bot.reply_to(message, escape_md("🔄 Extracting data from PostgreSQL..."))
+    
+    try:
+        # Fetch all data from the database
+        data = db.export_all_data()
+        
+        # Create a unique filename with a timestamp
+        file_name = f"database_backup_{int(time.time())}.json"
+        
+        # Write data to a JSON file (default=str handles dates perfectly)
+        with open(file_name, "w", encoding="utf-8") as f:
+            json.dump(data, f, default=str, indent=4)
+            
+        # Send the file to the owner
+        with open(file_name, "rb") as f:
+            bot.send_document(message.chat.id, f, caption=escape_md("📦 Here is your complete database backup!"))
+            
+        # Clean up the file from the server
+        os.remove(file_name)
+        bot.delete_message(message.chat.id, status_msg.message_id)
+        
+    except Exception as e:
+        logger.error(f"Export Error: {e}")
+        bot.edit_message_text(escape_md(f"❌ Export failed: {e}"), chat_id=message.chat.id, message_id=status_msg.message_id)
 
 @bot.message_handler(commands=["plist"])
 def cmd_plist(message):
