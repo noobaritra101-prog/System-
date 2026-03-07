@@ -8,7 +8,8 @@ import threading
 import os
 import sqlite3
 import random
-import json # <-- Added for /export command
+import json 
+import io # <-- Added for memory-based /export
 
 # Import from our modular files
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
@@ -388,30 +389,28 @@ def cmd_backup(message):
 def cmd_export(message):
     if not is_owner(message): return
     
-    status_msg = bot.reply_to(message, escape_md("🔄 Extracting data from PostgreSQL..."))
+    status_msg = bot.reply_to(message, escape_md("🔄 Extracting data from PostgreSQL..."), parse_mode="MarkdownV2")
     
     try:
-        # Fetch all data from the database
+        # 1. Fetch all data from the database
         data = db.export_all_data()
         
-        # Create a unique filename with a timestamp
-        file_name = f"database_backup_{int(time.time())}.json"
+        # 2. Convert directly to formatted JSON string
+        json_data = json.dumps(data, default=str, indent=4)
         
-        # Write data to a JSON file (default=str handles dates perfectly)
-        with open(file_name, "w", encoding="utf-8") as f:
-            json.dump(data, f, default=str, indent=4)
-            
-        # Send the file to the owner
-        with open(file_name, "rb") as f:
-            bot.send_document(message.chat.id, f, caption=escape_md("📦 Here is your complete database backup!"))
-            
-        # Clean up the file from the server
-        os.remove(file_name)
+        # 3. Create a fake "file" in the bot's RAM (Bypasses server write-permissions!)
+        backup_file = io.BytesIO(json_data.encode('utf-8'))
+        backup_file.name = f"database_backup_{int(time.time())}.json"
+        
+        # 4. Send the file to the owner
+        bot.send_document(message.chat.id, backup_file, caption=escape_md("📦 Here is your complete database backup!"), parse_mode="MarkdownV2")
+        
+        # 5. Clean up the extracting message
         bot.delete_message(message.chat.id, status_msg.message_id)
         
     except Exception as e:
         logger.error(f"Export Error: {e}")
-        bot.edit_message_text(escape_md(f"❌ Export failed: {e}"), chat_id=message.chat.id, message_id=status_msg.message_id)
+        bot.edit_message_text(escape_md(f"❌ Export failed: {e}"), chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["plist"])
 def cmd_plist(message):
