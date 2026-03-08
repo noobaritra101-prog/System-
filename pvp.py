@@ -100,6 +100,12 @@ def get_hp_bar(current, maximum, length=14):
     if current > 0 and filled == 0: filled = 1
     return escape_md("█" * filled + "░" * (length - filled))
 
+def format_types(types_str):
+    """Turns 'Psychic/Fairy' into 'Psychic 🔮 / Fairy 🧚‍♀️'"""
+    types_list = types_str.split('/')
+    formatted = [f"{t} {TYPE_EMOJIS.get(t, '')}".strip() for t in types_list]
+    return " / ".join(formatted)
+
 # --- UI RENDERERS ---
 def update_challenge_message(bot, chat_id, message_id, chal):
     p1_name = escape_md(chal["name"])
@@ -162,11 +168,11 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
     ui_text = (
         f"{log_content}\n\n\n"
-        f"*{escape_md(def_name)}*'s {escape_md(def_poke['name'])}{def_mega} \\[{escape_md(def_poke['types'].replace('/', ' / '))}\\]\n"
+        f"*{escape_md(def_name)}*'s {escape_md(def_poke['name'])}{def_mega} \\[{escape_md(format_types(def_poke['types']))}\\]\n"
         f"Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}\n"
         f"`{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}`{escape_md(def_status)}\n\n"
         f"Current turn: *{escape_md(active_name)}*\n"
-        f"*{escape_md(active_name)}*'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(active_poke['types'].replace('/', ' / '))}\\]\n"
+        f"*{escape_md(active_name)}*'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(format_types(active_poke['types']))}\\]\n"
         f"Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}\n"
         f"`{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}`{escape_md(act_status)}\n\n"
     )
@@ -175,24 +181,35 @@ def render_pvp_ui(bot, chat_id, battle_id):
     
     if b["state"] == "menu":
         moves_block = ""
+        move_buttons = []
+        
         for i, m in enumerate(active_poke["moves"]):
             m_name = escape_md(m['name'])
             m_type = m['type']
             m_emoji = TYPE_EMOJIS.get(m_type, '')
+            m_type_display = escape_md(f"{m_type} {m_emoji}".strip())
+            
             m_pow = m.get('power', 0)
             m_acc = m.get('acc', 100)
             
-            # Format: Move Name [Type<emoji>] -> Exact requested layout
-            moves_block += f" {m_name} \\[{escape_md(m_type)}{m_emoji}\\]\n Power: {m_pow}, Accuracy: {m_acc}\n"
+            moves_block += f" {m_name} \\[{m_type_display}\\]\n Power: {m_pow}, Accuracy: {m_acc}\n"
             
-            # Exact clean buttons without the numbers
-            kb.add(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
+            # Store the button directly with just its name
+            move_buttons.append(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
             
         ui_text += moves_block
+        
+        # --- EXPLICIT 2x2 GRID FOR MOVES ---
+        if len(move_buttons) == 4:
+            kb.row(move_buttons[0], move_buttons[1])
+            kb.row(move_buttons[2], move_buttons[3])
+        else:
+            for btn in move_buttons: kb.add(btn)
         
         if active_poke.get("can_mega") and not active_poke.get("is_mega"):
             kb.row(types.InlineKeyboardButton("💎 Mega Evolve", callback_data=f"pvp_mega_{battle_id}_{turn}"))
             
+        # Switch and Run exactly side by side
         kb.row(types.InlineKeyboardButton("🔄 Switch", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
                types.InlineKeyboardButton("🏃 Run", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
                
