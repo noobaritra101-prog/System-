@@ -49,12 +49,6 @@ TYPE_CHART = {
 }
 
 # --- HELPERS ---
-def format_types(types_str):
-    """Turns 'Psychic/Fairy' into 'Psychic 🔮 / Fairy 🧚‍♀️'"""
-    types_list = types_str.split('/')
-    formatted = [f"{t} {TYPE_EMOJIS.get(t, '')}".strip() for t in types_list]
-    return " / ".join(formatted)
-
 def get_faster_player(b):
     p1_spd = b["p1_team"][b["p1_idx"]]["spd"]
     p2_spd = b["p2_team"][b["p2_idx"]]["spd"]
@@ -160,21 +154,19 @@ def render_pvp_ui(bot, chat_id, battle_id):
     
     log_content = escape_md(b['log']) if b['log'] else "The battle begins\\!"
     
-    # Render Status
     act_status = f" \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
     def_status = f" \\[{STATUS_EMOJIS.get(def_poke['status'], '')}\\]" if def_poke.get('status') else ""
     
-    # Render Mega
     act_mega = " 💎" if active_poke.get("is_mega") else ""
     def_mega = " 💎" if def_poke.get("is_mega") else ""
 
     ui_text = (
         f"{log_content}\n\n\n"
-        f"*{escape_md(def_name)}*'s {escape_md(def_poke['name'])}{def_mega} \\[{escape_md(format_types(def_poke['types']))}\\]\n"
+        f"*{escape_md(def_name)}*'s {escape_md(def_poke['name'])}{def_mega} \\[{escape_md(def_poke['types'].replace('/', ' / '))}\\]\n"
         f"Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}\n"
         f"`{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}`{escape_md(def_status)}\n\n"
         f"Current turn: *{escape_md(active_name)}*\n"
-        f"*{escape_md(active_name)}*'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(format_types(active_poke['types']))}\\]\n"
+        f"*{escape_md(active_name)}*'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(active_poke['types'].replace('/', ' / '))}\\]\n"
         f"Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}\n"
         f"`{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}`{escape_md(act_status)}\n\n"
     )
@@ -187,17 +179,14 @@ def render_pvp_ui(bot, chat_id, battle_id):
             m_name = escape_md(m['name'])
             m_type = m['type']
             m_emoji = TYPE_EMOJIS.get(m_type, '')
-            m_type_display = escape_md(f"{m_type} {m_emoji}".strip())
-            
             m_pow = m.get('power', 0)
             m_acc = m.get('acc', 100)
             
-            moves_block += f" {m_name} \\[{m_type_display}\\]\n Power: {m_pow}, Accuracy: {m_acc}\n"
+            # Format: Move Name [Type<emoji>] -> Exact requested layout
+            moves_block += f" {m_name} \\[{escape_md(m_type)}{m_emoji}\\]\n Power: {m_pow}, Accuracy: {m_acc}\n"
             
-            icon = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"][i] if i < 4 else "🔹"
-            
-            # --- FIX: Changed .insert() to .add() ---
-            kb.add(types.InlineKeyboardButton(f"{icon} {m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
+            # Exact clean buttons without the numbers
+            kb.add(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
             
         ui_text += moves_block
         
