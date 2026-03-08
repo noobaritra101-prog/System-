@@ -7,7 +7,6 @@ from telebot import types
 import database as db
 from api_utils import escape_md, generate_random_team, get_pokemon_id_sync, official_shiny_artwork_url
 from config import logger, MEGA_POKEMON, LOG_GROUP_ID
-import tasks 
 
 pvp_battles = {}
 pending_challenges = {} 
@@ -104,6 +103,15 @@ def format_types(types_str):
     formatted = [f"{t} {TYPE_EMOJIS.get(t, '')}".strip() for t in types_list]
     return " / ".join(formatted)
 
+def get_form_icon(name, is_mega):
+    if not is_mega: return ""
+    if "Primal" in name: return " 🌋"
+    if "Zacian" in name: return " 🗡️"
+    if "Zamazenta" in name: return " 🛡️"
+    if "Shadow Rider" in name: return " 🐎"
+    if "Ash-Greninja" in name: return " 💧"
+    return " 💎"
+
 # --- UI RENDERERS ---
 def update_challenge_message(bot, chat_id, message_id, chal):
     p1_name = escape_md(chal["name"])
@@ -161,8 +169,8 @@ def render_pvp_ui(bot, chat_id, battle_id):
     act_status = f" \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
     def_status = f" \\[{STATUS_EMOJIS.get(def_poke['status'], '')}\\]" if def_poke.get('status') else ""
     
-    act_mega = " 💎" if active_poke.get("is_mega") else (" 🌋" if active_poke.get("is_primal") else "")
-    def_mega = " 💎" if def_poke.get("is_mega") else (" 🌋" if def_poke.get("is_primal") else "")
+    act_mega = get_form_icon(active_poke['name'], active_poke.get("is_mega"))
+    def_mega = get_form_icon(def_poke['name'], def_poke.get("is_mega"))
 
     ui_text = (
         f"{log_content}\n\n"
@@ -201,14 +209,25 @@ def render_pvp_ui(bot, chat_id, battle_id):
         else:
             for btn in move_buttons: kb.add(btn)
         
-        # Mega / Primal Button
-        if active_poke.get("can_mega") and not active_poke.get("is_mega") and not active_poke.get("is_primal"):
-            btn_lbl = "🌋 Primal Reversion" if active_poke["name"] in ["Groudon", "Kyogre"] else "💎 Mega Evolve"
+        if active_poke.get("can_mega") and not active_poke.get("is_mega"):
+            if active_poke["name"] in ["Groudon", "Kyogre"]: btn_lbl = "🌋 Primal Reversion"
+            elif active_poke["name"] == "Zacian": btn_lbl = "🗡️ Crowned Form"
+            elif active_poke["name"] == "Zamazenta": btn_lbl = "🛡️ Crowned Form"
+            elif active_poke["name"] == "Calyrex": btn_lbl = "🐎 Mount Spectrier"
+            elif active_poke["name"] == "Greninja": btn_lbl = "💧 Bond Phenomenon"
+            else: btn_lbl = "💎 Mega Evolve"
+            
             kb.row(types.InlineKeyboardButton(btn_lbl, callback_data=f"pvp_mega_{battle_id}_{turn}"))
             
         kb.row(types.InlineKeyboardButton("🔄 Switch", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
                types.InlineKeyboardButton("🏃 Run", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
                
+    elif b["state"] == "mega_xy_choice":
+        ui_text += f" Choose a Mega Evolution form:\n"
+        kb.row(types.InlineKeyboardButton("Mega Form X", callback_data=f"pvp_mega_{battle_id}_{turn}_X"),
+               types.InlineKeyboardButton("Mega Form Y", callback_data=f"pvp_mega_{battle_id}_{turn}_Y"))
+        kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
+
     elif b["state"] in ["switch_menu", "force_switch"]:
         ui_text += f" 🔄 Choose a Pokémon to switch into:\n" if b["state"] == "switch_menu" else f" 💀 Choose a replacement Pokémon:\n"
         btns = [types.InlineKeyboardButton(f"{'🔴' if p['hp'] > 0 else '💀'} {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
@@ -226,7 +245,10 @@ def render_pvp_ui(bot, chat_id, battle_id):
     try: 
         bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
     except Exception as e: 
-        if "429" in str(e):
+        err_msg = str(e).lower()
+        if "message is not modified" in err_msg:
+            pass # Safe to ignore! This just means the UI state didn't change
+        elif "429" in err_msg or "too many requests" in err_msg:
             time.sleep(1.5)
             try: bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
             except: pass
@@ -330,13 +352,12 @@ def handle_pvp_callback(bot, call):
                         n = random.choice(NATURES)
                         p["nature"] = n
                         
-                        # Set up Mega and Primal eligibility
+                        special_forms = ["Charizard", "Mewtwo", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex", "Greninja"]
                         is_mega_eligible = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON)
-                        if p["name"] in ["Groudon", "Kyogre"]: is_mega_eligible = True
+                        if p["name"] in special_forms: is_mega_eligible = True
                         
                         p["can_mega"] = is_mega_eligible
                         p["is_mega"] = False
-                        p["is_primal"] = False
                         
                         if n in ["Adamant", "Modest"]: 
                             p["atk"] = int(p["atk"] * 1.1); p["def"] = int(p["def"] * 0.9)
@@ -448,7 +469,7 @@ def handle_pvp_callback(bot, call):
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[turn+'_name'])}](tg://user?id={b[turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
-                        tasks.update_task_pvp(b[turn + "_id"])
+                        db.update_task_pvp(b[turn + "_id"]) # FIXED ERROR 1
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = defender
                 elif atk["hp"] <= 0:
@@ -459,7 +480,7 @@ def handle_pvp_callback(bot, call):
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
-                        tasks.update_task_pvp(b[defender + "_id"])
+                        db.update_task_pvp(b[defender + "_id"]) # FIXED ERROR 1
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = turn
                 else:
@@ -488,18 +509,45 @@ def handle_pvp_callback(bot, call):
                 
             elif action == "mega":
                 p = b[turn+"_team"][b[turn+"_idx"]]
-                if p.get("is_mega") or p.get("is_primal"): return bot.answer_callback_query(call.id, "Already transformed!")
+                if p.get("is_mega"): return bot.answer_callback_query(call.id, "Already transformed!")
                 
                 old_name = p['name']
-                is_primal = old_name in ["Groudon", "Kyogre"]
-                prefix = "Primal" if is_primal else "Mega"
-                new_name = f"{prefix} {old_name}"
-                action_verb = "underwent Primal Reversion" if is_primal else "Mega Evolved"
                 
-                # Apply Stat Buffs
+                if old_name in ["Charizard", "Mewtwo"] and len(parts) == 4:
+                    b["state"] = "mega_xy_choice"
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                    return
+                    
+                xy_choice = parts[4] if len(parts) == 5 else ""
+                
+                if old_name in ["Groudon", "Kyogre"]:
+                    new_name = f"Primal {old_name}"
+                    action_verb = "underwent Primal Reversion"
+                    search_name = f"{old_name.lower()}-primal"
+                    icon = "🌋"
+                elif old_name in ["Zacian", "Zamazenta"]:
+                    new_name = f"Crowned {old_name}"
+                    action_verb = "took on its Crowned Form"
+                    search_name = f"{old_name.lower()}-crowned"
+                    icon = "🗡️" if old_name == "Zacian" else "🛡️"
+                elif old_name == "Calyrex":
+                    new_name = "Shadow Rider Calyrex"
+                    action_verb = "mounted Spectrier"
+                    search_name = "calyrex-shadow"
+                    icon = "🐎"
+                elif old_name == "Greninja":
+                    new_name = "Ash-Greninja"
+                    action_verb = "activated the Bond Phenomenon"
+                    search_name = "greninja-ash"
+                    icon = "💧"
+                else:
+                    new_name = f"Mega {old_name}" + (f" {xy_choice}" if xy_choice else "")
+                    action_verb = "Mega Evolved"
+                    search_name = f"{old_name.lower()}-mega" + (f"-{xy_choice.lower()}" if xy_choice else "")
+                    icon = "💎"
+
                 p.update({
-                    "is_mega": not is_primal, 
-                    "is_primal": is_primal, 
+                    "is_mega": True, 
                     "atk": int(p["atk"]*1.3), 
                     "def": int(p["def"]*1.2), 
                     "spd": int(p["spd"]*1.2), 
@@ -507,27 +555,16 @@ def handle_pvp_callback(bot, call):
                 })
                 
                 b["log"] = f"{old_name} {action_verb} into {new_name}!"
+                b["state"] = "menu"
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
-                # Visual Cutscene Engine (Fires asynchronously)
                 def send_mega_image():
                     try:
-                        search_name = f"{old_name.lower()}-primal" if is_primal else f"{old_name.lower()}-mega"
                         poke_id = get_pokemon_id_sync(search_name)
-                        
-                        # Fix for Charizard X/Y standard
-                        if not poke_id and old_name.lower() in ["charizard", "mewtwo"]:
-                            poke_id = get_pokemon_id_sync(f"{old_name.lower()}-mega-x")
-                            
                         if poke_id:
                             img_url = official_shiny_artwork_url(poke_id)
-                            icon = "🌋" if is_primal else "💎"
                             caption = f"{icon} *{escape_md(old_name)}* \\.\\.\\. {escape_md(action_verb)} into *{escape_md(new_name)}*\\!"
-                            
-                            msg = bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
-                            # Deletes the cutscene photo after 8 seconds so it doesn't clutter the battle log
-                            time.sleep(8)
-                            bot.delete_message(call.message.chat.id, msg.message_id)
+                            bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
                     except Exception as e:
                         logger.error(f"Mega Image Error: {e}")
                 
