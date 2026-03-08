@@ -5,7 +5,7 @@ import threading
 import asyncio
 from telebot import types
 import database as db
-from api_utils import escape_md, generate_random_team
+from api_utils import escape_md, generate_random_team, get_pokemon_id_sync, official_shiny_artwork_url
 from config import logger, MEGA_POKEMON, LOG_GROUP_ID
 import tasks 
 
@@ -94,14 +94,12 @@ def is_in_pending_challenge(user_id):
     return False
 
 def get_hp_bar(current, maximum, length=14):
-    """Creates the ██████████░░░░ health bar"""
     if maximum <= 0: return "░" * length
     filled = int(round((current / maximum) * length))
     if current > 0 and filled == 0: filled = 1
     return escape_md("█" * filled + "░" * (length - filled))
 
 def format_types(types_str):
-    """Turns 'Psychic/Fairy' into 'Psychic 🔮 / Fairy 🧚‍♀️'"""
     types_list = types_str.split('/')
     formatted = [f"{t} {TYPE_EMOJIS.get(t, '')}".strip() for t in types_list]
     return " / ".join(formatted)
@@ -163,8 +161,8 @@ def render_pvp_ui(bot, chat_id, battle_id):
     act_status = f" \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
     def_status = f" \\[{STATUS_EMOJIS.get(def_poke['status'], '')}\\]" if def_poke.get('status') else ""
     
-    act_mega = " 💎" if active_poke.get("is_mega") else ""
-    def_mega = " 💎" if def_poke.get("is_mega") else ""
+    act_mega = " 💎" if active_poke.get("is_mega") else (" 🌋" if active_poke.get("is_primal") else "")
+    def_mega = " 💎" if def_poke.get("is_mega") else (" 🌋" if def_poke.get("is_primal") else "")
 
     ui_text = (
         f"{log_content}\n\n"
@@ -197,17 +195,17 @@ def render_pvp_ui(bot, chat_id, battle_id):
             
         ui_text += moves_block
         
-        # --- EXPLICIT 2x2 GRID FOR MOVES ---
         if len(move_buttons) == 4:
             kb.row(move_buttons[0], move_buttons[1])
             kb.row(move_buttons[2], move_buttons[3])
         else:
             for btn in move_buttons: kb.add(btn)
         
-        if active_poke.get("can_mega") and not active_poke.get("is_mega"):
-            kb.row(types.InlineKeyboardButton("💎 Mega Evolve", callback_data=f"pvp_mega_{battle_id}_{turn}"))
+        # Mega / Primal Button
+        if active_poke.get("can_mega") and not active_poke.get("is_mega") and not active_poke.get("is_primal"):
+            btn_lbl = "🌋 Primal Reversion" if active_poke["name"] in ["Groudon", "Kyogre"] else "💎 Mega Evolve"
+            kb.row(types.InlineKeyboardButton(btn_lbl, callback_data=f"pvp_mega_{battle_id}_{turn}"))
             
-        # Switch and Run exactly side by side
         kb.row(types.InlineKeyboardButton("🔄 Switch", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
                types.InlineKeyboardButton("🏃 Run", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
                
@@ -331,8 +329,14 @@ def handle_pvp_callback(bot, call):
                     for p in team: 
                         n = random.choice(NATURES)
                         p["nature"] = n
-                        p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON)
+                        
+                        # Set up Mega and Primal eligibility
+                        is_mega_eligible = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON)
+                        if p["name"] in ["Groudon", "Kyogre"]: is_mega_eligible = True
+                        
+                        p["can_mega"] = is_mega_eligible
                         p["is_mega"] = False
+                        p["is_primal"] = False
                         
                         if n in ["Adamant", "Modest"]: 
                             p["atk"] = int(p["atk"] * 1.1); p["def"] = int(p["def"] * 0.9)
@@ -484,10 +488,50 @@ def handle_pvp_callback(bot, call):
                 
             elif action == "mega":
                 p = b[turn+"_team"][b[turn+"_idx"]]
-                if p.get("is_mega"): return bot.answer_callback_query(call.id, "Already Mega Evolved!")
-                p.update({"is_mega": True, "atk": int(p["atk"]*1.3), "def": int(p["def"]*1.2), "spd": int(p["spd"]*1.2), "name": f"Mega {p['name']}"})
-                b["log"] = f"💎 {p['name']} Mega Evolved!"
+                if p.get("is_mega") or p.get("is_primal"): return bot.answer_callback_query(call.id, "Already transformed!")
+                
+                old_name = p['name']
+                is_primal = old_name in ["Groudon", "Kyogre"]
+                prefix = "Primal" if is_primal else "Mega"
+                new_name = f"{prefix} {old_name}"
+                action_verb = "underwent Primal Reversion" if is_primal else "Mega Evolved"
+                
+                # Apply Stat Buffs
+                p.update({
+                    "is_mega": not is_primal, 
+                    "is_primal": is_primal, 
+                    "atk": int(p["atk"]*1.3), 
+                    "def": int(p["def"]*1.2), 
+                    "spd": int(p["spd"]*1.2), 
+                    "name": new_name
+                })
+                
+                b["log"] = f"{old_name} {action_verb} into {new_name}!"
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
+                
+                # Visual Cutscene Engine (Fires asynchronously)
+                def send_mega_image():
+                    try:
+                        search_name = f"{old_name.lower()}-primal" if is_primal else f"{old_name.lower()}-mega"
+                        poke_id = get_pokemon_id_sync(search_name)
+                        
+                        # Fix for Charizard X/Y standard
+                        if not poke_id and old_name.lower() in ["charizard", "mewtwo"]:
+                            poke_id = get_pokemon_id_sync(f"{old_name.lower()}-mega-x")
+                            
+                        if poke_id:
+                            img_url = official_shiny_artwork_url(poke_id)
+                            icon = "🌋" if is_primal else "💎"
+                            caption = f"{icon} *{escape_md(old_name)}* \\.\\.\\. {escape_md(action_verb)} into *{escape_md(new_name)}*\\!"
+                            
+                            msg = bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
+                            # Deletes the cutscene photo after 8 seconds so it doesn't clutter the battle log
+                            time.sleep(8)
+                            bot.delete_message(call.message.chat.id, msg.message_id)
+                    except Exception as e:
+                        logger.error(f"Mega Image Error: {e}")
+                
+                threading.Thread(target=send_mega_image, daemon=True).start()
                 
             elif action == "confirmrun": 
                 b["state"] = "run_confirm"; render_pvp_ui(bot, call.message.chat.id, battle_id)
