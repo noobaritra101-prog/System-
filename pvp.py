@@ -15,7 +15,7 @@ pending_challenges = {}
 NATURES = ["Adamant", "Jolly", "Modest", "Timid", "Bold", "Calm", "Careful", "Impish"]
 
 TYPE_EMOJIS = {
-    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
+    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌱', 
     'Ice': '🧊', 'Fighting': '🥊', 'Poison': '☣️', 'Ground': '⛰️', 'Flying': '🪽', 
     'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
     'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
@@ -247,7 +247,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
     except Exception as e: 
         err_msg = str(e).lower()
         if "message is not modified" in err_msg:
-            pass # Safe to ignore! This just means the UI state didn't change
+            pass 
         elif "429" in err_msg or "too many requests" in err_msg:
             time.sleep(1.5)
             try: bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -351,6 +351,16 @@ def handle_pvp_callback(bot, call):
                     for p in team: 
                         n = random.choice(NATURES)
                         p["nature"] = n
+                        
+                        # Special Logic: Randomly Assign Arceus Types upon generation
+                        if p["name"] == "Arceus":
+                            arc_type = random.choice(list(TYPE_CHART.keys()))
+                            if arc_type != 'Normal':
+                                p["name"] = f"Arceus ({arc_type})"
+                                p["types"] = arc_type
+                                for m in p["moves"]:
+                                    if m["name"].lower() in ["judgment", "judgement"]:
+                                        m["type"] = arc_type
                         
                         special_forms = ["Charizard", "Mewtwo", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex", "Greninja"]
                         is_mega_eligible = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON)
@@ -469,7 +479,7 @@ def handle_pvp_callback(bot, call):
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[turn+'_name'])}](tg://user?id={b[turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
-                        db.update_task_pvp(b[turn + "_id"]) # FIXED ERROR 1
+                        db.update_task_pvp(b[turn + "_id"])
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = defender
                 elif atk["hp"] <= 0:
@@ -480,7 +490,7 @@ def handle_pvp_callback(bot, call):
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
-                        db.update_task_pvp(b[defender + "_id"]) # FIXED ERROR 1
+                        db.update_task_pvp(b[defender + "_id"])
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = turn
                 else:
@@ -518,7 +528,7 @@ def handle_pvp_callback(bot, call):
                     render_pvp_ui(bot, call.message.chat.id, battle_id)
                     return
                     
-                xy_choice = parts[4] if len(parts) == 5 else ""
+                xy_choice = parts[4] if len(parts) == 5 and old_name in ["Charizard", "Mewtwo"] else ""
                 
                 if old_name in ["Groudon", "Kyogre"]:
                     new_name = f"Primal {old_name}"
