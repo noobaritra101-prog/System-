@@ -187,7 +187,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
             m_name = escape_md(m['name'])
             m_type = m['type']
             m_emoji = TYPE_EMOJIS.get(m_type, '')
-            # Appends the emoji directly inside the brackets! Example: [Ground ⛰️]
             m_type_display = escape_md(f"{m_type} {m_emoji}".strip())
             
             m_pow = m.get('power', 0)
@@ -195,9 +194,10 @@ def render_pvp_ui(bot, chat_id, battle_id):
             
             moves_block += f" {m_name} \\[{m_type_display}\\]\n Power: {m_pow}, Accuracy: {m_acc}\n"
             
-            # Button still has the 1️⃣ 2️⃣ icons for easy clicking
             icon = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"][i] if i < 4 else "🔹"
-            kb.insert(types.InlineKeyboardButton(f"{icon} {m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
+            
+            # --- FIX: Changed .insert() to .add() ---
+            kb.add(types.InlineKeyboardButton(f"{icon} {m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
             
         ui_text += moves_block
         
