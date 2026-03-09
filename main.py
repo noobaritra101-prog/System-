@@ -208,6 +208,7 @@ def cmd_start(message):
         "🌍 `/travel` \\- Change region\n"
         "📱 `/pokedex <name>` \\- Check stats\n"
         "🥊 `/pvp` \\- Reply to a user to battle\n"
+        "🎒 `/myteam` \\- View your PvP team secrets \\(in Battle\\)\n"
         "🔄 `/trade` \\- Reply to a user to trade\n"
         "🏆 `/flex` \\- View the Global Leaderboard\n"
         "📋 `/task` \\- Daily Rewards\n"
@@ -330,6 +331,52 @@ def cmd_release(message):
 @bot.message_handler(commands=["pvp"])
 def cmd_pvp(message):
     pvp.handle_pvp_command(bot, message)
+
+# --- NEW: /myteam COMMAND ---
+@bot.message_handler(commands=["myteam"])
+def cmd_myteam(message):
+    user_id = message.from_user.id
+    
+    # Locate user in active battles
+    user_team = None
+    for b in pvp.pvp_battles.values():
+        if b["p1_id"] == user_id:
+            user_team = b["p1_team"]
+            break
+        elif b["p2_id"] == user_id:
+            user_team = b["p2_team"]
+            break
+            
+    if not user_team:
+        return safe_send(message.chat.id, escape_md("❌ You are not currently in an active PvP battle!"), reply_to_id=message.message_id)
+        
+    # Build secret team menu
+    team_text = "🎒 *Your Current PvP Team:*\n\n"
+    for i, p in enumerate(user_team):
+        types_str = p.get('types', 'Unknown')
+        emojis = " / ".join([f"{t.strip()} {TYPE_EMOJIS.get(t.strip(), '⚪')}" for t in types_str.split('/')])
+        
+        team_text += f"*{i+1}\\. {escape_md(p['name'])}* \\[{escape_md(emojis)}\\]\n"
+        team_text += f"🌿 *Nature:* {escape_md(p['nature'])}\n"
+        team_text += f"⚔️ *Moves:*\n"
+        for m in p['moves']:
+            m_emoji = TYPE_EMOJIS.get(m['type'], '')
+            m_pow = m.get('power', 0)
+            m_pow_str = str(m_pow) if m_pow > 0 else "\\-"
+            m_type_str = escape_md(f"{m['type']} {m_emoji}")
+            team_text += f"  \\- {escape_md(m['name'])} \\[{m_type_str}\\] \\(Pow: {m_pow_str}, Acc: {m.get('acc', 100)}\\)\n"
+        team_text += "\n"
+        
+    # Attempt to DM the user
+    try:
+        bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
+        if message.chat.type != "private":
+            safe_send(message.chat.id, escape_md("✅ I have secretly sent your team strategy to your DMs!"), reply_to_id=message.message_id)
+    except Exception as e:
+        if "Forbidden" in str(e) or "chat not found" in str(e).lower():
+            safe_send(message.chat.id, escape_md("⚠️ I cannot DM you! Please send me a private message first so I can share your team details privately."), reply_to_id=message.message_id)
+        else:
+            logger.error(f"Error sending /myteam DM: {e}")
 
 @bot.message_handler(commands=["trade"])
 def cmd_trade(message):
