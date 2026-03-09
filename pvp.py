@@ -11,11 +11,10 @@ from config import logger, MEGA_POKEMON, LOG_GROUP_ID
 pvp_battles = {}
 pending_challenges = {} 
 
-# --- BATTLE DATA ---
 NATURES = ["Adamant", "Jolly", "Modest", "Timid", "Bold", "Calm", "Careful", "Impish"]
 
 TYPE_EMOJIS = {
-    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌱', 
+    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
     'Ice': '🧊', 'Fighting': '🥊', 'Poison': '☣️', 'Ground': '⛰️', 'Flying': '🪽', 
     'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
     'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
@@ -47,7 +46,6 @@ TYPE_CHART = {
     'Fairy': {'Fire': 0.5, 'Fighting': 2.0, 'Poison': 0.5, 'Dragon': 2.0, 'Dark': 2.0, 'Steel': 0.5}
 }
 
-# --- HELPERS ---
 def get_faster_player(b):
     p1_spd = b["p1_team"][b["p1_idx"]]["spd"]
     p2_spd = b["p2_team"][b["p2_idx"]]["spd"]
@@ -110,9 +108,9 @@ def get_form_icon(name, is_mega):
     if "Zamazenta" in name: return " 🛡️"
     if "Shadow Rider" in name: return " 🐎"
     if "Ash-Greninja" in name: return " 💧"
+    if "Arceus (" in name: return " ✨"
     return " 💎"
 
-# --- UI RENDERERS ---
 def update_challenge_message(bot, chat_id, message_id, chal):
     p1_name = escape_md(chal["name"])
     p2_name = escape_md(chal["p2_name"])
@@ -131,7 +129,9 @@ def update_challenge_message(bot, chat_id, message_id, chal):
         types.InlineKeyboardButton("⚔️ Accept", callback_data=f"pvp_accept_{chal['p1_id']}_{chal['p2_id']}"),
         types.InlineKeyboardButton("❌ Decline", callback_data=f"pvp_decline_{chal['p1_id']}_{chal['p2_id']}")
     )
-    bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
+    try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
+    except Exception as e:
+        if "message is not modified" not in str(e).lower(): pass
 
 def render_settings_ui(bot, chat_id, message_id, chal):
     text = f"⚙️ *Battle Settings*\n\nConfigure the rules for this match:"
@@ -149,7 +149,9 @@ def render_settings_ui(bot, chat_id, message_id, chal):
     kb.row(types.InlineKeyboardButton(sw_lbl, callback_data=f"pvp_setsw_{chal['p1_id']}"))
     kb.row(types.InlineKeyboardButton("💾 Save as Default", callback_data=f"pvp_setsave_{chal['p1_id']}"))
     kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_setback_{chal['p1_id']}"))
-    bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
+    try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
+    except Exception as e:
+        if "message is not modified" not in str(e).lower(): pass
 
 def render_pvp_ui(bot, chat_id, battle_id):
     if battle_id not in pvp_battles: return
@@ -194,7 +196,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
             m_type = m['type']
             m_emoji = TYPE_EMOJIS.get(m_type, '')
             m_type_display = escape_md(f"{m_type} {m_emoji}".strip())
-            
             m_pow = m.get('power', 0)
             m_acc = m.get('acc', 100)
             
@@ -255,7 +256,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
         else:
             logger.error(f"UI Update error: {e}")
 
-# --- COMMAND HANDLER ---
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
     p1_id, p2_id = message.from_user.id, message.reply_to_message.from_user.id
@@ -289,7 +289,6 @@ def handle_pvp_command(bot, message):
     pending_challenges[sent.message_id] = chal
     update_challenge_message(bot, message.chat.id, sent.message_id, chal)
 
-# --- CALLBACK HANDLER ---
 def handle_pvp_callback(bot, call):
     try:
         parts = call.data.split("_")
@@ -352,7 +351,6 @@ def handle_pvp_callback(bot, call):
                         n = random.choice(NATURES)
                         p["nature"] = n
                         
-                        # Special Logic: Randomly Assign Arceus Types upon generation
                         if p["name"] == "Arceus":
                             arc_type = random.choice(list(TYPE_CHART.keys()))
                             if arc_type != 'Normal':
@@ -574,7 +572,13 @@ def handle_pvp_callback(bot, call):
                         if poke_id:
                             img_url = official_shiny_artwork_url(poke_id)
                             caption = f"{icon} *{escape_md(old_name)}* \\.\\.\\. {escape_md(action_verb)} into *{escape_md(new_name)}*\\!"
-                            bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
+                            try:
+                                bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
+                            except Exception as e:
+                                if "429" in str(e) or "Too Many Requests" in str(e):
+                                    time.sleep(3)
+                                    try: bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
+                                    except: pass
                     except Exception as e:
                         logger.error(f"Mega Image Error: {e}")
                 
