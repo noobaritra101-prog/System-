@@ -246,13 +246,13 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                         final_moves.append({"name": "Struggle", "power": 50, "acc": 100, "type": "Normal", "status_type": None, "status_chance": 0})
                     
                     random.shuffle(final_moves)
-                    hp = int(stats.get("hp", 50)) * 3 
                     
+                    # --- FIX: Passing PURE Base Stats directly from the PokeAPI ---
                     return {
                         "name": name,
                         "types": types_str,
-                        "hp": hp,
-                        "max_hp": hp,
+                        "hp": stats.get("hp", 50),
+                        "max_hp": stats.get("hp", 50),
                         "atk": stats.get("attack", 50),
                         "def": stats.get("defense", 50),
                         "spd": stats.get("speed", 50),
