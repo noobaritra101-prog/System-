@@ -396,43 +396,36 @@ def handle_pvp_callback(bot, call):
             def setup():
                 bot.edit_message_text("🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                 
-                # Fetch raw teams from the global cache
                 t1_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
                 t2_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
                 
                 t1_final, t2_final = [], []
                 
-                # Iterate and DEEPCOPY to prevent CACHE CORRUPTION
                 for draft_team, final_team in [(t1_draft, t1_final), (t2_draft, t2_final)]:
                     for p_cached in draft_team: 
                         p = copy.deepcopy(p_cached) 
                         
-                        # --- RETRIEVE TRUE BASE STAT ---
                         base_hp = p.get("max_hp", 50)
                         base_atk = p.get("atk", 50)
                         base_def = p.get("def", 50)
                         base_spd = p.get("spd", 50)
 
-                        # Save isolated base stats for Mega calculations
                         p["base_atk"] = base_atk
                         p["base_def"] = base_def
                         p["base_spd"] = base_spd
 
-                        # --- OFFICIAL LEVEL 100 MATH ---
                         if base_hp <= 1: p["max_hp"] = 1 # Shedinja exception
-                        else: p["max_hp"] = int((2 * base_hp) + 31 + 21 + 110) # +31 IVs, +21 EVs, +110 flat
+                        else: p["max_hp"] = int((2 * base_hp) + 31 + 21 + 110) 
                             
                         p["hp"] = p["max_hp"]
                         p["atk"] = int((2 * base_atk) + 31 + 21 + 5)
                         p["def"] = int((2 * base_def) + 31 + 21 + 5)
                         p["spd"] = int((2 * base_spd) + 31 + 21 + 5)
 
-                        # --- APPLY TRUE NATURE MULTIPLIERS ---
                         n = random.choice(NATURES)
                         p["nature"] = n
                         p = apply_nature(p, n)
                         
-                        # --- ARCEUS TYPE LOGIC ---
                         if p["name"] == "Arceus":
                             arc_type = random.choice(list(TYPE_CHART.keys()))
                             if arc_type != 'Normal':
@@ -542,7 +535,15 @@ def handle_pvp_callback(bot, call):
                             
                             if mv_pow > 0:
                                 def_stat = max(1, dfn["def"])
-                                dmg = max(1, int(((atk["atk"]/def_stat) * mv_pow * mult * stab * crit)/2))
+                                
+                                # --- OFFICIAL POKEMON DAMAGE FORMULA ---
+                                # Level = 100. (2 * 100 / 5) + 2 = 42
+                                base_damage = ((42 * mv_pow * (atk["atk"] / def_stat)) / 50) + 2
+                                
+                                # Official RNG damage roll (85% to 100%)
+                                rand_roll = random.uniform(0.85, 1.00)
+                                
+                                dmg = max(1, int(base_damage * mult * stab * crit * rand_roll))
                                 dfn["hp"] = max(0, dfn["hp"] - dmg)
                                 
                                 b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
@@ -658,21 +659,17 @@ def handle_pvp_callback(bot, call):
                     search_name = f"{old_name.lower()}-mega" + (f"-{xy_choice.lower()}" if xy_choice else "")
                     icon = "💎"
 
-                # Fetch isolated true base stat and add the specific Mega Buff to it
                 buffs = MEGA_STAT_BUFFS.get(new_name, {"atk": 30, "def": 30, "spd": 20})
                 new_base_atk = p["base_atk"] + buffs["atk"]
                 new_base_def = p["base_def"] + buffs["def"]
                 new_base_spd = p["base_spd"] + buffs["spd"]
                 
-                # Re-calculate Official Level 100 stats using the newly buffed base stats
                 p["atk"] = int((2 * new_base_atk) + 31 + 21 + 5)
                 p["def"] = int((2 * new_base_def) + 31 + 21 + 5)
                 p["spd"] = int((2 * new_base_spd) + 31 + 21 + 5)
                 
-                # Re-apply the Nature Multiplier
                 p = apply_nature(p, p["nature"])
 
-                # Finalize
                 p["is_mega"] = True
                 p["name"] = new_name
                 if new_name in FORM_TYPE_CHANGES: p["types"] = FORM_TYPE_CHANGES[new_name]
