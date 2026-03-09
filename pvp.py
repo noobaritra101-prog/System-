@@ -47,6 +47,7 @@ TYPE_CHART = {
     'Fairy': {'Fire': 0.5, 'Fighting': 2.0, 'Poison': 0.5, 'Dragon': 2.0, 'Dark': 2.0, 'Steel': 0.5}
 }
 
+# Determines new typings when a Pokemon changes forms
 FORM_TYPE_CHANGES = {
     "Mega Charizard X": "Fire/Dragon",
     "Mega Mewtwo X": "Psychic/Fighting",
@@ -62,6 +63,20 @@ FORM_TYPE_CHANGES = {
     "Crowned Zacian": "Fairy/Steel",
     "Crowned Zamazenta": "Fighting/Steel",
     "Shadow Rider Calyrex": "Psychic/Ghost"
+}
+
+# Accurate Base Stat adjustments for Mega Evolutions
+MEGA_STAT_BUFFS = {
+    "Mega Charizard X": {"atk": 46, "def": 33, "spd": 0},
+    "Mega Charizard Y": {"atk": 20, "def": 0, "spd": 0},
+    "Mega Mewtwo X": {"atk": 80, "def": 10, "spd": 0},
+    "Mega Mewtwo Y": {"atk": 40, "def": -20, "spd": 10},
+    "Primal Groudon": {"atk": 30, "def": 20, "spd": 0},
+    "Primal Kyogre": {"atk": 50, "def": 0, "spd": 0},
+    "Crowned Zacian": {"atk": 20, "def": 0, "spd": 10},
+    "Crowned Zamazenta": {"atk": -10, "def": 25, "spd": -10},
+    "Shadow Rider Calyrex": {"atk": 0, "def": 0, "spd": 70},
+    "Ash-Greninja": {"atk": 50, "def": 0, "spd": 10}
 }
 
 # --- HELPERS ---
@@ -135,6 +150,22 @@ def get_form_icon(name, is_mega):
     if "Ash-Greninja" in name: return " 💧"
     if "Arceus (" in name: return " ✨"
     return " 💎"
+
+# --- OFFICIAL STAT MATH ---
+def apply_nature(p, n):
+    """Applies official 10% Nature modifications to Level 100 stats"""
+    if n == "Adamant": p["atk"] = int(p["atk"] * 1.1)
+    elif n == "Jolly": p["spd"] = int(p["spd"] * 1.1)
+    elif n == "Modest": p["atk"] = int(p["atk"] * 0.9)
+    elif n == "Timid": 
+        p["spd"] = int(p["spd"] * 1.1)
+        p["atk"] = int(p["atk"] * 0.9)
+    elif n == "Bold":
+        p["def"] = int(p["def"] * 1.1)
+        p["atk"] = int(p["atk"] * 0.9)
+    elif n == "Calm": p["atk"] = int(p["atk"] * 0.9)
+    elif n == "Impish": p["def"] = int(p["def"] * 1.1)
+    return p
 
 # --- UI RENDERERS ---
 def update_challenge_message(bot, chat_id, message_id, chal):
@@ -376,36 +407,36 @@ def handle_pvp_callback(bot, call):
                 
                 for team in [t1, t2]:
                     for p in team: 
-                        # --- LEVEL 100 MATH (IV: 31, EV: 84) ---
-                        base_hp = p.get("max_hp", 100)
-                        if base_hp == 1:
+                        # --- RETRIEVE TRUE BASE STAT ---
+                        # Your api_utils multiplies by 3. We divide by 3 to safely get the original Base Stat.
+                        base_hp = round(p.get("max_hp", 300) / 3)
+                        base_atk = round(p.get("atk", 300) / 3)
+                        base_def = round(p.get("def", 300) / 3)
+                        base_spd = round(p.get("spd", 300) / 3)
+
+                        # Save base stats securely to calculate future Megas!
+                        p["base_atk"] = base_atk
+                        p["base_def"] = base_def
+                        p["base_spd"] = base_spd
+
+                        # --- OFFICIAL LEVEL 100 MATH ---
+                        # Formula assuming standard competitive spread: 31 IVs, 85 EVs (+21 Stat Bonus)
+                        if base_hp <= 1:
                             p["max_hp"] = 1 # Shedinja exception
                         else:
-                            p["max_hp"] = int(2 * base_hp + 31 + 21 + 110)
+                            p["max_hp"] = int((2 * base_hp) + 162)
                             
                         p["hp"] = p["max_hp"]
-                        p["atk"] = int(2 * p.get("atk", 100) + 31 + 21 + 5)
-                        p["def"] = int(2 * p.get("def", 100) + 31 + 21 + 5)
-                        p["spd"] = int(2 * p.get("spd", 100) + 31 + 21 + 5)
+                        p["atk"] = int((2 * base_atk) + 57)
+                        p["def"] = int((2 * base_def) + 57)
+                        p["spd"] = int((2 * base_spd) + 57)
 
                         # --- APPLY TRUE NATURE MULTIPLIERS ---
                         n = random.choice(NATURES)
                         p["nature"] = n
+                        p = apply_nature(p, n)
                         
-                        if n == "Adamant": p["atk"] = int(p["atk"] * 1.1)
-                        elif n == "Jolly": p["spd"] = int(p["spd"] * 1.1)
-                        elif n == "Modest": p["atk"] = int(p["atk"] * 0.9)
-                        elif n == "Timid": 
-                            p["spd"] = int(p["spd"] * 1.1)
-                            p["atk"] = int(p["atk"] * 0.9)
-                        elif n == "Bold":
-                            p["def"] = int(p["def"] * 1.1)
-                            p["atk"] = int(p["atk"] * 0.9)
-                        elif n == "Calm": p["atk"] = int(p["atk"] * 0.9)
-                        elif n == "Impish": p["def"] = int(p["def"] * 1.1)
-                        # Careful is neutral
-                        
-                        # --- ARCEUS TYPING ---
+                        # --- ARCEUS TYPE LOGIC ---
                         if p["name"] == "Arceus":
                             arc_type = random.choice(list(TYPE_CHART.keys()))
                             if arc_type != 'Normal':
@@ -634,16 +665,25 @@ def handle_pvp_callback(bot, call):
                     icon = "💎"
 
                 # --- ACCURATE MEGA STAT BUFFS ---
-                # Real Mega Evolutions add 100 Base Stats (+200 total to Level 100 stats). 
-                p.update({
-                    "is_mega": True, 
-                    "atk": p["atk"] + 60, 
-                    "def": p["def"] + 40, 
-                    "spd": p["spd"] + 40, 
-                    "name": new_name
-                })
+                buffs = MEGA_STAT_BUFFS.get(new_name, {"atk": 30, "def": 30, "spd": 20})
                 
-                # --- DYNAMIC TYPE SWAP (e.g. Charizard X to Fire/Dragon) ---
+                # Fetch original base stat and add the specific Mega Buff to it
+                new_base_atk = p["base_atk"] + buffs["atk"]
+                new_base_def = p["base_def"] + buffs["def"]
+                new_base_spd = p["base_spd"] + buffs["spd"]
+                
+                # Re-calculate Official Level 100 stats using the newly buffed base stats
+                p["atk"] = int((2 * new_base_atk) + 57)
+                p["def"] = int((2 * new_base_def) + 57)
+                p["spd"] = int((2 * new_base_spd) + 57)
+                
+                # Re-apply the Nature Multiplier to the newly calculated stats
+                p = apply_nature(p, p["nature"])
+
+                # Apply Type Change & Finalize Form
+                p["is_mega"] = True
+                p["name"] = new_name
+                
                 if new_name in FORM_TYPE_CHANGES:
                     p["types"] = FORM_TYPE_CHANGES[new_name]
                 
