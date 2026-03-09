@@ -405,22 +405,13 @@ def handle_pvp_callback(bot, call):
                 # Iterate and DEEPCOPY to prevent CACHE CORRUPTION
                 for draft_team, final_team in [(t1_draft, t1_final), (t2_draft, t2_final)]:
                     for p_cached in draft_team: 
-                        p = copy.deepcopy(p_cached) # ✨ Creates a totally separate clone just for this battle!
+                        p = copy.deepcopy(p_cached) 
                         
                         # --- RETRIEVE TRUE BASE STAT ---
-                        # Intelligently detect if api_utils has multiplied stats by 3
-                        raw_hp = p.get("max_hp", 300)
-                        raw_atk = p.get("atk", 300)
-                        raw_def = p.get("def", 300)
-                        raw_spd = p.get("spd", 300)
-                        
-                        if raw_hp + raw_atk + raw_def + raw_spd > 800:
-                            base_hp = round(raw_hp / 3)
-                            base_atk = round(raw_atk / 3)
-                            base_def = round(raw_def / 3)
-                            base_spd = round(raw_spd / 3)
-                        else:
-                            base_hp, base_atk, base_def, base_spd = raw_hp, raw_atk, raw_def, raw_spd
+                        base_hp = p.get("max_hp", 50)
+                        base_atk = p.get("atk", 50)
+                        base_def = p.get("def", 50)
+                        base_spd = p.get("spd", 50)
 
                         # Save isolated base stats for Mega calculations
                         p["base_atk"] = base_atk
@@ -674,9 +665,9 @@ def handle_pvp_callback(bot, call):
                 new_base_spd = p["base_spd"] + buffs["spd"]
                 
                 # Re-calculate Official Level 100 stats using the newly buffed base stats
-                p["atk"] = int((2 * new_base_atk) + 57)
-                p["def"] = int((2 * new_base_def) + 57)
-                p["spd"] = int((2 * new_base_spd) + 57)
+                p["atk"] = int((2 * new_base_atk) + 31 + 21 + 5)
+                p["def"] = int((2 * new_base_def) + 31 + 21 + 5)
+                p["spd"] = int((2 * new_base_spd) + 31 + 21 + 5)
                 
                 # Re-apply the Nature Multiplier
                 p = apply_nature(p, p["nature"])
