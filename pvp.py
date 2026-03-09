@@ -48,6 +48,13 @@ TYPE_CHART = {
 }
 
 # --- HELPERS ---
+def safe_answer(bot, call_id, text, show_alert=False):
+    """Safely answers callbacks to prevent query timeout crashes"""
+    try:
+        bot.answer_callback_query(call_id, text, show_alert=show_alert)
+    except Exception:
+        pass
+
 def get_faster_player(b):
     p1_spd = b["p1_team"][b["p1_idx"]]["spd"]
     p2_spd = b["p2_team"][b["p2_idx"]]["spd"]
@@ -254,7 +261,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
         elif "429" in err_msg or "too many requests" in err_msg:
             time.sleep(1.5)
             try: bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
-            except: logger.error("Double UI failure, UI is desynced. Waiting for user click to self-heal.")
+            except: pass
         else:
             logger.error(f"UI Update error: {e}")
 
@@ -321,7 +328,7 @@ def handle_pvp_callback(bot, call):
             chal = pending_challenges.get(call.message.message_id)
             if chal and call.from_user.id == chal["p1_id"]: 
                 db.update_pvp_settings(chal["p1_id"], chal["mode"], chal["size"], chal["can_switch"])
-                bot.answer_callback_query(call.id, "✅ Defaults Saved!", show_alert=True)
+                safe_answer(bot, call.id, "✅ Defaults Saved!", show_alert=True)
             return
         elif action == "setback":
             chal = pending_challenges.get(call.message.message_id)
@@ -331,15 +338,15 @@ def handle_pvp_callback(bot, call):
 
         if action == "accept":
             p1_id, p2_id = int(parts[2]), int(parts[3])
-            if call.from_user.id != p2_id: return bot.answer_callback_query(call.id, "❌ Not your challenge!", show_alert=True)
+            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "❌ Not your challenge!", show_alert=True)
             
             battle_id = call.message.message_id
             chal_data = pending_challenges.pop(battle_id, None)
             
-            if not chal_data: return bot.answer_callback_query(call.id, "This challenge has expired or was already answered!")
+            if not chal_data: return safe_answer(bot, call.id, "This challenge has expired or was already answered!")
             
             chal_data["timer"].cancel()
-            bot.answer_callback_query(call.id, "Preparing the arena...")
+            safe_answer(bot, call.id, "Preparing the arena...")
 
             if LOG_GROUP_ID:
                 try: bot.send_message(LOG_GROUP_ID, f"⚔️ *Battle Started:* [{escape_md(chal_data['name'])}](tg://user?id={chal_data['p1_id']}) 🆚 [{escape_md(chal_data['p2_name'])}](tg://user?id={chal_data['p2_id']})", parse_mode="MarkdownV2")
@@ -383,7 +390,8 @@ def handle_pvp_callback(bot, call):
                 pvp_battles[battle_id] = {
                     "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1, "p1_idx": 0,
                     "p2_id": chal_data["p2_id"], "p2_name": chal_data["p2_name"], "p2_team": t2, "p2_idx": 0,
-                    "can_switch": chal_data["can_switch"], "state": "menu", "log": "", "timer": None, "last_edit": 0
+                    "can_switch": chal_data["can_switch"], "state": "menu", "log": "", "timer": None,
+                    "last_edit": 0, "processing_start": 0
                 }
                 
                 pvp_battles[battle_id]["current_turn"] = get_faster_player(pvp_battles[battle_id])
@@ -396,7 +404,7 @@ def handle_pvp_callback(bot, call):
 
         elif action == "decline":
             p1_id, p2_id = int(parts[2]), int(parts[3])
-            if call.from_user.id != p2_id: return bot.answer_callback_query(call.id, "❌ Only the challenged player can decline.", show_alert=True)
+            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "❌ Only the challenged player can decline.", show_alert=True)
             chal_data = pending_challenges.pop(call.message.message_id, None)
             if chal_data: 
                 chal_data["timer"].cancel()
@@ -407,33 +415,39 @@ def handle_pvp_callback(bot, call):
         elif action in ["move", "dosw", "mega", "swmenu", "confirmrun", "run", "back", "viewteam"]:
             battle_id = int(parts[2])
             b = pvp_battles.get(battle_id)
-            if not b: return bot.answer_callback_query(call.id, "This battle has ended.")
+            if not b: return safe_answer(bot, call.id, "This battle has ended.")
             
             button_turn = parts[3] 
             actual_turn = b["current_turn"]
             
             # --- SELF-HEALING UI CHECK ---
-            # If the message on screen doesn't match the backend database state, force a refresh!
             if actual_turn in ["p1", "p2"] and button_turn != actual_turn:
-                render_pvp_ui(bot, call.message.chat.id, battle_id)
-                return bot.answer_callback_query(call.id, "🔄 Syncing battle state...", show_alert=False)
+                if call.from_user.id == b[actual_turn + "_id"]:
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                    return safe_answer(bot, call.id, "🔄 Syncing battle state...", show_alert=False)
 
             if call.from_user.id != b[button_turn + "_id"]: 
-                if action == "viewteam": return bot.answer_callback_query(call.id, "❌ Cannot view opponent's team!", show_alert=True)
-                return bot.answer_callback_query(call.id, "❌ Not your buttons!", show_alert=True)
-            
+                if action == "viewteam": return safe_answer(bot, call.id, "❌ Cannot view opponent's team!", show_alert=True)
+                return safe_answer(bot, call.id, "❌ Not your buttons!", show_alert=True)
+
+            # --- AUTO-RECOVERY FROM STUCK PROCESS ---
             if actual_turn == "processing": 
-                return bot.answer_callback_query(call.id, "⏳ Processing previous move...")
+                if time.time() - b.get("processing_start", 0) > 5:
+                    b["current_turn"] = button_turn
+                    actual_turn = button_turn
+                else:
+                    return safe_answer(bot, call.id, "⏳ Processing previous move...")
 
             # --- ANTI-SPAM ENGINE ---
             if action != "viewteam":
                 now = time.time()
                 if now - b.get("last_edit", 0) < 1.2:
-                    return bot.answer_callback_query(call.id, "⏳ Please don't click so fast!")
+                    return safe_answer(bot, call.id, "⏳ Please don't click so fast!")
                 b["last_edit"] = now
 
             if action == "move":
                 b["current_turn"] = "processing"
+                b["processing_start"] = time.time()
                 atk = b[actual_turn + "_team"][b[actual_turn + "_idx"]]
                 defender = "p2" if actual_turn == "p1" else "p1"
                 dfn = b[defender + "_team"][b[defender + "_idx"]]
@@ -453,7 +467,10 @@ def handle_pvp_callback(bot, call):
                     else: can_attack = False; b["log"] += f"🧊 {atk['name']} is frozen solid!\n"
 
                 if can_attack:
-                    if random.randint(1, 100) > mv["acc"]:
+                    mv_acc = mv.get("acc")
+                    if mv_acc is None: mv_acc = 100
+                    
+                    if random.randint(1, 100) > mv_acc:
                         b["log"] += f"{atk['name']}'s {mv['name']} missed!\n"
                     else:
                         mult = get_type_multiplier(mv["type"], dfn["types"])
@@ -462,13 +479,22 @@ def handle_pvp_callback(bot, call):
                         else:
                             stab = 1.5 if mv["type"] in atk["types"] else 1.0
                             crit = 1.5 if random.random() < 0.06 else 1.0
-                            dmg = max(1, int(((atk["atk"]/dfn["def"]) * mv["power"] * mult * stab * crit)/2))
-                            dfn["hp"] = max(0, dfn["hp"] - dmg)
                             
-                            b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
-                            if crit > 1: b["log"] += "A critical hit!\n"
-                            if mult > 1: b["log"] += "It's super effective!\n"
-                            elif mult < 1: b["log"] += "It's not very effective...\n"
+                            # Safely handle moves without Power stats to prevent crashes
+                            mv_pow = mv.get("power")
+                            if mv_pow is None: mv_pow = 0
+                            
+                            if mv_pow > 0:
+                                def_stat = max(1, dfn["def"])
+                                dmg = max(1, int(((atk["atk"]/def_stat) * mv_pow * mult * stab * crit)/2))
+                                dfn["hp"] = max(0, dfn["hp"] - dmg)
+                                
+                                b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
+                                if crit > 1: b["log"] += "A critical hit!\n"
+                                if mult > 1: b["log"] += "It's super effective!\n"
+                                elif mult < 1: b["log"] += "It's not very effective...\n"
+                            else:
+                                b["log"] += f"{atk['name']} used {mv['name']}!\n"
                             
                             if not dfn.get("status") and mv.get("status_chance", 0) > 0 and dfn["hp"] > 0:
                                 if random.randint(1, 100) <= mv["status_chance"]:
@@ -514,20 +540,19 @@ def handle_pvp_callback(bot, call):
             elif action == "dosw":
                 idx = int(parts[4])
                 p = b[actual_turn+"_team"][idx]
-                if p["hp"] <= 0: return bot.answer_callback_query(call.id, "Pokemon is fainted!")
-                if idx == b[actual_turn+"_idx"]: return bot.answer_callback_query(call.id, "Already out!")
+                if p["hp"] <= 0: return safe_answer(bot, call.id, "Pokemon is fainted!")
+                if idx == b[actual_turn+"_idx"]: return safe_answer(bot, call.id, "Already out!")
                 
                 b["current_turn"] = "processing"
+                b["processing_start"] = time.time()
                 old_name = b[actual_turn+"_team"][b[actual_turn+"_idx"]]["name"]
                 b[actual_turn+"_idx"] = idx
                 
                 if b["state"] == "switch_menu":
-                    # Regular switch consumes a turn!
                     b["log"] = f"🔄 {old_name} was withdrawn!\n{p['name']} took the field!"
                     b["state"] = "menu"
                     b["current_turn"] = "p2" if actual_turn == "p1" else "p1"
                 else:
-                    # Forced switch after a faint starts a new round
                     b["log"] += f"\n🔄 {p['name']} took the field!"
                     b["state"] = "menu"
                     b["current_turn"] = get_faster_player(b)
@@ -535,12 +560,12 @@ def handle_pvp_callback(bot, call):
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
 
             elif action == "swmenu":
-                if not b["can_switch"]: return bot.answer_callback_query(call.id, "🚫 Switching is disabled!", show_alert=True)
+                if not b["can_switch"]: return safe_answer(bot, call.id, "🚫 Switching is disabled!", show_alert=True)
                 b["state"] = "switch_menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
             elif action == "mega":
                 p = b[actual_turn+"_team"][b[actual_turn+"_idx"]]
-                if p.get("is_mega"): return bot.answer_callback_query(call.id, "Already transformed!")
+                if p.get("is_mega"): return safe_answer(bot, call.id, "Already transformed!")
                 
                 old_name = p['name']
                 
@@ -627,7 +652,7 @@ def handle_pvp_callback(bot, call):
                     status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
                     lines.append(f"{i+1}. {p['name']} [{emojis}] - {p['nature']} {status_icon}")
                 
-                bot.answer_callback_query(call.id, "\n".join(lines), show_alert=True)
+                safe_answer(bot, call.id, "\n".join(lines), show_alert=True)
 
     except Exception as e: 
         logger.error(f"PvP Callback Error: {e}")
