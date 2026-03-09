@@ -47,9 +47,25 @@ TYPE_CHART = {
     'Fairy': {'Fire': 0.5, 'Fighting': 2.0, 'Poison': 0.5, 'Dragon': 2.0, 'Dark': 2.0, 'Steel': 0.5}
 }
 
+FORM_TYPE_CHANGES = {
+    "Mega Charizard X": "Fire/Dragon",
+    "Mega Mewtwo X": "Psychic/Fighting",
+    "Mega Gyarados": "Water/Dark",
+    "Mega Sceptile": "Grass/Dragon",
+    "Mega Altaria": "Dragon/Fairy",
+    "Mega Ampharos": "Electric/Dragon",
+    "Mega Pinsir": "Bug/Flying",
+    "Mega Aggron": "Steel",
+    "Mega Lopunny": "Normal/Fighting",
+    "Mega Audino": "Normal/Fairy",
+    "Primal Groudon": "Ground/Fire",
+    "Crowned Zacian": "Fairy/Steel",
+    "Crowned Zamazenta": "Fighting/Steel",
+    "Shadow Rider Calyrex": "Psychic/Ghost"
+}
+
 # --- HELPERS ---
 def safe_answer(bot, call_id, text, show_alert=False):
-    """Safely answers callbacks to prevent query timeout crashes"""
     try:
         bot.answer_callback_query(call_id, text, show_alert=show_alert)
     except Exception:
@@ -117,6 +133,7 @@ def get_form_icon(name, is_mega):
     if "Zamazenta" in name: return " 🛡️"
     if "Shadow Rider" in name: return " 🐎"
     if "Ash-Greninja" in name: return " 💧"
+    if "Arceus (" in name: return " ✨"
     return " 💎"
 
 # --- UI RENDERERS ---
@@ -359,9 +376,36 @@ def handle_pvp_callback(bot, call):
                 
                 for team in [t1, t2]:
                     for p in team: 
+                        # --- LEVEL 100 MATH (IV: 31, EV: 84) ---
+                        base_hp = p.get("max_hp", 100)
+                        if base_hp == 1:
+                            p["max_hp"] = 1 # Shedinja exception
+                        else:
+                            p["max_hp"] = int(2 * base_hp + 31 + 21 + 110)
+                            
+                        p["hp"] = p["max_hp"]
+                        p["atk"] = int(2 * p.get("atk", 100) + 31 + 21 + 5)
+                        p["def"] = int(2 * p.get("def", 100) + 31 + 21 + 5)
+                        p["spd"] = int(2 * p.get("spd", 100) + 31 + 21 + 5)
+
+                        # --- APPLY TRUE NATURE MULTIPLIERS ---
                         n = random.choice(NATURES)
                         p["nature"] = n
                         
+                        if n == "Adamant": p["atk"] = int(p["atk"] * 1.1)
+                        elif n == "Jolly": p["spd"] = int(p["spd"] * 1.1)
+                        elif n == "Modest": p["atk"] = int(p["atk"] * 0.9)
+                        elif n == "Timid": 
+                            p["spd"] = int(p["spd"] * 1.1)
+                            p["atk"] = int(p["atk"] * 0.9)
+                        elif n == "Bold":
+                            p["def"] = int(p["def"] * 1.1)
+                            p["atk"] = int(p["atk"] * 0.9)
+                        elif n == "Calm": p["atk"] = int(p["atk"] * 0.9)
+                        elif n == "Impish": p["def"] = int(p["def"] * 1.1)
+                        # Careful is neutral
+                        
+                        # --- ARCEUS TYPING ---
                         if p["name"] == "Arceus":
                             arc_type = random.choice(list(TYPE_CHART.keys()))
                             if arc_type != 'Normal':
@@ -378,15 +422,6 @@ def handle_pvp_callback(bot, call):
                         p["can_mega"] = is_mega_eligible
                         p["is_mega"] = False
                         
-                        if n in ["Adamant", "Modest"]: 
-                            p["atk"] = int(p["atk"] * 1.1); p["def"] = int(p["def"] * 0.9)
-                        elif n in ["Bold", "Impish"]: 
-                            p["def"] = int(p["def"] * 1.1); p["atk"] = int(p["atk"] * 0.9)
-                        elif n in ["Calm", "Careful"]: 
-                            p["def"] = int(p["def"] * 1.1); p["spd"] = int(p["spd"] * 0.9)
-                        elif n in ["Jolly", "Timid"]: 
-                            p["spd"] = int(p["spd"] * 1.1); p["atk"] = int(p["atk"] * 0.9)
-                
                 pvp_battles[battle_id] = {
                     "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1, "p1_idx": 0,
                     "p2_id": chal_data["p2_id"], "p2_name": chal_data["p2_name"], "p2_team": t2, "p2_idx": 0,
@@ -420,7 +455,6 @@ def handle_pvp_callback(bot, call):
             button_turn = parts[3] 
             actual_turn = b["current_turn"]
             
-            # --- SELF-HEALING UI CHECK ---
             if actual_turn in ["p1", "p2"] and button_turn != actual_turn:
                 if call.from_user.id == b[actual_turn + "_id"]:
                     render_pvp_ui(bot, call.message.chat.id, battle_id)
@@ -430,7 +464,6 @@ def handle_pvp_callback(bot, call):
                 if action == "viewteam": return safe_answer(bot, call.id, "❌ Cannot view opponent's team!", show_alert=True)
                 return safe_answer(bot, call.id, "❌ Not your buttons!", show_alert=True)
 
-            # --- AUTO-RECOVERY FROM STUCK PROCESS ---
             if actual_turn == "processing": 
                 if time.time() - b.get("processing_start", 0) > 5:
                     b["current_turn"] = button_turn
@@ -438,7 +471,6 @@ def handle_pvp_callback(bot, call):
                 else:
                     return safe_answer(bot, call.id, "⏳ Processing previous move...")
 
-            # --- ANTI-SPAM ENGINE ---
             if action != "viewteam":
                 now = time.time()
                 if now - b.get("last_edit", 0) < 1.2:
@@ -480,7 +512,6 @@ def handle_pvp_callback(bot, call):
                             stab = 1.5 if mv["type"] in atk["types"] else 1.0
                             crit = 1.5 if random.random() < 0.06 else 1.0
                             
-                            # Safely handle moves without Power stats to prevent crashes
                             mv_pow = mv.get("power")
                             if mv_pow is None: mv_pow = 0
                             
@@ -602,13 +633,19 @@ def handle_pvp_callback(bot, call):
                     search_name = f"{old_name.lower()}-mega" + (f"-{xy_choice.lower()}" if xy_choice else "")
                     icon = "💎"
 
+                # --- ACCURATE MEGA STAT BUFFS ---
+                # Real Mega Evolutions add 100 Base Stats (+200 total to Level 100 stats). 
                 p.update({
                     "is_mega": True, 
-                    "atk": int(p["atk"]*1.3), 
-                    "def": int(p["def"]*1.2), 
-                    "spd": int(p["spd"]*1.2), 
+                    "atk": p["atk"] + 60, 
+                    "def": p["def"] + 40, 
+                    "spd": p["spd"] + 40, 
                     "name": new_name
                 })
+                
+                # --- DYNAMIC TYPE SWAP (e.g. Charizard X to Fire/Dragon) ---
+                if new_name in FORM_TYPE_CHANGES:
+                    p["types"] = FORM_TYPE_CHANGES[new_name]
                 
                 b["log"] = f"{old_name} {action_verb} into {new_name}!"
                 b["state"] = "menu"
