@@ -3,6 +3,7 @@ import time
 import random
 import threading
 import asyncio
+import copy
 from telebot import types
 import database as db
 from api_utils import escape_md, generate_random_team, get_pokemon_id_sync, official_shiny_artwork_url
@@ -47,7 +48,6 @@ TYPE_CHART = {
     'Fairy': {'Fire': 0.5, 'Fighting': 2.0, 'Poison': 0.5, 'Dragon': 2.0, 'Dark': 2.0, 'Steel': 0.5}
 }
 
-# Determines new typings when a Pokemon changes forms
 FORM_TYPE_CHANGES = {
     "Mega Charizard X": "Fire/Dragon",
     "Mega Mewtwo X": "Psychic/Fighting",
@@ -65,7 +65,6 @@ FORM_TYPE_CHANGES = {
     "Shadow Rider Calyrex": "Psychic/Ghost"
 }
 
-# Accurate Base Stat adjustments for Mega Evolutions
 MEGA_STAT_BUFFS = {
     "Mega Charizard X": {"atk": 46, "def": 33, "spd": 0},
     "Mega Charizard Y": {"atk": 20, "def": 0, "spd": 0},
@@ -81,10 +80,8 @@ MEGA_STAT_BUFFS = {
 
 # --- HELPERS ---
 def safe_answer(bot, call_id, text, show_alert=False):
-    try:
-        bot.answer_callback_query(call_id, text, show_alert=show_alert)
-    except Exception:
-        pass
+    try: bot.answer_callback_query(call_id, text, show_alert=show_alert)
+    except Exception: pass
 
 def get_faster_player(b):
     p1_spd = b["p1_team"][b["p1_idx"]]["spd"]
@@ -151,9 +148,7 @@ def get_form_icon(name, is_mega):
     if "Arceus (" in name: return " ✨"
     return " 💎"
 
-# --- OFFICIAL STAT MATH ---
 def apply_nature(p, n):
-    """Applies official 10% Nature modifications to Level 100 stats"""
     if n == "Adamant": p["atk"] = int(p["atk"] * 1.1)
     elif n == "Jolly": p["spd"] = int(p["spd"] * 1.1)
     elif n == "Modest": p["atk"] = int(p["atk"] * 0.9)
@@ -304,14 +299,12 @@ def render_pvp_ui(bot, chat_id, battle_id):
         bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
     except Exception as e: 
         err_msg = str(e).lower()
-        if "message is not modified" in err_msg:
-            pass 
+        if "message is not modified" in err_msg: pass 
         elif "429" in err_msg or "too many requests" in err_msg:
             time.sleep(1.5)
             try: bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
             except: pass
-        else:
-            logger.error(f"UI Update error: {e}")
+        else: logger.error(f"UI Update error: {e}")
 
 # --- COMMAND HANDLER ---
 def handle_pvp_command(bot, message):
@@ -402,34 +395,46 @@ def handle_pvp_callback(bot, call):
             
             def setup():
                 bot.edit_message_text("🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
-                t1 = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
-                t2 = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
                 
-                for team in [t1, t2]:
-                    for p in team: 
+                # Fetch raw teams from the global cache
+                t1_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
+                t2_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
+                
+                t1_final, t2_final = [], []
+                
+                # Iterate and DEEPCOPY to prevent CACHE CORRUPTION
+                for draft_team, final_team in [(t1_draft, t1_final), (t2_draft, t2_final)]:
+                    for p_cached in draft_team: 
+                        p = copy.deepcopy(p_cached) # ✨ Creates a totally separate clone just for this battle!
+                        
                         # --- RETRIEVE TRUE BASE STAT ---
-                        # Your api_utils multiplies by 3. We divide by 3 to safely get the original Base Stat.
-                        base_hp = round(p.get("max_hp", 300) / 3)
-                        base_atk = round(p.get("atk", 300) / 3)
-                        base_def = round(p.get("def", 300) / 3)
-                        base_spd = round(p.get("spd", 300) / 3)
+                        # Intelligently detect if api_utils has multiplied stats by 3
+                        raw_hp = p.get("max_hp", 300)
+                        raw_atk = p.get("atk", 300)
+                        raw_def = p.get("def", 300)
+                        raw_spd = p.get("spd", 300)
+                        
+                        if raw_hp + raw_atk + raw_def + raw_spd > 800:
+                            base_hp = round(raw_hp / 3)
+                            base_atk = round(raw_atk / 3)
+                            base_def = round(raw_def / 3)
+                            base_spd = round(raw_spd / 3)
+                        else:
+                            base_hp, base_atk, base_def, base_spd = raw_hp, raw_atk, raw_def, raw_spd
 
-                        # Save base stats securely to calculate future Megas!
+                        # Save isolated base stats for Mega calculations
                         p["base_atk"] = base_atk
                         p["base_def"] = base_def
                         p["base_spd"] = base_spd
 
                         # --- OFFICIAL LEVEL 100 MATH ---
-                        # Formula assuming standard competitive spread: 31 IVs, 85 EVs (+21 Stat Bonus)
-                        if base_hp <= 1:
-                            p["max_hp"] = 1 # Shedinja exception
-                        else:
-                            p["max_hp"] = int((2 * base_hp) + 162)
+                        if base_hp <= 1: p["max_hp"] = 1 # Shedinja exception
+                        else: p["max_hp"] = int((2 * base_hp) + 31 + 21 + 110) # +31 IVs, +21 EVs, +110 flat
                             
                         p["hp"] = p["max_hp"]
-                        p["atk"] = int((2 * base_atk) + 57)
-                        p["def"] = int((2 * base_def) + 57)
-                        p["spd"] = int((2 * base_spd) + 57)
+                        p["atk"] = int((2 * base_atk) + 31 + 21 + 5)
+                        p["def"] = int((2 * base_def) + 31 + 21 + 5)
+                        p["spd"] = int((2 * base_spd) + 31 + 21 + 5)
 
                         # --- APPLY TRUE NATURE MULTIPLIERS ---
                         n = random.choice(NATURES)
@@ -443,19 +448,17 @@ def handle_pvp_callback(bot, call):
                                 p["name"] = f"Arceus ({arc_type})"
                                 p["types"] = arc_type
                                 for m in p["moves"]:
-                                    if m["name"].lower() in ["judgment", "judgement"]:
-                                        m["type"] = arc_type
+                                    if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
                         
                         special_forms = ["Charizard", "Mewtwo", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex", "Greninja"]
-                        is_mega_eligible = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON)
-                        if p["name"] in special_forms: is_mega_eligible = True
-                        
-                        p["can_mega"] = is_mega_eligible
+                        p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
                         p["is_mega"] = False
                         
+                        final_team.append(p)
+                        
                 pvp_battles[battle_id] = {
-                    "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1, "p1_idx": 0,
-                    "p2_id": chal_data["p2_id"], "p2_name": chal_data["p2_name"], "p2_team": t2, "p2_idx": 0,
+                    "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1_final, "p1_idx": 0,
+                    "p2_id": chal_data["p2_id"], "p2_name": chal_data["p2_name"], "p2_team": t2_final, "p2_idx": 0,
                     "can_switch": chal_data["can_switch"], "state": "menu", "log": "", "timer": None,
                     "last_edit": 0, "processing_start": 0
                 }
@@ -664,10 +667,8 @@ def handle_pvp_callback(bot, call):
                     search_name = f"{old_name.lower()}-mega" + (f"-{xy_choice.lower()}" if xy_choice else "")
                     icon = "💎"
 
-                # --- ACCURATE MEGA STAT BUFFS ---
+                # Fetch isolated true base stat and add the specific Mega Buff to it
                 buffs = MEGA_STAT_BUFFS.get(new_name, {"atk": 30, "def": 30, "spd": 20})
-                
-                # Fetch original base stat and add the specific Mega Buff to it
                 new_base_atk = p["base_atk"] + buffs["atk"]
                 new_base_def = p["base_def"] + buffs["def"]
                 new_base_spd = p["base_spd"] + buffs["spd"]
@@ -677,15 +678,13 @@ def handle_pvp_callback(bot, call):
                 p["def"] = int((2 * new_base_def) + 57)
                 p["spd"] = int((2 * new_base_spd) + 57)
                 
-                # Re-apply the Nature Multiplier to the newly calculated stats
+                # Re-apply the Nature Multiplier
                 p = apply_nature(p, p["nature"])
 
-                # Apply Type Change & Finalize Form
+                # Finalize
                 p["is_mega"] = True
                 p["name"] = new_name
-                
-                if new_name in FORM_TYPE_CHANGES:
-                    p["types"] = FORM_TYPE_CHANGES[new_name]
+                if new_name in FORM_TYPE_CHANGES: p["types"] = FORM_TYPE_CHANGES[new_name]
                 
                 b["log"] = f"{old_name} {action_verb} into {new_name}!"
                 b["state"] = "menu"
@@ -697,15 +696,13 @@ def handle_pvp_callback(bot, call):
                         if poke_id:
                             img_url = official_shiny_artwork_url(poke_id)
                             caption = f"{icon} *{escape_md(old_name)}* \\.\\.\\. {escape_md(action_verb)} into *{escape_md(new_name)}*\\!"
-                            try:
-                                bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
+                            try: bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
                             except Exception as e:
                                 if "429" in str(e) or "Too Many Requests" in str(e):
                                     time.sleep(3)
                                     try: bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
                                     except: pass
-                    except Exception as e:
-                        logger.error(f"Mega Image Error: {e}")
+                    except Exception as e: logger.error(f"Mega Image Error: {e}")
                 
                 threading.Thread(target=send_mega_image, daemon=True).start()
                 
