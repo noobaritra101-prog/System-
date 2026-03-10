@@ -51,6 +51,13 @@ def init_db():
         )
     ''')
     
+    # Safely inject catch_date if migrating from an older database version
+    try:
+        cur.execute('ALTER TABLE pokemons ADD COLUMN catch_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP')
+        conn.commit()
+    except psycopg2.errors.DuplicateColumn:
+        conn.rollback()
+        
     # 3. Create Groups Table
     cur.execute('''
         CREATE TABLE IF NOT EXISTS groups (
@@ -145,7 +152,12 @@ def add_caught_pokemon(user_id, name, region):
 def list_user_pokemon_names(user_id):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT name FROM pokemons WHERE user_id = %s ORDER BY catch_date ASC", (user_id,))
+    # Failsafe in case catch_date is ever strictly missing during a race condition
+    try:
+        cur.execute("SELECT name FROM pokemons WHERE user_id = %s ORDER BY catch_date ASC", (user_id,))
+    except psycopg2.errors.UndefinedColumn:
+        conn.rollback()
+        cur.execute("SELECT name FROM pokemons WHERE user_id = %s", (user_id,))
     names = [row[0] for row in cur.fetchall()]
     cur.close()
     conn.close()
@@ -168,7 +180,7 @@ def delete_pokemon(user_id, name):
     conn.close()
     return deleted
 
-# ==================== PVP & BATTLE STATS (NEW!) ====================
+# ==================== PVP & BATTLE STATS ====================
 def get_battle_stats(user_id):
     """Fetches the Wins and Losses for the Trainer Card."""
     conn = get_conn()
@@ -300,12 +312,25 @@ def get_debug_stats():
 def export_all_data():
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT user_id, tries_left, region, last_reset::text, pvp_mode, pvp_size, pvp_switch, wins, losses FROM users")
-    users = [{"user_id": r[0], "tries_left": r[1], "region": r[2], "last_reset": r[3], "pvp_mode": r[4], "pvp_size": r[5], "pvp_switch": r[6], "wins": r[7], "losses": r[8]} for r in cur.fetchall()]
-    cur.execute("SELECT user_id, name, region, catch_date::text FROM pokemons")
-    pokemons = [{"user_id": r[0], "name": r[1], "region": r[2], "catch_date": r[3]} for r in cur.fetchall()]
+    try:
+        cur.execute("SELECT user_id, tries_left, region, last_reset::text, pvp_mode, pvp_size, pvp_switch, wins, losses FROM users")
+        users = [{"user_id": r[0], "tries_left": r[1], "region": r[2], "last_reset": r[3], "pvp_mode": r[4], "pvp_size": r[5], "pvp_switch": r[6], "wins": r[7], "losses": r[8]} for r in cur.fetchall()]
+    except Exception as e:
+        conn.rollback()
+        cur.execute("SELECT user_id, tries_left, region, last_reset::text FROM users")
+        users = [{"user_id": r[0], "tries_left": r[1], "region": r[2], "last_reset": r[3], "pvp_mode": "Mix", "pvp_size": 6, "pvp_switch": True, "wins": 0, "losses": 0} for r in cur.fetchall()]
+
+    try:
+        cur.execute("SELECT user_id, name, region, catch_date::text FROM pokemons")
+        pokemons = [{"user_id": r[0], "name": r[1], "region": r[2], "catch_date": r[3]} for r in cur.fetchall()]
+    except Exception as e:
+        conn.rollback()
+        cur.execute("SELECT user_id, name, region FROM pokemons")
+        pokemons = [{"user_id": r[0], "name": r[1], "region": r[2], "catch_date": str(datetime.datetime.now())} for r in cur.fetchall()]
+
     cur.execute("SELECT group_id FROM groups")
     groups = [{"group_id": r[0]} for r in cur.fetchall()]
+    
     cur.close()
     conn.close()
     return {"users": users, "pokemons": pokemons, "groups": groups}
