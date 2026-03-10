@@ -98,7 +98,7 @@ def start_scout(chat_id, user_id, reply_to_id=None):
         active_hunts[sent.message_id] = {"user_id": user_id, "start_time": time.time(), "timer": timer, "name": name}
     except Exception as e: 
         if "429" in str(e):
-            time.sleep(2) # Auto retry if hit by rate limit
+            time.sleep(2) 
             try:
                 sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
                 timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, chat_id, name))
@@ -109,7 +109,6 @@ def start_scout(chat_id, user_id, reply_to_id=None):
             logger.error(f"Failed to send scout photo: {e}")
 
 def process_catch(call, uid, pid, name):
-    """Background process for throwing a Pokeball without blocking the bot"""
     try:
         try:
             bot.edit_message_caption(caption="🔴 *Throwing Pokéball\\.\\.\\.*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
@@ -211,7 +210,6 @@ def cmd_start(message):
         "📱 `/pokedex <name>` \\- Check stats\n"
         "🥊 `/pvp` \\- Reply to a user to battle\n"
         "🎒 `/myteam` \\- View your PvP team secrets \\(in Battle\\)\n"
-        "🌍 `/world` \\- View global server statistics\n"
         "🔄 `/trade` \\- Reply to a user to trade\n"
         "🏆 `/flex` \\- View the Global Leaderboard\n"
         "📋 `/task` \\- Daily Rewards\n"
@@ -339,7 +337,6 @@ def cmd_pvp(message):
 def cmd_myteam(message):
     user_id = message.from_user.id
     
-    # Locate user in active battles
     user_team = None
     for b in pvp.pvp_battles.values():
         if b["p1_id"] == user_id:
@@ -352,7 +349,6 @@ def cmd_myteam(message):
     if not user_team:
         return safe_send(message.chat.id, escape_md("❌ You are not currently in an active PvP battle!"), reply_to_id=message.message_id)
         
-    # Build secret team menu
     team_text = "🎒 *Your Current PvP Team:*\n\n"
     for i, p in enumerate(user_team):
         types_str = p.get('types', 'Unknown')
@@ -369,7 +365,6 @@ def cmd_myteam(message):
             team_text += f"  \\- {escape_md(m['name'])} \\[{m_type_str}\\] \\(Pow: {m_pow_str}, Acc: {m.get('acc', 100)}\\)\n"
         team_text += "\n"
         
-    # Attempt to DM the user
     try:
         bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
         if message.chat.type != "private":
@@ -380,103 +375,6 @@ def cmd_myteam(message):
         else:
             logger.error(f"Error sending /myteam DM: {e}")
 
-@bot.message_handler(commands=["world", "worldstat"])
-def cmd_world(message):
-    args = message.text.split(maxsplit=1)
-    
-    loading_text = "🌍 *Gathering Global Safari Data\\.\\.\\.*\n_Scanning all trainers\\.\\.\\._"
-    status_msg = safe_send(message.chat.id, loading_text, reply_to_id=message.message_id)
-    if not status_msg: return
-
-    def calculate_world_data():
-        try:
-            users = db.get_all_users()
-            all_pokemon = []
-            owner_map = {} 
-            
-            for uid in users:
-                pokes = db.list_user_pokemon_names(uid)
-                for p in pokes:
-                    name_lower = p.lower()
-                    all_pokemon.append(name_lower)
-                    if name_lower not in owner_map:
-                        owner_map[name_lower] = []
-                    owner_map[name_lower].append(uid)
-                    
-            counts = Counter(all_pokemon)
-            
-            # ==========================================
-            # MODE 1: SPECIFIC POKEMON
-            # ==========================================
-            if len(args) > 1:
-                target = args[1].strip().lower()
-                target_display = args[1].strip().title()
-                
-                if target not in owner_map:
-                    text = f"❌ *No one in the world has caught a {escape_md(target_display)} yet\\!*"
-                    bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
-                    return
-                    
-                target_counts = Counter(owner_map[target])
-                top_owners = target_counts.most_common(10)
-                total_caught = sum(target_counts.values())
-                
-                text = f"📊 *Global Data: {escape_md(target_display)}*\n"
-                text += f"━━━━━━━━━━━━━━\n"
-                text += f"🌍 *Total in Existence:* {total_caught}\n\n"
-                text += f"👑 *Top Owners:*\n"
-                
-                for uid, count in top_owners:
-                    try:
-                        user_obj = bot.get_chat(uid)
-                        u_name = user_obj.first_name if user_obj.first_name else "Trainer"
-                    except:
-                        u_name = "Trainer"
-                    
-                    text += f"\\- [{escape_md(u_name)}](tg://user?id={uid}) — {count} caught\n"
-                    time.sleep(0.1) 
-                    
-                bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
-                return
-
-            # ==========================================
-            # MODE 2: GLOBAL WORLD STATS
-            # ==========================================
-            total_caught_overall = len(all_pokemon)
-            unique_caught = len(counts)
-            
-            all_possible = set(pokemon_name_to_id_cache.keys())
-            caught_set = set(counts.keys())
-            uncaught_set = all_possible - caught_set
-            
-            top_5 = counts.most_common(5)
-            
-            text = f"🌍 *Global Pokémon World Data*\n"
-            text += f"━━━━━━━━━━━━━━\n"
-            text += f"🏆 *Total Caught Worldwide:* {total_caught_overall}\n"
-            text += f"🧬 *Unique Species Discovered:* {unique_caught}/898\n"
-            text += f"👻 *Undiscovered Species:* {len(uncaught_set)}\n\n"
-            
-            text += f"📈 *Most Caught Pokémon:*\n"
-            for i, (name, count) in enumerate(top_5):
-                text += f"{i+1}\\. *{escape_md(name.title())}* \\({count} caught\\)\n"
-                
-            if uncaught_set:
-                sample_uncaught = random.sample(list(uncaught_set), min(5, len(uncaught_set)))
-                text += f"\n🔍 *Rumored Uncaught Pokémon:*\n"
-                for name in sample_uncaught:
-                    text += f"\\- ||{escape_md(name.title())}||\n"
-                    
-            text += f"\n_Tip: Use_ `/world pokemon_name` _to track a specific Pokémon\\!_"
-            
-            bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
-            
-        except Exception as e:
-            logger.error(f"World Stat Error: {e}")
-            try: bot.edit_message_text(escape_md("❌ An error occurred calculating world data."), message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
-            except: pass
-
-    threading.Thread(target=calculate_world_data, daemon=True).start()
 
 @bot.message_handler(commands=["trade"])
 def cmd_trade(message):
@@ -520,13 +418,175 @@ def cmd_flex(message):
     send_leaderboard(message.chat.id, message.from_user.id)
 
 
-# ================== ADMIN COMMANDS ==================
+# ================== ADMIN: EXECUTE FRAMEWORK ==================
 def is_owner(message):
     if message.from_user.id != OWNER_ID:
         safe_send(message.chat.id, escape_md("🚫 This command is for owner-sama only."), reply_to_id=message.message_id)
         return False
     return True
 
+# --- Execute Functions ---
+def execute_world_stats(message):
+    loading_text = "🌍 *Gathering Global Safari Data\\.\\.\\.*\n_Scanning all trainers\\.\\.\\._"
+    status_msg = safe_send(message.chat.id, loading_text, reply_to_id=message.message_id)
+    if not status_msg: return
+
+    try:
+        users = db.get_all_users()
+        all_pokemon = []
+        for uid in users:
+            pokes = db.list_user_pokemon_names(uid)
+            for p in pokes:
+                all_pokemon.append(p.lower())
+                
+        counts = Counter(all_pokemon)
+        total_caught_overall = len(all_pokemon)
+        unique_caught = len(counts)
+        
+        all_possible = set(pokemon_name_to_id_cache.keys())
+        caught_set = set(counts.keys())
+        uncaught_set = all_possible - caught_set
+        
+        top_5 = counts.most_common(5)
+        
+        text = f"🌍 *Global Pokémon World Data*\n"
+        text += f"━━━━━━━━━━━━━━\n"
+        text += f"🏆 *Total Caught Worldwide:* {total_caught_overall}\n"
+        text += f"🧬 *Unique Species Discovered:* {unique_caught}/898\n"
+        text += f"👻 *Undiscovered Species:* {len(uncaught_set)}\n\n"
+        
+        text += f"📈 *Most Caught Pokémon:*\n"
+        for i, (name, count) in enumerate(top_5):
+            text += f"{i+1}\\. *{escape_md(name.title())}* \\({count} caught\\)\n"
+            
+        if uncaught_set:
+            sample_uncaught = random.sample(list(uncaught_set), min(5, len(uncaught_set)))
+            text += f"\n🔍 *Rumored Uncaught Pokémon:*\n"
+            for name in sample_uncaught:
+                text += f"\\- ||{escape_md(name.title())}||\n"
+                
+        text += f"\n_Tip: Use_ `/execute world find <pokemon>` _to track a specific Pokémon\\!_"
+        bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+        
+    except Exception as e:
+        logger.error(f"Execute World Stat Error: {e}")
+        try: bot.edit_message_text(escape_md("❌ An error occurred calculating world data."), message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+        except: pass
+
+def execute_world_find(message, target_pokemon):
+    loading_text = f"🌍 *Tracking {escape_md(target_pokemon.title())} globally\\.\\.\\.*"
+    status_msg = safe_send(message.chat.id, loading_text, reply_to_id=message.message_id)
+    if not status_msg: return
+
+    try:
+        users = db.get_all_users()
+        owner_map = {} 
+        target = target_pokemon.lower()
+        target_display = target_pokemon.title()
+        
+        for uid in users:
+            pokes = db.list_user_pokemon_names(uid)
+            for p in pokes:
+                if p.lower() == target:
+                    if target not in owner_map: owner_map[target] = []
+                    owner_map[target].append(uid)
+                    
+        if target not in owner_map:
+            text = f"❌ *No one in the world has caught a {escape_md(target_display)} yet\\!*"
+            bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+            return
+            
+        target_counts = Counter(owner_map[target])
+        top_owners = target_counts.most_common(10)
+        total_caught = sum(target_counts.values())
+        
+        text = f"📊 *Global Data: {escape_md(target_display)}*\n"
+        text += f"━━━━━━━━━━━━━━\n"
+        text += f"🌍 *Total in Existence:* {total_caught}\n\n"
+        text += f"👑 *Top Owners:*\n"
+        
+        displayed_count = 0
+        for uid, count in top_owners:
+            displayed_count += count
+            try:
+                user_obj = bot.get_chat(uid)
+                u_name = user_obj.first_name if user_obj.first_name else "Trainer"
+            except:
+                u_name = "Trainer"
+            
+            text += f"\\- [{escape_md(u_name)}](tg://user?id={uid}) — {count} caught\n"
+            time.sleep(0.1) 
+            
+        # FIX: Dynamically show left over pokemon
+        leftover = total_caught - displayed_count
+        if leftover > 0:
+            text += f"\n_\\.\\.\\.and {leftover} more owned by other trainers\\._\n"
+            
+        bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Execute World Find Error: {e}")
+        try: bot.edit_message_text(escape_md("❌ An error occurred tracking this Pokémon."), message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+        except: pass
+
+# --- The Registry ---
+EXECUTE_MODULES = {
+    "world": {
+        "description": "Global database and entity tracking.",
+        "actions": {
+            "stats": {"args": "", "desc": "View total caught, unique species, and top 5 most caught."},
+            "find": {"args": "<pokemon>", "desc": "Locate all owners of a specific Pokémon."}
+        }
+    },
+    "system": {
+        "description": "Core bot system commands.",
+        "actions": {
+            "ping": {"args": "", "desc": "Check if the execute framework router is online."}
+        }
+    }
+}
+
+@bot.message_handler(commands=["modules"])
+def cmd_modules(message):
+    if not is_owner(message): return
+    text = "🛠 *System Modules & Actions*\n\n"
+    for mod, mdata in EXECUTE_MODULES.items():
+        text += f"📦 *Module:* `{mod}`\n_{escape_md(mdata['description'])}_\n"
+        for act, adata in mdata["actions"].items():
+            args_str = f" {adata['args']}" if adata["args"] else ""
+            text += f"  \\- `/execute {mod} {act}{escape_md(args_str)}`\n"
+            text += f"    └ {escape_md(adata['desc'])}\n"
+        text += "\n"
+    safe_send(message.chat.id, text, reply_to_id=message.message_id)
+
+@bot.message_handler(commands=["execute", "exec"])
+def cmd_execute(message):
+    if not is_owner(message): return
+    parts = message.text.split(maxsplit=3)
+    if len(parts) < 3:
+        return safe_send(message.chat.id, escape_md("⚠️ Format: /execute <module> <action> [arguments]\nUse /modules to view the directory."), reply_to_id=message.message_id)
+    
+    module = parts[1].lower()
+    action = parts[2].lower()
+    arguments = parts[3] if len(parts) > 3 else ""
+
+    if module not in EXECUTE_MODULES or action not in EXECUTE_MODULES[module]["actions"]:
+        return safe_send(message.chat.id, escape_md(f"❌ Invalid module or action. Use /modules to check valid combinations."), reply_to_id=message.message_id)
+
+    # Router Logic
+    if module == "world":
+        if action == "stats":
+            threading.Thread(target=execute_world_stats, args=(message,), daemon=True).start()
+        elif action == "find":
+            if not arguments:
+                return safe_send(message.chat.id, escape_md("⚠️ Please provide a Pokémon name. Example: /execute world find Pikachu"), reply_to_id=message.message_id)
+            threading.Thread(target=execute_world_find, args=(message, arguments), daemon=True).start()
+            
+    elif module == "system":
+        if action == "ping":
+            safe_send(message.chat.id, escape_md("🏓 Execute framework router is operational!"), reply_to_id=message.message_id)
+
+
+# ================== OLD ADMIN COMMANDS ==================
 @bot.message_handler(commands=["restore"])
 def cmd_restore(message):
     if not is_owner(message): return
