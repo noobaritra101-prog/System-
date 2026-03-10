@@ -10,6 +10,7 @@ import sqlite3
 import random
 import json 
 import io 
+import re # <-- Added to clean usernames!
 from collections import Counter
 from PIL import Image, ImageDraw, ImageFont
 
@@ -273,7 +274,11 @@ def cmd_profile(message):
     except Exception:
         wins, losses = 0, 0 
     total_battles = wins + losses
-    user_name = message.from_user.first_name
+    
+    # --- FIX: Clean the name so emojis/special fonts don't turn into square boxes! ---
+    raw_name = message.from_user.first_name
+    clean_name = re.sub(r'[^\w\s-]', '', raw_name).strip()
+    if not clean_name: clean_name = "Trainer"
 
     def generate_and_send():
         try:
@@ -281,37 +286,34 @@ def cmd_profile(message):
             draw = ImageDraw.Draw(img)
             img_w, img_h = img.size
             
-            # --- FONT FIX: Try to load bold, fallback to normal, error if missing ---
             try:
-                # We use a larger multiplier (0.045) and a bold font for better readability
-                font_large = ImageFont.truetype("arialbd.ttf", int(img_h * 0.045))
-                font_medium = ImageFont.truetype("arialbd.ttf", int(img_h * 0.035))
+                # Slightly smaller font so long names don't spill over
+                font_large = ImageFont.truetype("arialbd.ttf", int(img_h * 0.040))
+                font_medium = ImageFont.truetype("arialbd.ttf", int(img_h * 0.030))
             except IOError:
                 try:
-                    font_large = ImageFont.truetype("arial.ttf", int(img_h * 0.045))
-                    font_medium = ImageFont.truetype("arial.ttf", int(img_h * 0.035))
+                    font_large = ImageFont.truetype("arial.ttf", int(img_h * 0.040))
+                    font_medium = ImageFont.truetype("arial.ttf", int(img_h * 0.030))
                 except IOError:
                     logger.error("⚠️ FONT FILE MISSING! Upload arialbd.ttf or arial.ttf to your folder!")
                     font_large = font_medium = ImageFont.load_default()
 
-            # --- TEXT PLACEMENT (Profile Picture code removed) ---
+            # --- ALIGNMENT FIX: New precise X, Y coordinates ---
             
-            # Top Right Box (Name, ID, Region, Total)
-            # We push X to 0.58 so it clears the labels on the left
-            draw.text((img_w * 0.58, img_h * 0.28), str(user_name), fill="black", font=font_large)
-            draw.text((img_w * 0.58, img_h * 0.37), str(user_id), fill="black", font=font_medium)
-            draw.text((img_w * 0.58, img_h * 0.44), str(region), fill="black", font=font_medium)
-            draw.text((img_w * 0.58, img_h * 0.52), str(count), fill="black", font=font_medium)
+            # Top Right Box
+            draw.text((img_w * 0.56, img_h * 0.31), str(clean_name), fill="black", font=font_large) # Under "Name:"
+            draw.text((img_w * 0.65, img_h * 0.385), str(user_id), fill="black", font=font_medium) # Next to "ID:"
+            draw.text((img_w * 0.72, img_h * 0.445), str(region), fill="black", font=font_medium) # Next to "Region:"
+            draw.text((img_w * 0.65, img_h * 0.525), str(count), fill="black", font=font_medium) # Under "Total:"
             
-            # Middle Box (Rarest, Scouts)
-            draw.text((img_w * 0.58, img_h * 0.60), str(rarest_caught), fill="black", font=font_medium)
-            draw.text((img_w * 0.58, img_h * 0.67), f"{tries_left} / 300", fill="black", font=font_medium)
+            # Middle Box
+            draw.text((img_w * 0.74, img_h * 0.605), str(rarest_caught), fill="black", font=font_medium) # Next to "Rarest:"
+            draw.text((img_w * 0.68, img_h * 0.675), f"{tries_left} / 300", fill="black", font=font_medium) # Next to "Scouts:"
             
-            # Bottom Box (Battle Record)
-            # Push X further right (0.70) so it centers in the right-side column
-            draw.text((img_w * 0.70, img_h * 0.79), str(wins), fill="black", font=font_medium)
-            draw.text((img_w * 0.70, img_h * 0.85), str(losses), fill="black", font=font_medium)
-            draw.text((img_w * 0.70, img_h * 0.91), str(total_battles), fill="black", font=font_medium)
+            # Bottom Box (Battle Record - Centered in right column)
+            draw.text((img_w * 0.68, img_h * 0.795), str(wins), fill="black", font=font_medium)
+            draw.text((img_w * 0.68, img_h * 0.855), str(losses), fill="black", font=font_medium)
+            draw.text((img_w * 0.68, img_h * 0.915), str(total_battles), fill="black", font=font_medium)
 
             # --- RENDER AND SEND ---
             final_img = img.convert("RGB")
@@ -320,11 +322,11 @@ def cmd_profile(message):
             out.seek(0)
             
             bot.delete_message(message.chat.id, status_msg.message_id)
-            bot.send_photo(message.chat.id, out, caption=f"🪪 *{escape_md(user_name)}'s Trainer Card*", parse_mode="MarkdownV2", reply_to_message_id=message.message_id)
+            bot.send_photo(message.chat.id, out, caption=f"🪪 *{escape_md(raw_name)}'s Trainer Card*", parse_mode="MarkdownV2", reply_to_message_id=message.message_id)
 
         except Exception as e:
             logger.error(f"Image Gen Error: {e}")
-            try: bot.edit_message_text(f"❌ Failed to generate Trainer Card. Ensure `template.jpg` and `arialbd.ttf` are in the folder.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            try: bot.edit_message_text(f"❌ Failed to generate Trainer Card.", chat_id=message.chat.id, message_id=status_msg.message_id)
             except: pass
 
     threading.Thread(target=generate_and_send, daemon=True).start()
@@ -894,7 +896,7 @@ def cb_handler(call):
             
         if call.data.startswith("refresh_flex_"):
             owner_id = int(call.data.split("_")[2])
-            if call.fromuser.id != owner_id:
+            if call.from_user.id != owner_id:
                 return bot.answer_callback_query(call.id, "❌ You cannot refresh someone else's flex menu!", show_alert=True)
             bot.answer_callback_query(call.id, "🔄 Refreshing Leaderboard...")
             return send_leaderboard(call.message.chat.id, owner_id, call.message.message_id)
