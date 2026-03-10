@@ -101,16 +101,7 @@ def battle_timeout(bot, chat_id, battle_id):
         if turn == "processing": return 
         loser_name = b.get(turn + "_name", "Player")
         winner_name = b["p2_name"] if turn == "p1" else b["p1_name"]
-        
-        loser_id = b[turn + "_id"]
-        winner_id = b["p2_id"] if turn == "p1" else b["p1_id"]
-        
         pvp_battles.pop(battle_id, None)
-        
-        # Update records for timeout (timeout = forfeit = loss)
-        db.update_battle_stats(winner_id, is_win=True)
-        db.update_battle_stats(loser_id, is_win=False)
-        
         try: bot.edit_message_text(f"⏳ *{escape_md(loser_name)} ran out of time\\!*\n\n🏆 *{escape_md(winner_name)} WINS THE BATTLE\\!*", chat_id, battle_id, parse_mode="MarkdownV2")
         except Exception: pass
 
@@ -317,31 +308,24 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
 # --- COMMAND HANDLER ---
 def handle_pvp_command(bot, message):
-    if not message.reply_to_message: 
-        return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
-    
-    p1_id = message.from_user.id
-    p2_id = message.reply_to_message.from_user.id
-    
-    if p1_id == p2_id: 
-        return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
-        
-    # --- Prevent challenging bots ---
-    if message.reply_to_message.from_user.is_bot:
-        return bot.reply_to(message, escape_md("❌ You cannot challenge bots!"))
-        
-    # --- Check if players are registered ---
-    if not db.get_user(p1_id):
-        return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
-    if not db.get_user(p2_id):
-        return bot.reply_to(message, escape_md("❌ That user hasn't started the bot yet! They must /start the bot to battle."))
+    if not message.reply_to_message: return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
+    p1_id, p2_id = message.from_user.id, message.reply_to_message.from_user.id
+    if p1_id == p2_id: return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
     
     if is_in_battle(p1_id) or is_in_battle(p2_id): 
         return bot.reply_to(message, escape_md("❌ Someone is already in a battle!"))
 
-    # --- Strict Pending Challenge Check ---
-    if is_in_pending_challenge(p1_id) or is_in_pending_challenge(p2_id):
-        return bot.reply_to(message, escape_md("❌ One of you already has a pending challenge! Accept, decline, or wait for it to expire."))
+    to_remove = []
+    for mid, c in list(pending_challenges.items()):
+        if p1_id in [c["p1_id"], c["p2_id"]]:
+            c["timer"].cancel()
+            to_remove.append(mid)
+            try: bot.edit_message_text("❌ *Challenge cancelled because a new one was started\\.*", c["chat_id"], mid, parse_mode="MarkdownV2")
+            except: pass
+    for mid in to_remove: pending_challenges.pop(mid, None)
+
+    if is_in_pending_challenge(p2_id): 
+        return bot.reply_to(message, escape_md("❌ That user already has a pending challenge!"))
 
     mode, size, can_switch = db.get_pvp_settings(p1_id)
     sent = bot.reply_to(message, escape_md("🔄 Loading challenge..."), parse_mode="MarkdownV2")
@@ -553,7 +537,10 @@ def handle_pvp_callback(bot, call):
                                 def_stat = max(1, dfn["def"])
                                 
                                 # --- OFFICIAL POKEMON DAMAGE FORMULA ---
+                                # Level = 100. (2 * 100 / 5) + 2 = 42
                                 base_damage = ((42 * mv_pow * (atk["atk"] / def_stat)) / 50) + 2
+                                
+                                # Official RNG damage roll (85% to 100%)
                                 rand_roll = random.uniform(0.85, 1.00)
                                 
                                 dmg = max(1, int(base_damage * mult * stab * crit * rand_roll))
@@ -580,43 +567,27 @@ def handle_pvp_callback(bot, call):
                         dmg = max(1, atk["max_hp"] // 8); atk["hp"] = max(0, atk["hp"] - dmg)
                         b["log"] += f"☠️ {atk['name']} is hurt by poison!\n"
 
-                # CHECK FOR FAINTS
                 if dfn["hp"] <= 0:
                     dfn["hp"] = 0; dfn["status"] = None
                     b["log"] += f"{dfn['name']} fainted!\n"
-                    
                     if all(p["hp"] <= 0 for p in b[defender + "_team"]):
-                        # ATTACKER WINS
                         bot.edit_message_text(f"{escape_md(b['log'].strip())}\n\n🏆 *{escape_md(b[actual_turn+'_name'])} WINS\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
-                            
                         db.update_task_pvp(b[actual_turn + "_id"])
-                        db.update_battle_stats(b[actual_turn + "_id"], is_win=True)
-                        db.update_battle_stats(b[defender + "_id"], is_win=False)
-                        
                         return end_battle(battle_id)
-                        
                     b["state"] = "force_switch"; b["current_turn"] = defender
-                    
                 elif atk["hp"] <= 0:
                     atk["hp"] = 0; atk["status"] = None
                     b["log"] += f"{atk['name']} fainted from status effect!\n"
-                    
                     if all(p["hp"] <= 0 for p in b[actual_turn + "_team"]):
-                        # DEFENDER WINS
                         bot.edit_message_text(f"{escape_md(b['log'].strip())}\n\n🏆 *{escape_md(b[defender+'_name'])} WINS\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
-                            
                         db.update_task_pvp(b[defender + "_id"])
-                        db.update_battle_stats(b[defender + "_id"], is_win=True)
-                        db.update_battle_stats(b[actual_turn + "_id"], is_win=False)
-                        
                         return end_battle(battle_id)
-                        
                     b["state"] = "force_switch"; b["current_turn"] = actual_turn
                 else:
                     b["current_turn"] = defender
@@ -728,17 +699,9 @@ def handle_pvp_callback(bot, call):
                 
             elif action == "run": 
                 end_battle(battle_id)
-                bot.edit_message_text(f"🏃 *{escape_md(b[actual_turn+'_name'])} fled the battle\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
-                
-                # Punish the runner with a Loss, award the Opponent a Win
-                runner_id = b[actual_turn + "_id"]
-                winner_id = b["p2_id"] if actual_turn == "p1" else b["p1_id"]
-                
-                db.update_battle_stats(runner_id, is_win=False)
-                db.update_battle_stats(winner_id, is_win=True)
-                
+                bot.edit_message_text(f"🏃 *{escape_md(b[actual_turn+'_name'])} fled\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                 if LOG_GROUP_ID:
-                    try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={runner_id}) fled from battle\\.", parse_mode="MarkdownV2")
+                    try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
                     except: pass
                 
             elif action == "back": 
