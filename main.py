@@ -10,9 +10,7 @@ import sqlite3
 import random
 import json 
 import io 
-import re # <-- Added to clean usernames!
 from collections import Counter
-from PIL import Image, ImageDraw, ImageFont
 
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
@@ -249,7 +247,7 @@ def cmd_task(message):
     db.add_user_if_new(message.from_user.id)
     tasks.render_tasks_ui(bot, message.chat.id, message.from_user.id)
 
-# --- IMAGE-BASED TRAINER CARD PROFILE ---
+# --- TEXT-BASED TRAINER CARD PROFILE ---
 @bot.message_handler(commands=["profile", "trainer"])
 def cmd_profile(message):
     user_id = message.from_user.id
@@ -258,78 +256,54 @@ def cmd_profile(message):
     if not user: 
         return safe_send(message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
         
-    status_msg = bot.reply_to(message, "🪪 *Printing Trainer Card\\.\\.\\.*", parse_mode="MarkdownV2")
-    
     tries_left, region = db.update_user_tries(user_id)
     names = db.list_user_pokemon_names(user_id)
     count = len(names)
     
+    # Check for the rarest Pokemon in their bag
     rarest_caught = "None"
     if names:
         rarest_list = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p]
         rarest_caught = rarest_list[0] if rarest_list else names[-1]
             
+    # Fetch Battle Stats
     try:
         wins, losses = db.get_battle_stats(user_id)
     except Exception:
         wins, losses = 0, 0 
+        
     total_battles = wins + losses
     
-    # --- FIX: Clean the name so emojis/special fonts don't turn into square boxes! ---
-    raw_name = message.from_user.first_name
-    clean_name = re.sub(r'[^\w\s-]', '', raw_name).strip()
-    if not clean_name: clean_name = "Trainer"
-
-    def generate_and_send():
-        try:
-            img = Image.open("template.jpg").convert("RGBA")
-            draw = ImageDraw.Draw(img)
-            img_w, img_h = img.size
-            
-            try:
-                # Slightly smaller font so long names don't spill over
-                font_large = ImageFont.truetype("arialbd.ttf", int(img_h * 0.040))
-                font_medium = ImageFont.truetype("arialbd.ttf", int(img_h * 0.030))
-            except IOError:
-                try:
-                    font_large = ImageFont.truetype("arial.ttf", int(img_h * 0.040))
-                    font_medium = ImageFont.truetype("arial.ttf", int(img_h * 0.030))
-                except IOError:
-                    logger.error("⚠️ FONT FILE MISSING! Upload arialbd.ttf or arial.ttf to your folder!")
-                    font_large = font_medium = ImageFont.load_default()
-
-            # --- ALIGNMENT FIX: New precise X, Y coordinates ---
-            
-            # Top Right Box
-            draw.text((img_w * 0.56, img_h * 0.31), str(clean_name), fill="black", font=font_large) # Under "Name:"
-            draw.text((img_w * 0.65, img_h * 0.385), str(user_id), fill="black", font=font_medium) # Next to "ID:"
-            draw.text((img_w * 0.72, img_h * 0.445), str(region), fill="black", font=font_medium) # Next to "Region:"
-            draw.text((img_w * 0.65, img_h * 0.525), str(count), fill="black", font=font_medium) # Under "Total:"
-            
-            # Middle Box
-            draw.text((img_w * 0.74, img_h * 0.605), str(rarest_caught), fill="black", font=font_medium) # Next to "Rarest:"
-            draw.text((img_w * 0.68, img_h * 0.675), f"{tries_left} / 300", fill="black", font=font_medium) # Next to "Scouts:"
-            
-            # Bottom Box (Battle Record - Centered in right column)
-            draw.text((img_w * 0.68, img_h * 0.795), str(wins), fill="black", font=font_medium)
-            draw.text((img_w * 0.68, img_h * 0.855), str(losses), fill="black", font=font_medium)
-            draw.text((img_w * 0.68, img_h * 0.915), str(total_battles), fill="black", font=font_medium)
-
-            # --- RENDER AND SEND ---
-            final_img = img.convert("RGB")
-            out = io.BytesIO()
-            final_img.save(out, format="JPEG")
-            out.seek(0)
-            
-            bot.delete_message(message.chat.id, status_msg.message_id)
-            bot.send_photo(message.chat.id, out, caption=f"🪪 *{escape_md(raw_name)}'s Trainer Card*", parse_mode="MarkdownV2", reply_to_message_id=message.message_id)
-
-        except Exception as e:
-            logger.error(f"Image Gen Error: {e}")
-            try: bot.edit_message_text(f"❌ Failed to generate Trainer Card.", chat_id=message.chat.id, message_id=status_msg.message_id)
-            except: pass
-
-    threading.Thread(target=generate_and_send, daemon=True).start()
+    # Safely escape text for Telegram Markdown
+    user_name = escape_md(message.from_user.first_name)
+    rarest_md = escape_md(rarest_caught)
+    region_md = escape_md(region)
+    
+    text = (
+        "✦─────────────────✦\n"
+        "🪪  𝗧𝗥𝗔𝗜𝗡𝗘𝗥 𝗖𝗔𝗥𝗗  🪪\n"
+        "✦─────────────────✦\n\n"
+        f"👤  {user_name}\n"
+        f"🆔  `{user_id}`\n"
+        f"🌍  {region_md}\n\n"
+        "✦───────────────✦\n"
+        "𝗖𝗼𝗹𝗹𝗲𝗰𝘁𝗶𝗼𝗻\n"
+        f"🎒  {count} 𝗣𝗼𝗸é𝗺𝗼𝗻\n"
+        f"⭐  {rarest_md}  \\(𝗿𝗮𝗿𝗲𝘀𝘁 𝗰𝗮𝘂𝗴𝗵𝘁\\)\n\n"
+        "✦───────────────✦\n"
+        "𝗦𝗰𝗼𝘂𝘁𝘀\n"
+        f"🔋  {tries_left} / 300 𝗿𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴\n\n"
+        "✦─────────────────✦\n"
+        "𝗕𝗔𝗧𝗧𝗟𝗘 𝗥𝗘𝗖𝗢𝗥𝗗\n"
+        "✦─────────────────✦\n\n"
+        f"🏆  𝗪𝗶𝗻𝘀          {wins}\n"
+        f"❌  𝗟𝗼𝘀𝘀𝗲𝘀        {losses}\n"
+        f"📊  𝗧𝗼𝘁𝗮𝗹 𝗕𝗮𝘁𝘁𝗹𝗲𝘀 {total_battles}\n\n"
+        "✦─────────────────✦\n"
+        f"© 𝗣𝗼𝗸é𝗧𝗿𝗮𝗶𝗻𝗲𝗿 {user_name}"
+    )
+    
+    safe_send(message.chat.id, text, reply_to_id=message.message_id)
 
 @bot.message_handler(commands=["travel"])
 def cmd_travel(message):
