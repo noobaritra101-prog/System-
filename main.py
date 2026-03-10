@@ -98,7 +98,7 @@ def start_scout(chat_id, user_id, reply_to_id=None):
         active_hunts[sent.message_id] = {"user_id": user_id, "start_time": time.time(), "timer": timer, "name": name}
     except Exception as e: 
         if "429" in str(e):
-            time.sleep(2) 
+            time.sleep(2) # Auto retry if hit by rate limit
             try:
                 sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
                 timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, chat_id, name))
@@ -109,6 +109,7 @@ def start_scout(chat_id, user_id, reply_to_id=None):
             logger.error(f"Failed to send scout photo: {e}")
 
 def process_catch(call, uid, pid, name):
+    """Background process for throwing a Pokeball without blocking the bot"""
     try:
         try:
             bot.edit_message_caption(caption="🔴 *Throwing Pokéball\\.\\.\\.*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
@@ -425,7 +426,7 @@ def is_owner(message):
         return False
     return True
 
-# --- Execute Functions ---
+# --- Execute Logic Functions ---
 def execute_world_stats(message):
     loading_text = "🌍 *Gathering Global Safari Data\\.\\.\\.*\n_Scanning all trainers\\.\\.\\._"
     status_msg = safe_send(message.chat.id, loading_text, reply_to_id=message.message_id)
@@ -517,7 +518,6 @@ def execute_world_find(message, target_pokemon):
             text += f"\\- [{escape_md(u_name)}](tg://user?id={uid}) — {count} caught\n"
             time.sleep(0.1) 
             
-        # FIX: Dynamically show left over pokemon
         leftover = total_caught - displayed_count
         if leftover > 0:
             text += f"\n_\\.\\.\\.and {leftover} more owned by other trainers\\._\n"
@@ -528,13 +528,96 @@ def execute_world_find(message, target_pokemon):
         try: bot.edit_message_text(escape_md("❌ An error occurred tracking this Pokémon."), message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
         except: pass
 
-# --- The Registry ---
+def execute_world_spawn(message, pokemon_name):
+    poke_name = pokemon_name.strip().lower()
+    poke_id = get_pokemon_id_sync(poke_name)
+    if not poke_id:
+        return safe_send(message.chat.id, f"❌ Could not find data for *{escape_md(poke_name.title())}*\\.", reply_to_id=message.message_id)
+
+    img_url = official_shiny_artwork_url(poke_id)
+    cap = f"🚨 *A WILD EVENT APPEARED\\!* 🚨\n\nA wild ✨ *{escape_md(poke_name.title())}* has spawned in the area\\!\n\n_First person to click catch claims it\\!_"
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔴 Catch", callback_data=f"gcatch_{poke_id}_{poke_name.title()[:16]}"))
+
+    try:
+        sent = bot.send_photo(message.chat.id, img_url, caption=cap, reply_to_message_id=message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+        timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, message.chat.id, poke_name))
+        timer.start()
+        # Track globally by setting user_id to 'ANY'
+        active_hunts[sent.message_id] = {"user_id": "ANY", "start_time": time.time(), "timer": timer, "name": poke_name}
+    except Exception as e:
+        logger.error(f"Group spawn error: {e}")
+        safe_send(message.chat.id, escape_md("❌ Failed to spawn the event Pokémon."), reply_to_id=message.message_id)
+
+def execute_admin_givemany(message, args_str):
+    if not message.reply_to_message:
+        return safe_send(message.chat.id, escape_md("⚠️ You must reply to a user's message to give them Pokémon!"), reply_to_id=message.message_id)
+        
+    target_id = message.reply_to_message.from_user.id
+    target_name = message.reply_to_message.from_user.first_name
+    
+    poke_list = [p.strip().title() for p in args_str.split(",") if p.strip()]
+    if not poke_list:
+        return safe_send(message.chat.id, escape_md("⚠️ Please provide a comma-separated list of Pokémon."), reply_to_id=message.message_id)
+        
+    db.add_user_if_new(target_id)
+    for p in poke_list:
+        db.add_caught_pokemon(target_id, p, "Admin Gift")
+        
+    safe_send(message.chat.id, f"🎁 Successfully gave {len(poke_list)} Pokémon to [{escape_md(target_name)}](tg://user?id={target_id})\\!\n\n_{escape_md(', '.join(poke_list))}_", reply_to_id=message.message_id)
+
+def execute_user_stats(message, args_str):
+    target_id = None
+    target_name = "Trainer"
+    
+    if message.reply_to_message:
+        target_id = message.reply_to_message.from_user.id
+        target_name = message.reply_to_message.from_user.first_name
+    elif args_str.isdigit():
+        target_id = int(args_str)
+    else:
+        return safe_send(message.chat.id, escape_md("⚠️ Please reply to a user or provide their User ID."), reply_to_id=message.message_id)
+
+    user_data = db.get_user(target_id)
+    if not user_data:
+        return safe_send(message.chat.id, escape_md("❌ This user is not registered in the database."), reply_to_id=message.message_id)
+        
+    tries = user_data[1]
+    region = user_data[2]
+    pokes = db.list_user_pokemon_names(target_id)
+    total_caught = len(pokes)
+    
+    text = f"👤 *Trainer Database Record*\n"
+    text += f"━━━━━━━━━━━━━━\n"
+    text += f"🆔 *ID:* `{target_id}`\n"
+    text += f"👤 *Name:* [{escape_md(target_name)}](tg://user?id={target_id})\n"
+    text += f"🌍 *Region:* {escape_md(region)}\n"
+    text += f"🔋 *Scouts Left:* {tries}/300\n"
+    text += f"🎒 *Total Pokémon:* {total_caught}\n"
+    
+    safe_send(message.chat.id, text, reply_to_id=message.message_id)
+
+# --- The Execute Registry ---
 EXECUTE_MODULES = {
     "world": {
         "description": "Global database and entity tracking.",
         "actions": {
             "stats": {"args": "", "desc": "View total caught, unique species, and top 5 most caught."},
-            "find": {"args": "<pokemon>", "desc": "Locate all owners of a specific Pokémon."}
+            "find": {"args": "<pokemon>", "desc": "Locate all owners of a specific Pokémon."},
+            "spawn": {"args": "<pokemon>", "desc": "Spawn a Pokémon in the chat for anyone to catch."}
+        }
+    },
+    "user": {
+        "description": "User data management.",
+        "actions": {
+            "stats": {"args": "[user_id]", "desc": "Check a user's secure profile (reply or ID)."}
+        }
+    },
+    "admin": {
+        "description": "Advanced game moderation.",
+        "actions": {
+            "givemany": {"args": "<poke1, poke2...>", "desc": "Give multiple Pokémon to a user at once (must reply to them)."}
         }
     },
     "system": {
@@ -580,6 +663,18 @@ def cmd_execute(message):
             if not arguments:
                 return safe_send(message.chat.id, escape_md("⚠️ Please provide a Pokémon name. Example: /execute world find Pikachu"), reply_to_id=message.message_id)
             threading.Thread(target=execute_world_find, args=(message, arguments), daemon=True).start()
+        elif action == "spawn":
+            if not arguments:
+                return safe_send(message.chat.id, escape_md("⚠️ Please provide a Pokémon name. Example: /execute world spawn Arceus"), reply_to_id=message.message_id)
+            execute_world_spawn(message, arguments)
+            
+    elif module == "user":
+        if action == "stats":
+            execute_user_stats(message, arguments)
+            
+    elif module == "admin":
+        if action == "givemany":
+            execute_admin_givemany(message, arguments)
             
     elif module == "system":
         if action == "ping":
@@ -786,9 +881,11 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
+        # Route Trade Engine callbacks
         if call.data.startswith("tr_"):
             return trade.handle_trade_callback(bot, call)
             
+        # Route Pokedex UI clicks
         if call.data == "ignore":
             return bot.answer_callback_query(call.id)
             
@@ -815,9 +912,11 @@ def cb_handler(call):
                     if "message is not modified" not in str(e).lower(): pass
             return
 
+        # Route PvP callbacks
         if call.data.startswith("pvp_"):
             return pvp.handle_pvp_callback(bot, call)
             
+        # Route Flex Refresh
         if call.data.startswith("refresh_flex_"):
             owner_id = int(call.data.split("_")[2])
             if call.from_user.id != owner_id:
@@ -825,6 +924,7 @@ def cb_handler(call):
             bot.answer_callback_query(call.id, "🔄 Refreshing Leaderboard...")
             return send_leaderboard(call.message.chat.id, owner_id, call.message.message_id)
 
+        # Route Daily Tasks
         if call.data.startswith("task"):
             return tasks.handle_task_callback(bot, call)
 
@@ -837,6 +937,29 @@ def cb_handler(call):
             except Exception as e:
                 if "message is not modified" not in str(e).lower(): pass
 
+        # --- NEW: GROUP CATCH HANDLER (/execute world spawn) ---
+        elif call.data.startswith("gcatch_"):
+            parts = call.data.split("_", 2)
+            pid, name = int(parts[1]), parts[2]
+            
+            if call.message.message_id not in active_hunts:
+                return bot.answer_callback_query(call.id, "Too late! Someone else already caught it.")
+                
+            hunt_data = active_hunts.pop(call.message.message_id, None)
+            if hunt_data and "timer" in hunt_data:
+                hunt_data["timer"].cancel()
+                
+            catcher_id = call.from_user.id
+            catcher_name = call.from_user.first_name
+            db.add_user_if_new(catcher_id)
+            db.add_caught_pokemon(catcher_id, name.title(), "Event")
+            tasks.check_and_update_catch(catcher_id, name.title())
+            
+            cap = f"🎉 *{escape_md(catcher_name)}* was the fastest and caught the ✨ *{escape_md(name.title())}*\\!"
+            try: bot.edit_message_caption(caption=cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+            except: pass
+
+        # --- NORMAL CATCH HANDLER ---
         elif call.data.startswith("catch_"):
             parts = call.data.split("_", 3)
             uid, pid, name = int(parts[1]), int(parts[2]), parts[3]
