@@ -1,242 +1,324 @@
 # database.py
-import asyncpg
-import asyncio
-import threading
+import psycopg2
+from psycopg2.extras import execute_values
 import datetime
-import random
 from config import DATABASE_URL, logger
 
-# Dedicated event loop for database operations
-db_loop = asyncio.new_event_loop()
-pool = None
+def get_conn():
+    """Establishes a connection to the Supabase PostgreSQL database."""
+    return psycopg2.connect(DATABASE_URL)
 
-def _run_db_loop(loop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
-# Start the background database thread
-db_thread = threading.Thread(target=_run_db_loop, args=(db_loop,), daemon=True)
-db_thread.start()
-
-def run_sync(coro):
-    """Bridge: Runs an async function synchronously safely from main.py, pvp.py, or trade.py."""
-    return asyncio.run_coroutine_threadsafe(coro, db_loop).result()
-
-# --- 5:30 AM IST RESET LOGIC ---
-def get_logical_date():
-    """Returns today's date, but only rolls over at 5:30 AM IST."""
-    # Convert server time to precise IST (UTC + 5:30)
-    ist_now = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
-    reset_time = datetime.time(5, 30)
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
     
-    # If it is currently before 5:30 AM, it counts as "yesterday"
-    if ist_now.time() < reset_time:
-        return (ist_now - datetime.timedelta(days=1)).date()
-    return ist_now.date()
+    # 1. Create Users Table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id BIGINT PRIMARY KEY,
+            tries_left INTEGER DEFAULT 300,
+            region TEXT DEFAULT 'Kanto',
+            last_reset DATE,
+            pvp_mode TEXT DEFAULT 'Mix',
+            pvp_size INTEGER DEFAULT 6,
+            pvp_switch BOOLEAN DEFAULT TRUE,
+            wins INTEGER DEFAULT 0,
+            losses INTEGER DEFAULT 0
+        )
+    ''')
+    
+    # Safely inject the new Wins/Losses columns if migrating from an older version
+    try:
+        cur.execute('ALTER TABLE users ADD COLUMN wins INTEGER DEFAULT 0')
+        conn.commit()
+    except psycopg2.errors.DuplicateColumn:
+        conn.rollback()
 
-# ================== ASYNC INTERNAL FUNCTIONS ==================
-async def _init_db():
-    global pool
-    # statement_cache_size=0 is required for Supabase PgBouncer compatibility
-    pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10, statement_cache_size=0)
-    async with pool.acquire() as conn:
-        await conn.execute("CREATE TABLE IF NOT EXISTS users(user_id BIGINT PRIMARY KEY, tries_left INTEGER DEFAULT 300, region VARCHAR(50) DEFAULT 'Kanto', last_reset DATE)")
-        await conn.execute("CREATE TABLE IF NOT EXISTS pokemons(id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, name VARCHAR(100) NOT NULL, region VARCHAR(50) NOT NULL)")
-        await conn.execute("CREATE TABLE IF NOT EXISTS groups(group_id BIGINT PRIMARY KEY)")
+    try:
+        cur.execute('ALTER TABLE users ADD COLUMN losses INTEGER DEFAULT 0')
+        conn.commit()
+    except psycopg2.errors.DuplicateColumn:
+        conn.rollback()
+
+    # 2. Create Pokemons Table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS pokemons (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            name TEXT,
+            region TEXT,
+            catch_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # 3. Create Groups Table
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS groups (
+            group_id BIGINT PRIMARY KEY
+        )
+    ''')
+
+    conn.commit()
+    cur.close()
+    conn.close()
+    logger.info("✅ Database initialized successfully.")
+
+# ==================== USER PROFILE ====================
+def add_user_if_new(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
+    if not cur.fetchone():
+        cur.execute("INSERT INTO users (user_id, tries_left, last_reset) VALUES (%s, %s, %s)", 
+                    (user_id, 300, datetime.date.today()))
+        conn.commit()
+        is_new = True
+    else:
+        is_new = False
+    cur.close()
+    conn.close()
+    return is_new
+
+def get_user(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, tries_left, region, last_reset FROM users WHERE user_id = %s", (user_id,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+    return user
+
+def update_user_tries(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT tries_left, region, last_reset FROM users WHERE user_id = %s", (user_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        conn.close()
+        return None, None
         
-        await conn.execute("CREATE TABLE IF NOT EXISTS pvp_settings(user_id BIGINT PRIMARY KEY, mode VARCHAR(10) DEFAULT 'Mix', team_size INTEGER DEFAULT 6, can_switch BOOLEAN DEFAULT TRUE)")
-        await conn.execute("ALTER TABLE pvp_settings ADD COLUMN IF NOT EXISTS can_switch BOOLEAN DEFAULT TRUE")
+    tries_left, region, last_reset = row
+    today = datetime.date.today()
+    
+    if last_reset != today:
+        tries_left = 300
+        cur.execute("UPDATE users SET tries_left = %s, last_reset = %s WHERE user_id = %s", 
+                    (tries_left, today, user_id))
+    
+    if tries_left > 0:
+        tries_left -= 1
+        cur.execute("UPDATE users SET tries_left = %s WHERE user_id = %s", (tries_left, user_id))
         
-        # Dynamic Tasks Table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_tasks(
-                user_id BIGINT PRIMARY KEY, last_reset DATE,
-                target_p1 VARCHAR(50), target_p2 VARCHAR(50),
-                target_pvp INTEGER, target_catch INTEGER,
-                prog_p1 BOOLEAN DEFAULT FALSE, prog_p2 BOOLEAN DEFAULT FALSE,
-                prog_pvp INTEGER DEFAULT 0, prog_catch INTEGER DEFAULT 0,
-                claimed BOOLEAN DEFAULT FALSE, reward_poke VARCHAR(50)
-            )
-        """)
-        
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON users(user_id)")
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_pokemon_user_id ON pokemons(user_id)")
-    logger.info("✅ asyncpg Database initialized with 5:30 AM Reset")
+    conn.commit()
+    cur.close()
+    conn.close()
+    return tries_left, region
 
-# --- DYNAMIC DAILY TASKS SYSTEM ---
-async def _get_daily_tasks(user_id):
-    today = get_logical_date() # <--- Using 5:30 AM Reset!
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM user_tasks WHERE user_id=$1", user_id)
-        
-        # If no tasks exist, or if the date has rolled over past 5:30 AM, generate new ones!
-        if not row or row['last_reset'] != today:
-            from api_utils import LEGENDARY_NAMES, pokemon_cache
-            
-            # Filter to non-legendary pokemon for targets and rewards
-            available = [name for name in pokemon_cache.values() if name not in LEGENDARY_NAMES]
-            if len(available) < 3: 
-                available = ["Pikachu", "Eevee", "Bulbasaur", "Charmander", "Squirtle", "Pidgey", "Snorlax", "Gengar", "Lucario"]
-            
-            t_p1, t_p2, reward = random.sample(available, 3)
-            t_pvp = random.randint(1, 6)
-            t_catch = random.randint(15, 40)
-            
-            await conn.execute("""
-                INSERT INTO user_tasks (user_id, last_reset, target_p1, target_p2, target_pvp, target_catch, prog_p1, prog_p2, prog_pvp, prog_catch, claimed, reward_poke)
-                VALUES ($1, $2, $3, $4, $5, $6, FALSE, FALSE, 0, 0, FALSE, $7)
-                ON CONFLICT (user_id) DO UPDATE SET
-                last_reset = EXCLUDED.last_reset, target_p1 = EXCLUDED.target_p1, target_p2 = EXCLUDED.target_p2, target_pvp = EXCLUDED.target_pvp, target_catch = EXCLUDED.target_catch, prog_p1 = FALSE, prog_p2 = FALSE, prog_pvp = 0, prog_catch = 0, claimed = FALSE, reward_poke = EXCLUDED.reward_poke
-            """, user_id, today, t_p1, t_p2, t_pvp, t_catch, reward)
-            
-            return {'target_p1': t_p1, 'target_p2': t_p2, 'target_pvp': t_pvp, 'target_catch': t_catch, 'prog_p1': False, 'prog_p2': False, 'prog_pvp': 0, 'prog_catch': 0, 'claimed': False, 'reward_poke': reward}
-        return dict(row)
+def update_user_region(user_id, region):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET region = %s WHERE user_id = %s", (region, user_id))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-async def _update_task_catch(user_id, pokemon_name):
-    row = await _get_daily_tasks(user_id)
-    if row['claimed']: return
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE user_tasks SET prog_catch = prog_catch + 1 WHERE user_id=$1", user_id)
-        if pokemon_name.lower() == row['target_p1'].lower() and not row['prog_p1']:
-            await conn.execute("UPDATE user_tasks SET prog_p1 = TRUE WHERE user_id=$1", user_id)
-        if pokemon_name.lower() == row['target_p2'].lower() and not row['prog_p2']:
-            await conn.execute("UPDATE user_tasks SET prog_p2 = TRUE WHERE user_id=$1", user_id)
+def reset_user(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET tries_left = 300, last_reset = %s WHERE user_id = %s", 
+                (datetime.date.today(), user_id))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-async def _update_task_pvp(user_id):
-    row = await _get_daily_tasks(user_id)
-    if row['claimed']: return
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE user_tasks SET prog_pvp = prog_pvp + 1 WHERE user_id=$1", user_id)
+# ==================== POKEMON INVENTORY ====================
+def add_caught_pokemon(user_id, name, region):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO pokemons (user_id, name, region) VALUES (%s, %s, %s)", 
+                (user_id, name, region))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-async def _claim_daily_reward(user_id):
-    row = await _get_daily_tasks(user_id)
-    if row['claimed']: return False, None
-    if row['prog_p1'] and row['prog_p2'] and row['prog_pvp'] >= row['target_pvp'] and row['prog_catch'] >= row['target_catch']:
-        async with pool.acquire() as conn:
-            await conn.execute("UPDATE user_tasks SET claimed=TRUE WHERE user_id=$1", user_id)
-        await _add_caught_pokemon(user_id, f"{row['reward_poke']} (Shiny)", "Daily Task")
-        return True, row['reward_poke']
-    return False, None
+def list_user_pokemon_names(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM pokemons WHERE user_id = %s ORDER BY catch_date ASC", (user_id,))
+    names = [row[0] for row in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return names
 
-# --- EXISTING DB FUNCTIONS ---
-async def _get_pvp_settings(user_id):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT mode, team_size, can_switch FROM pvp_settings WHERE user_id=$1", user_id)
-        return (row['mode'], row['team_size'], row['can_switch']) if row else ('Mix', 6, True)
+def delete_pokemon(user_id, name):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        DELETE FROM pokemons 
+        WHERE id IN (
+            SELECT id FROM pokemons 
+            WHERE user_id = %s AND name = %s 
+            LIMIT 1
+        )
+    """, (user_id, name))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    cur.close()
+    conn.close()
+    return deleted
 
-async def _update_pvp_settings(user_id, mode, size, can_switch):
-    async with pool.acquire() as conn: await conn.execute("INSERT INTO pvp_settings(user_id, mode, team_size, can_switch) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO UPDATE SET mode = EXCLUDED.mode, team_size = EXCLUDED.team_size, can_switch = EXCLUDED.can_switch", user_id, mode, size, can_switch)
+# ==================== PVP & BATTLE STATS (NEW!) ====================
+def get_battle_stats(user_id):
+    """Fetches the Wins and Losses for the Trainer Card."""
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT wins, losses FROM users WHERE user_id = %s", (user_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if row:
+        return row[0], row[1]
+    return 0, 0
 
-async def _add_group(group_id):
-    async with pool.acquire() as conn: await conn.execute("INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING", group_id)
+def update_battle_stats(user_id, is_win):
+    """Updates a player's win/loss record after a PvP match."""
+    conn = get_conn()
+    cur = conn.cursor()
+    if is_win:
+        cur.execute("UPDATE users SET wins = wins + 1 WHERE user_id = %s", (user_id,))
+    else:
+        cur.execute("UPDATE users SET losses = losses + 1 WHERE user_id = %s", (user_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-async def _remove_group(group_id):
-    async with pool.acquire() as conn: await conn.execute("DELETE FROM groups WHERE group_id=$1", group_id)
+def get_pvp_settings(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT pvp_mode, pvp_size, pvp_switch FROM users WHERE user_id = %s", (user_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if row:
+        return row[0], row[1], row[2]
+    return "Mix", 6, True
 
-async def _get_all_groups():
-    async with pool.acquire() as conn: return [r['group_id'] for r in await conn.fetch("SELECT group_id FROM groups ORDER BY group_id")]
+def update_pvp_settings(user_id, mode, size, can_switch):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET pvp_mode = %s, pvp_size = %s, pvp_switch = %s WHERE user_id = %s", 
+                (mode, size, can_switch, user_id))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-async def _get_user(user_id):
-    async with pool.acquire() as conn: return await conn.fetchrow("SELECT user_id, tries_left, region, last_reset FROM users WHERE user_id=$1", user_id)
+def update_task_pvp(user_id):
+    pass # Hook for tasks.py if needed
 
-async def _add_user_if_new(user_id):
-    async with pool.acquire() as conn:
-        if not await conn.fetchrow("SELECT 1 FROM users WHERE user_id=$1", user_id):
-            await conn.execute("INSERT INTO users(user_id, tries_left, region, last_reset) VALUES ($1, $2, $3, $4)", user_id, 300, "Kanto", get_logical_date())
-            return True
-        return False
+# ==================== LEADERBOARD & GLOBAL STATS ====================
+def get_top_trainers(limit=5):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT user_id, COUNT(*) as count 
+        FROM pokemons 
+        GROUP BY user_id 
+        ORDER BY count DESC 
+        LIMIT %s
+    """, (limit,))
+    results = cur.fetchall()
+    cur.close()
+    conn.close()
+    return results
 
-async def _update_user_tries(user_id):
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT tries_left, region, last_reset FROM users WHERE user_id=$1", user_id)
-        if not row: return None, None
-        tries_left, region, last_reset = row['tries_left'], row['region'], row['last_reset']
-        today = get_logical_date() # <--- Using 5:30 AM Reset!
-        if last_reset != today:
-            tries_left = 300
-            await conn.execute("UPDATE users SET tries_left=$1, last_reset=$2 WHERE user_id=$3", tries_left, today, user_id)
-        if tries_left > 0: await conn.execute("UPDATE users SET tries_left = tries_left - 1 WHERE user_id=$1", user_id)
-        return tries_left, region
+def get_user_rank(user_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        WITH RankedUsers AS (
+            SELECT user_id, COUNT(*) as count,
+            RANK() OVER(ORDER BY COUNT(*) DESC) as rank
+            FROM pokemons
+            GROUP BY user_id
+        )
+        SELECT rank FROM RankedUsers WHERE user_id = %s
+    """, (user_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else "Unranked"
 
-async def _add_caught_pokemon(user_id, name, region):
-    async with pool.acquire() as conn: await conn.execute("INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)", user_id, name, region)
+def get_all_users():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM users")
+    users = [row[0] for row in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return users
 
-async def _list_user_pokemon_names(user_id):
-    async with pool.acquire() as conn: return [r['name'].capitalize() for r in await conn.fetch("SELECT name FROM pokemons WHERE user_id=$1 ORDER BY id DESC", user_id)]
+def get_all_groups():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT group_id FROM groups")
+    groups = [row[0] for row in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return groups
 
-async def _delete_pokemon(user_id, pokemon_name):
-    async with pool.acquire() as conn:
-        status = await conn.execute("DELETE FROM pokemons WHERE id IN (SELECT id FROM pokemons WHERE user_id=$1 AND name=$2 LIMIT 1)", user_id, pokemon_name.capitalize())
-        return int(status.split()[-1]) > 0
+def add_group(group_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO groups (group_id) VALUES (%s) ON CONFLICT DO NOTHING", (group_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-async def _get_all_users():
-    async with pool.acquire() as conn: return [r['user_id'] for r in await conn.fetch("SELECT user_id FROM users ORDER BY user_id")]
+def remove_group(group_id):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM groups WHERE group_id = %s", (group_id,))
+    conn.commit()
+    cur.close()
+    conn.close()
 
-async def _get_top_trainers(limit=5):
-    async with pool.acquire() as conn: return [(r['user_id'], r['c']) for r in await conn.fetch("SELECT user_id, COUNT(*) as c FROM pokemons GROUP BY user_id ORDER BY c DESC LIMIT $1", limit)]
+def get_debug_stats():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users")
+    u_count = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM pokemons")
+    p_count = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM groups")
+    g_count = cur.fetchone()[0]
+    cur.close()
+    conn.close()
+    return u_count, p_count, g_count
 
-async def _get_user_rank(user_id):
-    async with pool.acquire() as conn:
-        return await conn.fetchval("SELECT rank FROM (SELECT user_id, RANK() OVER (ORDER BY COUNT(*) DESC) as rank FROM pokemons GROUP BY user_id) sub WHERE user_id=$1", user_id) or "N/A"
+# ==================== CLOUD EXPORT & MIGRATE ====================
+def export_all_data():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, tries_left, region, last_reset::text, pvp_mode, pvp_size, pvp_switch, wins, losses FROM users")
+    users = [{"user_id": r[0], "tries_left": r[1], "region": r[2], "last_reset": r[3], "pvp_mode": r[4], "pvp_size": r[5], "pvp_switch": r[6], "wins": r[7], "losses": r[8]} for r in cur.fetchall()]
+    cur.execute("SELECT user_id, name, region, catch_date::text FROM pokemons")
+    pokemons = [{"user_id": r[0], "name": r[1], "region": r[2], "catch_date": r[3]} for r in cur.fetchall()]
+    cur.execute("SELECT group_id FROM groups")
+    groups = [{"group_id": r[0]} for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return {"users": users, "pokemons": pokemons, "groups": groups}
 
-async def _reset_user(user_id):
-    async with pool.acquire() as conn: await conn.execute("UPDATE users SET tries_left=300, last_reset=$1 WHERE user_id=$2", get_logical_date(), user_id)
-
-async def _update_user_region(user_id, region):
-    async with pool.acquire() as conn: await conn.execute("UPDATE users SET region=$1 WHERE user_id=$2", region, user_id)
-
-async def _get_debug_stats():
-    async with pool.acquire() as conn: return await conn.fetchval("SELECT COUNT(*) FROM users"), await conn.fetchval("SELECT COUNT(*) FROM pokemons"), await conn.fetchval("SELECT COUNT(*) FROM groups")
-
-async def _restore_sqlite_data(users, pokemons, groups):
-    async with pool.acquire() as conn:
-        await conn.executemany("INSERT INTO users(user_id, tries_left, region, last_reset) VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO UPDATE SET tries_left = EXCLUDED.tries_left, region = EXCLUDED.region, last_reset = EXCLUDED.last_reset", users)
-        if groups: await conn.executemany("INSERT INTO groups(group_id) VALUES ($1) ON CONFLICT (group_id) DO NOTHING", groups)
-        if pokemons: await conn.executemany("INSERT INTO pokemons(user_id, name, region) VALUES ($1, $2, $3)", pokemons)
-
-# --- EXPORT SYSTEM ---
-async def _export_all_data():
-    async with pool.acquire() as conn:
-        users = [dict(r) for r in await conn.fetch("SELECT * FROM users")]
-        pokemons = [dict(r) for r in await conn.fetch("SELECT * FROM pokemons")]
-        groups = [dict(r) for r in await conn.fetch("SELECT * FROM groups")]
-        pvp = [dict(r) for r in await conn.fetch("SELECT * FROM pvp_settings")]
-        tasks = [dict(r) for r in await conn.fetch("SELECT * FROM user_tasks")]
-        
-        return {
-            "users": users,
-            "pokemons": pokemons,
-            "groups": groups,
-            "pvp_settings": pvp,
-            "user_tasks": tasks
-        }
-
-# ================== SYNC EXPOSED API ==================
-def init_db(): run_sync(_init_db())
-def add_group(group_id): run_sync(_add_group(group_id))
-def remove_group(group_id): run_sync(_remove_group(group_id))
-def get_all_groups(): return run_sync(_get_all_groups())
-def get_user(user_id): return run_sync(_get_user(user_id))
-def add_user_if_new(user_id): return run_sync(_add_user_if_new(user_id))
-def update_user_tries(user_id): return run_sync(_update_user_tries(user_id))
-def add_caught_pokemon(user_id, name, region): run_sync(_add_caught_pokemon(user_id, name, region))
-def list_user_pokemon_names(user_id): return run_sync(_list_user_pokemon_names(user_id))
-def delete_pokemon(user_id, pokemon_name): return run_sync(_delete_pokemon(user_id, pokemon_name))
-def get_all_users(): return run_sync(_get_all_users())
-def get_top_trainers(limit=5): return run_sync(_get_top_trainers(limit))
-def get_user_rank(user_id): return run_sync(_get_user_rank(user_id))
-def reset_user(user_id): run_sync(_reset_user(user_id))
-def update_user_region(user_id, region): run_sync(_update_user_region(user_id, region))
-def get_debug_stats(): return run_sync(_get_debug_stats())
-def restore_sqlite_data(users, pokemons, groups): run_sync(_restore_sqlite_data(users, pokemons, groups))
-def get_pvp_settings(user_id): return run_sync(_get_pvp_settings(user_id))
-def update_pvp_settings(user_id, mode, size, can_switch): run_sync(_update_pvp_settings(user_id, mode, size, can_switch))
-
-# --- NEW TASKS EXPOSED ---
-def get_daily_tasks(user_id): return run_sync(_get_daily_tasks(user_id))
-def update_task_catch(user_id, pokemon_name): run_sync(_update_task_catch(user_id, pokemon_name))
-def update_task_pvp(user_id): run_sync(_update_task_pvp(user_id))
-def claim_daily_reward(user_id): return run_sync(_claim_daily_reward(user_id))
-
-# --- EXPORT DATA EXPOSED ---
-def export_all_data(): return run_sync(_export_all_data())
+def restore_sqlite_data(users_data, pokemons_data, groups_data):
+    conn = get_conn()
+    cur = conn.cursor()
+    if users_data:
+        execute_values(cur, "INSERT INTO users (user_id, tries_left, region, last_reset) VALUES %s ON CONFLICT (user_id) DO NOTHING", users_data)
+    if pokemons_data:
+        execute_values(cur, "INSERT INTO pokemons (user_id, name, region) VALUES %s", pokemons_data)
+    if groups_data:
+        execute_values(cur, "INSERT INTO groups (group_id) VALUES %s ON CONFLICT (group_id) DO NOTHING", groups_data)
+    conn.commit()
+    cur.close()
+    conn.close()
