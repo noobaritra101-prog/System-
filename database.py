@@ -27,7 +27,26 @@ def init_db():
         )
     ''')
     
-    # Safely inject the new Wins/Losses columns if migrating from an older version
+    # Safely inject new PvP setting columns if migrating from an older version
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN pvp_mode TEXT DEFAULT 'Mix'")
+        conn.commit()
+    except psycopg2.errors.DuplicateColumn:
+        conn.rollback()
+
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN pvp_size INTEGER DEFAULT 6")
+        conn.commit()
+    except psycopg2.errors.DuplicateColumn:
+        conn.rollback()
+
+    try:
+        cur.execute("ALTER TABLE users ADD COLUMN pvp_switch BOOLEAN DEFAULT TRUE")
+        conn.commit()
+    except psycopg2.errors.DuplicateColumn:
+        conn.rollback()
+
+    # Safely inject the new Wins/Losses columns
     try:
         cur.execute('ALTER TABLE users ADD COLUMN wins INTEGER DEFAULT 0')
         conn.commit()
