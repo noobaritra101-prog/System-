@@ -1,5 +1,5 @@
 pyTelegramBotAPI
 aiohttp
 asyncpg
-Pillow
+pillow
 requests
