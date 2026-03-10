@@ -10,6 +10,7 @@ import sqlite3
 import random
 import json 
 import io 
+from collections import Counter # <-- Added for /world stats
 
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
@@ -23,7 +24,8 @@ from api_utils import (
     get_species_catch_rate_sync,
     get_pokemon_stats_sync,
     get_pokemon_id_sync,
-    REGION_DEX
+    REGION_DEX,
+    pokemon_name_to_id_cache # <-- Added for /world stats
 )
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
@@ -209,6 +211,7 @@ def cmd_start(message):
         "📱 `/pokedex <name>` \\- Check stats\n"
         "🥊 `/pvp` \\- Reply to a user to battle\n"
         "🎒 `/myteam` \\- View your PvP team secrets \\(in Battle\\)\n"
+        "🌍 `/world` \\- View global server statistics\n"
         "🔄 `/trade` \\- Reply to a user to trade\n"
         "🏆 `/flex` \\- View the Global Leaderboard\n"
         "📋 `/task` \\- Daily Rewards\n"
@@ -332,7 +335,6 @@ def cmd_release(message):
 def cmd_pvp(message):
     pvp.handle_pvp_command(bot, message)
 
-# --- NEW: /myteam COMMAND ---
 @bot.message_handler(commands=["myteam"])
 def cmd_myteam(message):
     user_id = message.from_user.id
@@ -377,6 +379,107 @@ def cmd_myteam(message):
             safe_send(message.chat.id, escape_md("⚠️ I cannot DM you! Please send me a private message first so I can share your team details privately."), reply_to_id=message.message_id)
         else:
             logger.error(f"Error sending /myteam DM: {e}")
+
+@bot.message_handler(commands=["world", "worldstat"])
+def cmd_world(message):
+    args = message.text.split(maxsplit=1)
+    
+    # Send loading message because calculating the whole world takes a second!
+    status_msg = safe_send(message.chat.id, "🌍 *Gathering Global Safari Data...*\n_Scanning all trainers..._", reply_to_id=message.message_id)
+    if not status_msg: return
+
+    def calculate_world_data():
+        try:
+            users = db.get_all_users()
+            all_pokemon = []
+            owner_map = {} # Maps pokemon_name to a list of user_ids who own it
+            
+            # Gather every single Pokemon in existence
+            for uid in users:
+                pokes = db.list_user_pokemon_names(uid)
+                for p in pokes:
+                    name_lower = p.lower()
+                    all_pokemon.append(name_lower)
+                    if name_lower not in owner_map:
+                        owner_map[name_lower] = []
+                    owner_map[name_lower].append(uid)
+                    
+            counts = Counter(all_pokemon)
+            
+            # ==========================================
+            # MODE 1: SPECIFIC POKEMON (e.g. /world Pikachu)
+            # ==========================================
+            if len(args) > 1:
+                target = args[1].strip().lower()
+                target_display = args[1].strip().title()
+                
+                if target not in owner_map:
+                    text = f"❌ *No one in the world has caught a {escape_md(target_display)} yet\\!*"
+                    bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+                    return
+                    
+                target_counts = Counter(owner_map[target])
+                top_owners = target_counts.most_common(10) # Get Top 10 hoarders
+                total_caught = sum(target_counts.values())
+                
+                text = f"📊 *Global Data: {escape_md(target_display)}*\n"
+                text += f"━━━━━━━━━━━━━━\n"
+                text += f"🌍 *Total in Existence:* {total_caught}\n\n"
+                text += f"👑 *Top Owners:*\n"
+                
+                for uid, count in top_owners:
+                    try:
+                        user_obj = bot.get_chat(uid)
+                        u_name = user_obj.first_name if user_obj.first_name else "Trainer"
+                    except:
+                        u_name = "Trainer"
+                    
+                    text += f"\\- [{escape_md(u_name)}](tg://user?id={uid}) — {count} caught\n"
+                    time.sleep(0.1) # Prevent Telegram rate limit from fetching names
+                    
+                bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+                return
+
+            # ==========================================
+            # MODE 2: GLOBAL WORLD STATS (e.g. /world)
+            # ==========================================
+            total_caught_overall = len(all_pokemon)
+            unique_caught = len(counts)
+            
+            # Find uncaught Pokemon by comparing caught ones to the master cache
+            all_possible = set(pokemon_name_to_id_cache.keys())
+            caught_set = set(counts.keys())
+            uncaught_set = all_possible - caught_set
+            
+            top_5 = counts.most_common(5)
+            
+            text = f"🌍 *Global Pokémon World Data*\n"
+            text += f"━━━━━━━━━━━━━━\n"
+            text += f"🏆 *Total Caught Worldwide:* {total_caught_overall}\n"
+            text += f"🧬 *Unique Species Discovered:* {unique_caught}/898\n"
+            text += f"👻 *Undiscovered Species:* {len(uncaught_set)}\n\n"
+            
+            text += f"📈 *Most Caught Pokémon:*\n"
+            for i, (name, count) in enumerate(top_5):
+                text += f"{i+1}\\. *{escape_md(name.title())}* \\({count} caught\\)\n"
+                
+            # Randomly tease 5 uncaught Pokemon!
+            if uncaught_set:
+                sample_uncaught = random.sample(list(uncaught_set), min(5, len(uncaught_set)))
+                text += f"\n🔍 *Rumored Uncaught Pokémon:*\n"
+                for name in sample_uncaught:
+                    text += f"\\- ||{escape_md(name.title())}||\n"
+                    
+            text += f"\n_Tip: Use_ `/world <pokemon>` _to track a specific Pokémon\\!_"
+            
+            bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+            
+        except Exception as e:
+            logger.error(f"World Stat Error: {e}")
+            bot.edit_message_text(escape_md("❌ An error occurred calculating world data."), message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+
+    # Run in a background thread so the bot doesn't freeze while calculating!
+    threading.Thread(target=calculate_world_data, daemon=True).start()
 
 @bot.message_handler(commands=["trade"])
 def cmd_trade(message):
