@@ -248,7 +248,7 @@ def cmd_task(message):
     db.add_user_if_new(message.from_user.id)
     tasks.render_tasks_ui(bot, message.chat.id, message.from_user.id)
 
-# --- NEW IMAGE-BASED TRAINER CARD PROFILE ---
+# --- IMAGE-BASED TRAINER CARD PROFILE ---
 @bot.message_handler(commands=["profile", "trainer"])
 def cmd_profile(message):
     user_id = message.from_user.id
@@ -281,43 +281,39 @@ def cmd_profile(message):
             draw = ImageDraw.Draw(img)
             img_w, img_h = img.size
             
+            # --- FONT FIX: Try to load bold, fallback to normal, error if missing ---
             try:
-                font_large = ImageFont.truetype("arial.ttf", int(img_h * 0.04))
-                font_medium = ImageFont.truetype("arial.ttf", int(img_h * 0.03))
+                # We use a larger multiplier (0.045) and a bold font for better readability
+                font_large = ImageFont.truetype("arialbd.ttf", int(img_h * 0.045))
+                font_medium = ImageFont.truetype("arialbd.ttf", int(img_h * 0.035))
             except IOError:
-                font_large = font_medium = ImageFont.load_default()
+                try:
+                    font_large = ImageFont.truetype("arial.ttf", int(img_h * 0.045))
+                    font_medium = ImageFont.truetype("arial.ttf", int(img_h * 0.035))
+                except IOError:
+                    logger.error("⚠️ FONT FILE MISSING! Upload arialbd.ttf or arial.ttf to your folder!")
+                    font_large = font_medium = ImageFont.load_default()
 
-            pfp_bytes = None
-            try:
-                pfp_info = bot.get_user_profile_photos(user_id, limit=1)
-                if pfp_info.total_count > 0:
-                    file_info = bot.get_file(pfp_info.photos[0][-1].file_id)
-                    pfp_bytes = bot.download_file(file_info.file_path)
-            except Exception as e:
-                logger.error(f"Could not fetch PFP: {e}")
-
-            if pfp_bytes:
-                pfp_img = Image.open(io.BytesIO(pfp_bytes)).convert("RGBA")
-                avatar_size = int(img_w * 0.35)
-                pfp_img = pfp_img.resize((avatar_size, avatar_size)) 
-                
-                avatar_x = int(img_w * 0.08)
-                avatar_y = int(img_h * 0.25)
-                img.paste(pfp_img, (avatar_x, avatar_y), pfp_img) 
-
-            # Drawing the Data Text onto the Template
-            draw.text((img_w * 0.65, img_h * 0.29), str(user_name), fill="black", font=font_large)
-            draw.text((img_w * 0.65, img_h * 0.38), str(user_id), fill="black", font=font_medium)
-            draw.text((img_w * 0.65, img_h * 0.44), str(region), fill="black", font=font_medium)
-            draw.text((img_w * 0.65, img_h * 0.54), str(count), fill="black", font=font_medium)
+            # --- TEXT PLACEMENT (Profile Picture code removed) ---
             
-            draw.text((img_w * 0.55, img_h * 0.62), str(rarest_caught), fill="black", font=font_medium)
-            draw.text((img_w * 0.55, img_h * 0.68), f"{tries_left} / 300", fill="black", font=font_medium)
+            # Top Right Box (Name, ID, Region, Total)
+            # We push X to 0.58 so it clears the labels on the left
+            draw.text((img_w * 0.58, img_h * 0.28), str(user_name), fill="black", font=font_large)
+            draw.text((img_w * 0.58, img_h * 0.37), str(user_id), fill="black", font=font_medium)
+            draw.text((img_w * 0.58, img_h * 0.44), str(region), fill="black", font=font_medium)
+            draw.text((img_w * 0.58, img_h * 0.52), str(count), fill="black", font=font_medium)
             
-            draw.text((img_w * 0.65, img_h * 0.79), str(wins), fill="black", font=font_medium)
-            draw.text((img_w * 0.65, img_h * 0.85), str(losses), fill="black", font=font_medium)
-            draw.text((img_w * 0.65, img_h * 0.91), str(total_battles), fill="black", font=font_medium)
+            # Middle Box (Rarest, Scouts)
+            draw.text((img_w * 0.58, img_h * 0.60), str(rarest_caught), fill="black", font=font_medium)
+            draw.text((img_w * 0.58, img_h * 0.67), f"{tries_left} / 300", fill="black", font=font_medium)
+            
+            # Bottom Box (Battle Record)
+            # Push X further right (0.70) so it centers in the right-side column
+            draw.text((img_w * 0.70, img_h * 0.79), str(wins), fill="black", font=font_medium)
+            draw.text((img_w * 0.70, img_h * 0.85), str(losses), fill="black", font=font_medium)
+            draw.text((img_w * 0.70, img_h * 0.91), str(total_battles), fill="black", font=font_medium)
 
+            # --- RENDER AND SEND ---
             final_img = img.convert("RGB")
             out = io.BytesIO()
             final_img.save(out, format="JPEG")
@@ -328,7 +324,7 @@ def cmd_profile(message):
 
         except Exception as e:
             logger.error(f"Image Gen Error: {e}")
-            try: bot.edit_message_text(f"❌ Failed to generate Trainer Card. Ensure `template.jpg` and `arial.ttf` are in the folder.", chat_id=message.chat.id, message_id=status_msg.message_id)
+            try: bot.edit_message_text(f"❌ Failed to generate Trainer Card. Ensure `template.jpg` and `arialbd.ttf` are in the folder.", chat_id=message.chat.id, message_id=status_msg.message_id)
             except: pass
 
     threading.Thread(target=generate_and_send, daemon=True).start()
@@ -898,7 +894,7 @@ def cb_handler(call):
             
         if call.data.startswith("refresh_flex_"):
             owner_id = int(call.data.split("_")[2])
-            if call.from_user.id != owner_id:
+            if call.fromuser.id != owner_id:
                 return bot.answer_callback_query(call.id, "❌ You cannot refresh someone else's flex menu!", show_alert=True)
             bot.answer_callback_query(call.id, "🔄 Refreshing Leaderboard...")
             return send_leaderboard(call.message.chat.id, owner_id, call.message.message_id)
