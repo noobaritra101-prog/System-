@@ -10,7 +10,7 @@ import sqlite3
 import random
 import json 
 import io 
-from collections import Counter # <-- Added for /world stats
+from collections import Counter
 
 from config import BOT_TOKEN, OWNER_ID, LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 import database as db
@@ -25,7 +25,7 @@ from api_utils import (
     get_pokemon_stats_sync,
     get_pokemon_id_sync,
     REGION_DEX,
-    pokemon_name_to_id_cache # <-- Added for /world stats
+    pokemon_name_to_id_cache
 )
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
@@ -384,17 +384,16 @@ def cmd_myteam(message):
 def cmd_world(message):
     args = message.text.split(maxsplit=1)
     
-    # Send loading message because calculating the whole world takes a second!
-    status_msg = safe_send(message.chat.id, "🌍 *Gathering Global Safari Data...*\n_Scanning all trainers..._", reply_to_id=message.message_id)
+    loading_text = "🌍 *Gathering Global Safari Data\\.\\.\\.*\n_Scanning all trainers\\.\\.\\._"
+    status_msg = safe_send(message.chat.id, loading_text, reply_to_id=message.message_id)
     if not status_msg: return
 
     def calculate_world_data():
         try:
             users = db.get_all_users()
             all_pokemon = []
-            owner_map = {} # Maps pokemon_name to a list of user_ids who own it
+            owner_map = {} 
             
-            # Gather every single Pokemon in existence
             for uid in users:
                 pokes = db.list_user_pokemon_names(uid)
                 for p in pokes:
@@ -407,7 +406,7 @@ def cmd_world(message):
             counts = Counter(all_pokemon)
             
             # ==========================================
-            # MODE 1: SPECIFIC POKEMON (e.g. /world Pikachu)
+            # MODE 1: SPECIFIC POKEMON
             # ==========================================
             if len(args) > 1:
                 target = args[1].strip().lower()
@@ -419,7 +418,7 @@ def cmd_world(message):
                     return
                     
                 target_counts = Counter(owner_map[target])
-                top_owners = target_counts.most_common(10) # Get Top 10 hoarders
+                top_owners = target_counts.most_common(10)
                 total_caught = sum(target_counts.values())
                 
                 text = f"📊 *Global Data: {escape_md(target_display)}*\n"
@@ -435,18 +434,17 @@ def cmd_world(message):
                         u_name = "Trainer"
                     
                     text += f"\\- [{escape_md(u_name)}](tg://user?id={uid}) — {count} caught\n"
-                    time.sleep(0.1) # Prevent Telegram rate limit from fetching names
+                    time.sleep(0.1) 
                     
                 bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
                 return
 
             # ==========================================
-            # MODE 2: GLOBAL WORLD STATS (e.g. /world)
+            # MODE 2: GLOBAL WORLD STATS
             # ==========================================
             total_caught_overall = len(all_pokemon)
             unique_caught = len(counts)
             
-            # Find uncaught Pokemon by comparing caught ones to the master cache
             all_possible = set(pokemon_name_to_id_cache.keys())
             caught_set = set(counts.keys())
             uncaught_set = all_possible - caught_set
@@ -463,22 +461,21 @@ def cmd_world(message):
             for i, (name, count) in enumerate(top_5):
                 text += f"{i+1}\\. *{escape_md(name.title())}* \\({count} caught\\)\n"
                 
-            # Randomly tease 5 uncaught Pokemon!
             if uncaught_set:
                 sample_uncaught = random.sample(list(uncaught_set), min(5, len(uncaught_set)))
                 text += f"\n🔍 *Rumored Uncaught Pokémon:*\n"
                 for name in sample_uncaught:
                     text += f"\\- ||{escape_md(name.title())}||\n"
                     
-            text += f"\n_Tip: Use_ `/world <pokemon>` _to track a specific Pokémon\\!_"
+            text += f"\n_Tip: Use_ `/world pokemon_name` _to track a specific Pokémon\\!_"
             
             bot.edit_message_text(text, message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
             
         except Exception as e:
             logger.error(f"World Stat Error: {e}")
-            bot.edit_message_text(escape_md("❌ An error occurred calculating world data."), message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+            try: bot.edit_message_text(escape_md("❌ An error occurred calculating world data."), message.chat.id, status_msg.message_id, parse_mode="MarkdownV2")
+            except: pass
 
-    # Run in a background thread so the bot doesn't freeze while calculating!
     threading.Thread(target=calculate_world_data, daemon=True).start()
 
 @bot.message_handler(commands=["trade"])
