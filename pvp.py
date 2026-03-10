@@ -308,24 +308,32 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
 # --- COMMAND HANDLER ---
 def handle_pvp_command(bot, message):
-    if not message.reply_to_message: return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
-    p1_id, p2_id = message.from_user.id, message.reply_to_message.from_user.id
-    if p1_id == p2_id: return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
+    if not message.reply_to_message: 
+        return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
     
+    p1_id = message.from_user.id
+    p2_id = message.reply_to_message.from_user.id
+    
+    if p1_id == p2_id: 
+        return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
+        
+    # --- BUG FIX: Prevent challenging bots ---
+    if message.reply_to_message.from_user.is_bot:
+        return bot.reply_to(message, escape_md("❌ You cannot challenge bots!"))
+        
+    # --- BUG FIX: Check if players are registered ---
+    if not db.get_user(p1_id):
+        return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
+    if not db.get_user(p2_id):
+        return bot.reply_to(message, escape_md("❌ That user hasn't started the bot yet! They must /start the bot to battle."))
+    
+    # Check if either player is already fighting an active battle
     if is_in_battle(p1_id) or is_in_battle(p2_id): 
         return bot.reply_to(message, escape_md("❌ Someone is already in a battle!"))
 
-    to_remove = []
-    for mid, c in list(pending_challenges.items()):
-        if p1_id in [c["p1_id"], c["p2_id"]]:
-            c["timer"].cancel()
-            to_remove.append(mid)
-            try: bot.edit_message_text("❌ *Challenge cancelled because a new one was started\\.*", c["chat_id"], mid, parse_mode="MarkdownV2")
-            except: pass
-    for mid in to_remove: pending_challenges.pop(mid, None)
-
-    if is_in_pending_challenge(p2_id): 
-        return bot.reply_to(message, escape_md("❌ That user already has a pending challenge!"))
+    # --- BUG FIX: Strict Pending Challenge Check (1 -> 2 -> 3 fix) ---
+    if is_in_pending_challenge(p1_id) or is_in_pending_challenge(p2_id):
+        return bot.reply_to(message, escape_md("❌ One of you already has a pending challenge! Accept, decline, or wait for it to expire."))
 
     mode, size, can_switch = db.get_pvp_settings(p1_id)
     sent = bot.reply_to(message, escape_md("🔄 Loading challenge..."), parse_mode="MarkdownV2")
@@ -537,10 +545,7 @@ def handle_pvp_callback(bot, call):
                                 def_stat = max(1, dfn["def"])
                                 
                                 # --- OFFICIAL POKEMON DAMAGE FORMULA ---
-                                # Level = 100. (2 * 100 / 5) + 2 = 42
                                 base_damage = ((42 * mv_pow * (atk["atk"] / def_stat)) / 50) + 2
-                                
-                                # Official RNG damage roll (85% to 100%)
                                 rand_roll = random.uniform(0.85, 1.00)
                                 
                                 dmg = max(1, int(base_damage * mult * stab * crit * rand_roll))
