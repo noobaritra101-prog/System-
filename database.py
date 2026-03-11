@@ -60,10 +60,8 @@ def init_db():
             
             # --- AUTO-REPAIR THE BAD TASKS TABLE ---
             try:
-                # Check if our table has the correct advanced columns
                 cur.execute("SELECT target_p1 FROM daily_tasks LIMIT 1")
             except psycopg2.errors.UndefinedColumn:
-                # If it doesn't, it's the broken generic table. We safely drop it to rebuild it!
                 conn.rollback()
                 cur.execute("DROP TABLE IF EXISTS daily_tasks")
                 conn.commit()
@@ -194,7 +192,7 @@ def delete_pokemon(user_id, name):
             conn.commit()
             return deleted
 
-# ==================== DAILY TASKS (ADVANCED VERSION) ====================
+# ==================== DAILY TASKS (PROBABILITY FIX) ====================
 def _ensure_daily_tasks(cur, user_id):
     """Helper to reset tasks automatically at midnight and generate specific targets."""
     today = datetime.date.today()
@@ -202,17 +200,21 @@ def _ensure_daily_tasks(cur, user_id):
     row = cur.fetchone()
     
     if not row or row[0] != today:
-        # Generate new randomized task goals!
+        # Generate new randomized task goals
         all_pokes = list(pokemon_name_to_id_cache.keys())
         if not all_pokes: all_pokes = ["Pikachu", "Eevee", "Charmander", "Squirtle"]
         
         t_p1 = random.choice(all_pokes).title()
         t_p2 = random.choice(all_pokes).title()
-        t_pvp = random.randint(1, 3) # Win 1 to 3 matches
-        t_catch = random.randint(5, 15) # Catch 5 to 15 pokemon
+        t_pvp = random.randint(1, 3) 
+        t_catch = random.randint(5, 15) 
         
-        # FIX: We convert LEGENDARY_NAMES to a list so random.choice() can read it!
-        reward = random.choice(list(LEGENDARY_NAMES)) if LEGENDARY_NAMES else "Mewtwo"
+        # --- PROBABILITY FIX: 5% Legendary, 95% Normal ---
+        if random.random() < 0.05: # 5% Chance
+            reward = random.choice(list(LEGENDARY_NAMES)).title() if LEGENDARY_NAMES else "Mewtwo"
+        else: # 95% Chance
+            normal_pokes = [p for p in all_pokes if p.title() not in LEGENDARY_NAMES]
+            reward = random.choice(normal_pokes).title() if normal_pokes else random.choice(all_pokes).title()
         
         if not row:
             cur.execute("""
@@ -236,7 +238,7 @@ def get_daily_tasks(user_id):
             row = cur.fetchone()
             conn.commit()
             if row:
-                return dict(row) # This returns the exact dictionary structure your tasks.py expects!
+                return dict(row)
             return None
 
 def update_task_catch(user_id, pokemon_name):
@@ -403,7 +405,7 @@ def export_all_data():
             cur.execute("SELECT group_id FROM groups")
             groups = [{"group_id": r[0]} for r in cur.fetchall()]
             
-            return {"users": users, "pokemons": groups, "groups": groups}
+            return {"users": users, "pokemons": pokemons, "groups": groups}
 
 def restore_sqlite_data(users_data, pokemons_data, groups_data):
     with get_db_connection() as conn:
