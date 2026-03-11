@@ -64,6 +64,12 @@ FORM_TYPE_CHANGES = {
     "Mega Raichu Y": "Electric/Fairy",
     "Mega Lucario Z": "Fighting/Psychic",
     "Mega Zeraora": "Electric/Fighting",
+    "Mega Emboar": "Fire/Fighting",
+    "Mega Greninja": "Water/Dark",
+    "Mega Malamar": "Dark/Psychic",
+    "Mega Eelektross": "Electric",
+    "Mega Falinks": "Fighting",
+    "Mega Chimecho": "Psychic",
     "Primal Groudon": "Ground/Fire",
     "Crowned Zacian": "Fairy/Steel",
     "Crowned Zamazenta": "Fighting/Steel",
@@ -85,7 +91,13 @@ MEGA_STAT_BUFFS = {
     "Shadow Rider Calyrex": {"atk": 0, "def": 0, "spd": 70},
     "Ash-Greninja": {"atk": 50, "def": 0, "spd": 10},
     "Mega Dragonite": {"atk": 40, "def": 20, "spd": 20}, 
-    "Mega Meganium": {"atk": 10, "def": 40, "spd": 30} 
+    "Mega Meganium": {"atk": 10, "def": 40, "spd": 30},
+    "Mega Emboar": {"atk": 40, "def": 20, "spd": 20},
+    "Mega Greninja": {"atk": 40, "def": 10, "spd": 30},
+    "Mega Malamar": {"atk": 20, "def": 40, "spd": 20},
+    "Mega Eelektross": {"atk": 30, "def": 30, "spd": 20},
+    "Mega Falinks": {"atk": 40, "def": 20, "spd": 20},
+    "Mega Chimecho": {"atk": 20, "def": 40, "spd": 20}
 }
 
 # --- HELPERS ---
@@ -93,6 +105,16 @@ def safe_answer(bot, call_id, text="", show_alert=False):
     """Answers callback queries to remove the spinning loading icon instantly."""
     try: bot.answer_callback_query(call_id, text, show_alert=show_alert)
     except Exception: pass
+
+def to_small_caps(text):
+    """Converts regular lowercase letters into premium small-caps font."""
+    small_caps_map = {
+        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
+        'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
+        'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
+        'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
+    }
+    return "".join(char if char.isupper() else small_caps_map.get(char.lower(), char) for char in text)
 
 def get_faster_player(b):
     p1_spd = b["p1_team"][b["p1_idx"]]["spd"]
@@ -310,7 +332,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
             elif active_poke["name"] == "Zacian": btn_lbl = "🗡️ Crowned Form"
             elif active_poke["name"] == "Zamazenta": btn_lbl = "🛡️ Crowned Form"
             elif active_poke["name"] == "Calyrex": btn_lbl = "🐎 Mount Spectrier"
-            elif active_poke["name"] == "Greninja": btn_lbl = "💧 Bond Phenomenon"
+            elif active_poke["name"] == "Greninja": btn_lbl = "💧 Form Change"
             else: btn_lbl = "💎 Mega Evolve"
             
             kb.row(types.InlineKeyboardButton(btn_lbl, callback_data=f"pvp_mega_{battle_id}_{turn}"))
@@ -328,6 +350,12 @@ def render_pvp_ui(bot, chat_id, battle_id):
         ui_text += f" Choose a Mega Evolution form:\n"
         kb.row(types.InlineKeyboardButton("Standard Mega", callback_data=f"pvp_mega_{battle_id}_{turn}_Standard"),
                types.InlineKeyboardButton("Mega Form Z", callback_data=f"pvp_mega_{battle_id}_{turn}_Z"))
+        kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_back_{battle_id}_{turn}"))
+
+    elif b["state"] == "mega_greninja_choice":
+        ui_text += f" Choose a Form Change:\n"
+        kb.row(types.InlineKeyboardButton("Mega Greninja", callback_data=f"pvp_mega_{battle_id}_{turn}_Mega"),
+               types.InlineKeyboardButton("Ash-Greninja", callback_data=f"pvp_mega_{battle_id}_{turn}_Ash"))
         kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
     elif b["state"] in ["switch_menu", "force_switch"]:
@@ -486,7 +514,7 @@ def handle_pvp_callback(bot, call):
                         p["base_def"] = base_def
                         p["base_spd"] = base_spd
 
-                        if base_hp <= 1: p["max_hp"] = 1 # Shedinja exception
+                        if base_hp <= 1: p["max_hp"] = 1 
                         else: p["max_hp"] = int((2 * base_hp) + 31 + 21 + 110) 
                             
                         p["hp"] = p["max_hp"]
@@ -506,7 +534,7 @@ def handle_pvp_callback(bot, call):
                                 for m in p["moves"]:
                                     if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
                         
-                        special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex", "Greninja"]
+                        special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Greninja", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex"]
                         p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
                         p["is_mega"] = False
                         
@@ -525,15 +553,6 @@ def handle_pvp_callback(bot, call):
                 
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
             threading.Thread(target=setup).start()
-            return
-
-        elif action == "decline":
-            p1_id, p2_id = int(parts[2]), int(parts[3])
-            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "❌ Only the challenged player can decline.", show_alert=True)
-            chal_data = pending_challenges.pop(call.message.message_id, None)
-            if chal_data: 
-                chal_data["timer"].cancel()
-                bot.edit_message_text("❌ *Challenge declined\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
             return
 
         # IN-BATTLE ACTIONS
@@ -566,8 +585,6 @@ def handle_pvp_callback(bot, call):
                 if now - b.get("last_edit", 0) < 0.5:
                     return safe_answer(bot, call.id, "⏳ Please don't click so fast!")
                 b["last_edit"] = now
-                
-                # INSTANT BUTTON FEEDBACK
                 safe_answer(bot, call.id, "")
 
             if action == "move":
@@ -611,13 +628,8 @@ def handle_pvp_callback(bot, call):
                             if mv_pow > 0:
                                 def_stat = max(1, dfn["def"])
                                 
-                                # --- OFFICIAL POKEMON DAMAGE FORMULA ---
-                                # Level = 100. (2 * 100 / 5) + 2 = 42
                                 base_damage = ((42 * mv_pow * (atk["atk"] / def_stat)) / 50) + 2
-                                
-                                # Official RNG damage roll (85% to 100%)
                                 rand_roll = random.uniform(0.85, 1.00)
-                                
                                 dmg = max(1, int(base_damage * mult * stab * crit * rand_roll))
                                 dfn["hp"] = max(0, dfn["hp"] - dmg)
                                 
@@ -652,11 +664,9 @@ def handle_pvp_callback(bot, call):
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
                         
-                        # --- BATTLE STATS: Attacker Wins! ---
                         db.update_task_pvp(b[actual_turn + "_id"])
                         db.update_battle_stats(b[actual_turn + "_id"], is_win=True)
                         db.update_battle_stats(b[defender + "_id"], is_win=False)
-                        
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = defender
                 elif atk["hp"] <= 0:
@@ -669,11 +679,9 @@ def handle_pvp_callback(bot, call):
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
                         
-                        # --- BATTLE STATS: Defender Wins! ---
                         db.update_task_pvp(b[defender + "_id"])
                         db.update_battle_stats(b[defender + "_id"], is_win=True)
                         db.update_battle_stats(b[actual_turn + "_id"], is_win=False)
-                        
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = actual_turn
                 else:
@@ -713,7 +721,6 @@ def handle_pvp_callback(bot, call):
                 
                 old_name = p['name']
                 
-                # --- NEW BRANCHING MENUS ---
                 if old_name in ["Charizard", "Mewtwo", "Raichu"] and len(parts) == 4:
                     b["state"] = "mega_xy_choice"
                     render_pvp_ui(bot, call.message.chat.id, battle_id)
@@ -723,30 +730,42 @@ def handle_pvp_callback(bot, call):
                     b["state"] = "mega_lucario_choice"
                     render_pvp_ui(bot, call.message.chat.id, battle_id)
                     return
+
+                if old_name == "Greninja" and len(parts) == 4:
+                    b["state"] = "mega_greninja_choice"
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                    return
                     
                 xy_choice = parts[4] if len(parts) == 5 and old_name in ["Charizard", "Mewtwo", "Raichu"] else ""
                 z_choice = parts[4] if len(parts) == 5 and old_name == "Lucario" else ""
+                gren_choice = parts[4] if len(parts) == 5 and old_name == "Greninja" else ""
                 
                 if old_name in ["Groudon", "Kyogre"]:
                     new_name = f"Primal {old_name}"
-                    action_verb = "underwent Primal Reversion"
+                    action_verb = "Underwent Primal Reversion"
                     search_name = f"{old_name.lower()}-primal"
                     icon = "🌋"
                 elif old_name in ["Zacian", "Zamazenta"]:
                     new_name = f"Crowned {old_name}"
-                    action_verb = "took on its Crowned Form"
+                    action_verb = "Took on its Crowned Form"
                     search_name = f"{old_name.lower()}-crowned"
                     icon = "🗡️" if old_name == "Zacian" else "🛡️"
                 elif old_name == "Calyrex":
                     new_name = "Shadow Rider Calyrex"
-                    action_verb = "mounted Spectrier"
+                    action_verb = "Mounted Spectrier"
                     search_name = "calyrex-shadow"
                     icon = "🐎"
                 elif old_name == "Greninja":
-                    new_name = "Ash-Greninja"
-                    action_verb = "activated the Bond Phenomenon"
-                    search_name = "greninja-ash"
-                    icon = "💧"
+                    if gren_choice == "Ash":
+                        new_name = "Ash-Greninja"
+                        action_verb = "Activated the Bond Phenomenon"
+                        search_name = "greninja-ash"
+                        icon = "💧"
+                    else:
+                        new_name = "Mega Greninja"
+                        action_verb = "Mega Evolved"
+                        search_name = "greninja-mega"
+                        icon = "💎"
                 else:
                     if z_choice == "Standard" or (not z_choice and not xy_choice):
                         new_name = f"Mega {old_name}"
@@ -776,7 +795,7 @@ def handle_pvp_callback(bot, call):
                 p["name"] = new_name
                 if new_name in FORM_TYPE_CHANGES: p["types"] = FORM_TYPE_CHANGES[new_name]
                 
-                b["log"] = f"{old_name} {action_verb} into {new_name}!"
+                b["log"] = f"{old_name} {action_verb.lower()} into {new_name}!"
                 b["state"] = "menu"
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
@@ -785,12 +804,16 @@ def handle_pvp_callback(bot, call):
                         poke_id = get_pokemon_id_sync(search_name)
                         if poke_id:
                             img_url = official_shiny_artwork_url(poke_id)
-                            caption = f"{icon} *{escape_md(old_name)}* \\.\\.\\. {escape_md(action_verb)} into *{escape_md(new_name)}*\\!"
-                            try: bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
+                            
+                            cap_text = f"{icon} {to_small_caps(old_name)}... {to_small_caps(action_verb)} ɪɴᴛᴏ {to_small_caps(new_name)}!"
+                            caption = f"*{escape_md(cap_text)}*"
+                            
+                            try: 
+                                bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2", reply_to_message_id=battle_id)
                             except Exception as e:
                                 if "429" in str(e) or "Too Many Requests" in str(e):
                                     time.sleep(3)
-                                    try: bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2")
+                                    try: bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2", reply_to_message_id=battle_id)
                                     except: pass
                     except Exception as e: logger.error(f"Mega Image Error: {e}")
                 
@@ -814,7 +837,6 @@ def handle_pvp_callback(bot, call):
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
                     except: pass
                 
-                # --- BATTLE STATS: Fleeing is a Loss ---
                 db.update_battle_stats(runner_id, is_win=False)
                 db.update_battle_stats(winner_id, is_win=True)
                 
