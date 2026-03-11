@@ -427,6 +427,7 @@ def cmd_myteam(message):
         else:
             logger.error(f"Error sending /myteam DM: {e}")
 
+
 @bot.message_handler(commands=["trade"])
 def cmd_trade(message):
     db.add_user_if_new(message.from_user.id)
@@ -1052,7 +1053,7 @@ def cb_handler(call):
                 types.InlineKeyboardButton("<<", callback_data=f"{action}_{uid}_0"),
                 types.InlineKeyboardButton("<", callback_data=f"{action}_{uid}_{max(0, page_idx - 1)}"),
                 types.InlineKeyboardButton(">", callback_data=f"{action}_{uid}_{min(len(pages) - 1, page_idx + 1)}"),
-                types.KeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
+                types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}") # <-- THE FIX
             )
             try: 
                 bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
