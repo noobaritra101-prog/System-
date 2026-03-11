@@ -3,8 +3,10 @@ import psycopg2
 from psycopg2 import pool
 from psycopg2.extras import execute_values, DictCursor
 import datetime
+import random
 from contextlib import contextmanager
 from config import DATABASE_URL, logger
+from api_utils import pokemon_name_to_id_cache, LEGENDARY_NAMES
 
 # ==================== CONNECTION POOLING ====================
 try:
@@ -55,22 +57,39 @@ def init_db():
                     group_id BIGINT PRIMARY KEY
                 )
             ''')
-            # Create Daily Tasks Table
+            
+            # --- AUTO-REPAIR THE BAD TASKS TABLE ---
+            try:
+                # Check if our table has the correct advanced columns
+                cur.execute("SELECT target_p1 FROM daily_tasks LIMIT 1")
+            except psycopg2.errors.UndefinedColumn:
+                # If it doesn't, it's the broken generic table. We safely drop it to rebuild it!
+                conn.rollback()
+                cur.execute("DROP TABLE IF EXISTS daily_tasks")
+                conn.commit()
+            except psycopg2.errors.UndefinedTable:
+                conn.rollback()
+
+            # Create Advanced Daily Tasks Table
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS daily_tasks (
                     user_id BIGINT PRIMARY KEY,
                     task_date DATE,
-                    catch_count INTEGER DEFAULT 0,
-                    pvp_count INTEGER DEFAULT 0,
-                    trade_count INTEGER DEFAULT 0,
-                    catch_claimed BOOLEAN DEFAULT FALSE,
-                    pvp_claimed BOOLEAN DEFAULT FALSE,
-                    trade_claimed BOOLEAN DEFAULT FALSE
+                    target_p1 TEXT,
+                    target_p2 TEXT,
+                    target_pvp INTEGER,
+                    target_catch INTEGER,
+                    prog_p1 BOOLEAN DEFAULT FALSE,
+                    prog_p2 BOOLEAN DEFAULT FALSE,
+                    prog_pvp INTEGER DEFAULT 0,
+                    prog_catch INTEGER DEFAULT 0,
+                    reward_poke TEXT,
+                    claimed BOOLEAN DEFAULT FALSE
                 )
             ''')
             conn.commit()
             
-            # 2. Auto-Updater: Safely injects new columns if they are missing
+            # 2. Auto-Updater for Core Tables
             updates = [
                 ("users", "pvp_mode", "TEXT DEFAULT 'Mix'"),
                 ("users", "pvp_size", "INTEGER DEFAULT 6"),
@@ -84,7 +103,7 @@ def init_db():
                     cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {dtype}")
                     conn.commit()
                 except psycopg2.errors.DuplicateColumn:
-                    conn.rollback() # Column exists, skip safely
+                    conn.rollback()
                     
     logger.info("✅ Database verified and patched successfully.")
 
@@ -175,79 +194,95 @@ def delete_pokemon(user_id, name):
             conn.commit()
             return deleted
 
-# ==================== DAILY TASKS ====================
+# ==================== DAILY TASKS (ADVANCED VERSION) ====================
 def _ensure_daily_tasks(cur, user_id):
-    """Helper to reset tasks automatically at midnight."""
+    """Helper to reset tasks automatically at midnight and generate specific targets."""
     today = datetime.date.today()
     cur.execute("SELECT task_date FROM daily_tasks WHERE user_id = %s", (user_id,))
     row = cur.fetchone()
-    if not row:
-        cur.execute("INSERT INTO daily_tasks (user_id, task_date) VALUES (%s, %s)", (user_id, today))
-    elif row[0] != today:
-        cur.execute("""
-            UPDATE daily_tasks 
-            SET task_date = %s, catch_count = 0, pvp_count = 0, trade_count = 0, 
-                catch_claimed = FALSE, pvp_claimed = FALSE, trade_claimed = FALSE 
-            WHERE user_id = %s
-        """, (today, user_id))
+    
+    if not row or row[0] != today:
+        # Generate new randomized task goals!
+        all_pokes = list(pokemon_name_to_id_cache.keys())
+        if not all_pokes: all_pokes = ["Pikachu", "Eevee", "Charmander", "Squirtle"]
+        
+        t_p1 = random.choice(all_pokes).title()
+        t_p2 = random.choice(all_pokes).title()
+        t_pvp = random.randint(1, 3) # Win 1 to 3 matches
+        t_catch = random.randint(5, 15) # Catch 5 to 15 pokemon
+        reward = random.choice(LEGENDARY_NAMES) if LEGENDARY_NAMES else "Mewtwo"
+        
+        if not row:
+            cur.execute("""
+                INSERT INTO daily_tasks (user_id, task_date, target_p1, target_p2, target_pvp, target_catch, reward_poke)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (user_id, today, t_p1, t_p2, t_pvp, t_catch, reward))
+        else:
+            cur.execute("""
+                UPDATE daily_tasks 
+                SET task_date = %s, target_p1 = %s, target_p2 = %s, target_pvp = %s, target_catch = %s, 
+                    prog_p1 = FALSE, prog_p2 = FALSE, prog_pvp = 0, prog_catch = 0, 
+                    reward_poke = %s, claimed = FALSE
+                WHERE user_id = %s
+            """, (today, t_p1, t_p2, t_pvp, t_catch, reward, user_id))
 
 def get_daily_tasks(user_id):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=DictCursor) as cur:
             _ensure_daily_tasks(cur, user_id)
-            cur.execute("SELECT catch_count, pvp_count, trade_count, catch_claimed, pvp_claimed, trade_claimed FROM daily_tasks WHERE user_id = %s", (user_id,))
+            cur.execute("SELECT * FROM daily_tasks WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
             conn.commit()
-            
             if row:
-                # ULTIMATE FIX: This maps our progress counters to tiers 1, 2, 3, 4, and 5!
-                # tasks.py can now ask for ANY tier and it will safely return the correct number.
-                tasks_data = {}
-                for i in range(1, 6):
-                    tasks_data[f'prog_c{i}'] = row['catch_count']
-                    tasks_data[f'prog_p{i}'] = row['pvp_count']
-                    tasks_data[f'prog_t{i}'] = row['trade_count']
-                    tasks_data[f'claim_c{i}'] = row['catch_claimed']
-                    tasks_data[f'claim_p{i}'] = row['pvp_claimed']
-                    tasks_data[f'claim_t{i}'] = row['trade_claimed']
-                return tasks_data
+                return dict(row) # This returns the exact dictionary structure your tasks.py expects!
             return None
 
-def update_task_catch(user_id):
+def update_task_catch(user_id, pokemon_name):
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             _ensure_daily_tasks(cur, user_id)
-            cur.execute("UPDATE daily_tasks SET catch_count = catch_count + 1 WHERE user_id = %s", (user_id,))
+            cur.execute("SELECT target_p1, target_p2, prog_p1, prog_p2 FROM daily_tasks WHERE user_id = %s", (user_id,))
+            row = cur.fetchone()
+            if row:
+                t_p1, t_p2, p_p1, p_p2 = row
+                
+                # Check if they caught one of the specific target pokemon!
+                if pokemon_name.lower() == t_p1.lower() and not p_p1:
+                    cur.execute("UPDATE daily_tasks SET prog_p1 = TRUE WHERE user_id = %s", (user_id,))
+                if pokemon_name.lower() == t_p2.lower() and not p_p2:
+                    cur.execute("UPDATE daily_tasks SET prog_p2 = TRUE WHERE user_id = %s", (user_id,))
+                    
+                # Always tick up their overall catch count
+                cur.execute("UPDATE daily_tasks SET prog_catch = prog_catch + 1 WHERE user_id = %s", (user_id,))
             conn.commit()
 
 def update_task_pvp(user_id):
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             _ensure_daily_tasks(cur, user_id)
-            cur.execute("UPDATE daily_tasks SET pvp_count = pvp_count + 1 WHERE user_id = %s", (user_id,))
+            cur.execute("UPDATE daily_tasks SET prog_pvp = prog_pvp + 1 WHERE user_id = %s", (user_id,))
             conn.commit()
 
-def update_task_trade(user_id):
+def claim_daily_reward(user_id):
+    """Marks task as claimed and inserts the reward Pokemon directly into inventory."""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            _ensure_daily_tasks(cur, user_id)
-            cur.execute("UPDATE daily_tasks SET trade_count = trade_count + 1 WHERE user_id = %s", (user_id,))
-            conn.commit()
-
-def claim_task_reward(user_id, task_type):
-    # This smartly looks at the first letter ('c', 'p', or 't') so it handles 'p1', 'p2', 'p3', etc. perfectly!
-    category = str(task_type)[0].lower()
-    col = None
-    if category == 'c': col = 'catch_claimed'
-    elif category == 'p': col = 'pvp_claimed'
-    elif category == 't': col = 'trade_claimed'
-    
-    if not col: return
-    
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(f"UPDATE daily_tasks SET {col} = TRUE WHERE user_id = %s", (user_id,))
-            conn.commit()
+            cur.execute("SELECT reward_poke, claimed FROM daily_tasks WHERE user_id = %s", (user_id,))
+            row = cur.fetchone()
+            if row and not row[1]:
+                reward = row[0]
+                cur.execute("UPDATE daily_tasks SET claimed = TRUE WHERE user_id = %s", (user_id,))
+                
+                # Get user's region to spawn the reward properly
+                cur.execute("SELECT region FROM users WHERE user_id = %s", (user_id,))
+                user_reg = cur.fetchone()
+                reg = user_reg[0] if user_reg else "Reward"
+                
+                # Add the pokemon to their bag!
+                cur.execute("INSERT INTO pokemons (user_id, name, region) VALUES (%s, %s, %s)", (user_id, reward, reg))
+                conn.commit()
+                return True, reward
+            return False, None
 
 # ==================== PVP & BATTLE STATS ====================
 def get_battle_stats(user_id):
