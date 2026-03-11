@@ -7,7 +7,7 @@ OWNER_ID = 5716292610
 LOG_GROUP_ID = -1002790195961
 FLEE_TIMEOUT = 120
 
-# NEW POSTGRESQL URL
+# POSTGRESQL URL
 DATABASE_URL = "postgresql://postgres.cywehetfjxedufhpktfz:ncXUOSyHOdgyenTb@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres"
 
 REGIONS = ["Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Kalos", "Alola", "Galar"]
@@ -24,14 +24,16 @@ MEGA_POKEMON = [
     (248, "Tyranitar-Mega", 248), (254, "Sceptile-Mega", 254), (257, "Blaziken-Mega", 257), (260, "Swampert-Mega", 260),
     (282, "Gardevoir-Mega", 282), (302, "Sableye-Mega", 302), (303, "Mawile-Mega", 303), (306, "Aggron-Mega", 306),
     (308, "Medicham-Mega", 308), (310, "Manectric-Mega", 310), (319, "Sharpedo-Mega", 319), (323, "Camerupt-Mega", 323),
-    (334, "Altaria-Mega", 334), (354, "Banette-Mega", 354), (359, "Absol-Mega", 359), (362, "Glalie-Mega", 362),
-    (373, "Salamence-Mega", 373), (376, "Metagross-Mega", 376), (380, "Latias-Mega", 380), (381, "Latios-Mega", 381),
-    (384, "Rayquaza-Mega", 384), (428, "Lopunny-Mega", 428), (445, "Garchomp-Mega", 445), (448, "Lucario-Mega", 448),
-    (448, "Lucario-Mega-Z", 448), (460, "Abomasnow-Mega", 460), (475, "Gallade-Mega", 475), (530, "Excadrill-Mega", 530),
-    (531, "Audino-Mega", 531), (545, "Scolipede-Mega", 545), (560, "Scrafty-Mega", 560), (609, "Chandelure-Mega", 609),
-    (623, "Golurk-Mega", 623), (652, "Chesnaught-Mega", 652), (655, "Delphox-Mega", 655), (658, "Greninja-Mega", 658),
+    (334, "Altaria-Mega", 334), (354, "Banette-Mega", 354), (358, "Chimecho-Mega", 358), (359, "Absol-Mega", 359), 
+    (362, "Glalie-Mega", 362), (373, "Salamence-Mega", 373), (376, "Metagross-Mega", 376), (380, "Latias-Mega", 380), 
+    (381, "Latios-Mega", 381), (384, "Rayquaza-Mega", 384), (428, "Lopunny-Mega", 428), (445, "Garchomp-Mega", 445), 
+    (448, "Lucario-Mega", 448), (448, "Lucario-Mega-Z", 448), (460, "Abomasnow-Mega", 460), (475, "Gallade-Mega", 475), 
+    (500, "Emboar-Mega", 500), (530, "Excadrill-Mega", 530), (531, "Audino-Mega", 531), (545, "Scolipede-Mega", 545), 
+    (560, "Scrafty-Mega", 560), (604, "Eelektross-Mega", 604), (609, "Chandelure-Mega", 609), (623, "Golurk-Mega", 623), 
+    (652, "Chesnaught-Mega", 652), (655, "Delphox-Mega", 655), (658, "Greninja-Mega", 658), (687, "Malamar-Mega", 687), 
     (689, "Barbaracle-Mega", 689), (701, "Hawlucha-Mega", 701), (718, "Zygarde-Mega", 718), (719, "Diancie-Mega", 719),
-    (768, "Golisopod-Mega", 768), (780, "Drampa-Mega", 780), (801, "Magearna-Mega", 801), (807, "Zeraora-Mega", 807)
+    (768, "Golisopod-Mega", 768), (780, "Drampa-Mega", 780), (801, "Magearna-Mega", 801), (807, "Zeraora-Mega", 807),
+    (870, "Falinks-Mega", 870)
 ]
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
