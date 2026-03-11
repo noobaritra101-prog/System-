@@ -210,7 +210,9 @@ def _ensure_daily_tasks(cur, user_id):
         t_p2 = random.choice(all_pokes).title()
         t_pvp = random.randint(1, 3) # Win 1 to 3 matches
         t_catch = random.randint(5, 15) # Catch 5 to 15 pokemon
-        reward = random.choice(LEGENDARY_NAMES) if LEGENDARY_NAMES else "Mewtwo"
+        
+        # FIX: We convert LEGENDARY_NAMES to a list so random.choice() can read it!
+        reward = random.choice(list(LEGENDARY_NAMES)) if LEGENDARY_NAMES else "Mewtwo"
         
         if not row:
             cur.execute("""
@@ -401,7 +403,7 @@ def export_all_data():
             cur.execute("SELECT group_id FROM groups")
             groups = [{"group_id": r[0]} for r in cur.fetchall()]
             
-            return {"users": users, "pokemons": pokemons, "groups": groups}
+            return {"users": users, "pokemons": groups, "groups": groups}
 
 def restore_sqlite_data(users_data, pokemons_data, groups_data):
     with get_db_connection() as conn:
