@@ -261,7 +261,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
     act_mention = f"[{escape_md(active_name)}](tg://user?id={act_id})"
     def_mention = f"[{escape_md(def_name)}](tg://user?id={def_id})"
     
-    # Logs are permanently forced to be Bold
     log_content = f"*{escape_md(b['log'].strip())}*" if b['log'] else "*Tʜᴇ ʙᴀᴛᴛʟᴇ ʙᴇɢɪɴs\\!*"
     
     act_status = f" \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
@@ -528,6 +527,15 @@ def handle_pvp_callback(bot, call):
             threading.Thread(target=setup).start()
             return
 
+        elif action == "decline":
+            p1_id, p2_id = int(parts[2]), int(parts[3])
+            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "❌ Only the challenged player can decline.", show_alert=True)
+            chal_data = pending_challenges.pop(call.message.message_id, None)
+            if chal_data: 
+                chal_data["timer"].cancel()
+                bot.edit_message_text("❌ *Challenge declined\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+            return
+
         # IN-BATTLE ACTIONS
         elif action in ["move", "dosw", "mega", "swmenu", "confirmrun", "run", "back", "viewteam"]:
             battle_id = int(parts[2])
@@ -559,8 +567,8 @@ def handle_pvp_callback(bot, call):
                     return safe_answer(bot, call.id, "⏳ Please don't click so fast!")
                 b["last_edit"] = now
                 
-            # INSTANT BUTTON FEEDBACK
-            safe_answer(bot, call.id, "")
+                # INSTANT BUTTON FEEDBACK
+                safe_answer(bot, call.id, "")
 
             if action == "move":
                 b["current_turn"] = "processing"
@@ -815,7 +823,7 @@ def handle_pvp_callback(bot, call):
                 
             elif action == "viewteam":
                 lines = []
-                for i, p in enumerate(b[actual_turn + '_team']):
+                for i, p in enumerate(b[button_turn + '_team']):
                     emojis = "/".join([TYPE_EMOJIS.get(t.strip(), '⚪') for t in p['types'].split('/')])
                     status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
                     lines.append(f"{i+1}. {p['name']} [{emojis}] - {p['nature']} {status_icon}")
