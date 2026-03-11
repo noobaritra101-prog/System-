@@ -89,7 +89,8 @@ MEGA_STAT_BUFFS = {
 }
 
 # --- HELPERS ---
-def safe_answer(bot, call_id, text, show_alert=False):
+def safe_answer(bot, call_id, text="", show_alert=False):
+    """Answers callback queries to remove the spinning loading icon instantly."""
     try: bot.answer_callback_query(call_id, text, show_alert=show_alert)
     except Exception: pass
 
@@ -117,7 +118,6 @@ def battle_timeout(bot, chat_id, battle_id):
         
         pvp_battles.pop(battle_id, None)
         
-        # --- BATTLE STATS: Timeout Loss ---
         db.update_battle_stats(winner_id, is_win=True)
         db.update_battle_stats(loser_id, is_win=False)
         
@@ -237,7 +237,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
     active_name, active_poke = (b["p1_name"], b["p1_team"][b["p1_idx"]]) if turn == "p1" else (b["p2_name"], b["p2_team"][b["p2_idx"]])
     def_name, def_poke = (b["p2_name"], b["p2_team"][b["p2_idx"]]) if turn == "p1" else (b["p1_name"], b["p1_team"][b["p1_idx"]])
     
-    # Establish Mentions based on the current turn
     act_id = b["p1_id"] if turn == "p1" else b["p2_id"]
     def_id = b["p2_id"] if turn == "p1" else b["p1_id"]
     
@@ -338,29 +337,25 @@ def render_pvp_ui(bot, chat_id, battle_id):
             except: pass
         else: logger.error(f"UI Update error: {e}")
 
-# --- COMMAND HANDLER (WITH NEW PROTECTIONS & START BUTTON) ---
+# --- COMMAND HANDLER ---
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: 
         return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
         
     target = message.reply_to_message
     
-    # 1. Anti-Bot and Anti-Channel Protection
     if target.from_user.is_bot or target.sender_chat:
         return bot.reply_to(message, escape_md("❌ You cannot challenge bots or channels!"))
         
     p1_id = message.from_user.id
     p2_id = target.from_user.id
     
-    # 2. Block Self-Challenge
     if p1_id == p2_id: 
         return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
         
-    # 3. Ensure Challenger is registered
     if not db.get_user(p1_id):
         return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
         
-    # 4. Ensure Target is registered & Send Start Button
     if not db.get_user(p2_id):
         target_name = escape_md(target.from_user.first_name)
         err_msg = f"*🛰️ [{target_name}](tg://user?id={p2_id}) hasn't registered yet\\!*\n*They need to /start the bot to play❗❗*"
@@ -514,15 +509,6 @@ def handle_pvp_callback(bot, call):
             threading.Thread(target=setup).start()
             return
 
-        elif action == "decline":
-            p1_id, p2_id = int(parts[2]), int(parts[3])
-            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "❌ Only the challenged player can decline.", show_alert=True)
-            chal_data = pending_challenges.pop(call.message.message_id, None)
-            if chal_data: 
-                chal_data["timer"].cancel()
-                bot.edit_message_text("❌ *Challenge declined\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
-            return
-
         # IN-BATTLE ACTIONS
         elif action in ["move", "dosw", "mega", "swmenu", "confirmrun", "run", "back", "viewteam"]:
             battle_id = int(parts[2])
@@ -542,7 +528,7 @@ def handle_pvp_callback(bot, call):
                 return safe_answer(bot, call.id, "❌ Not your buttons!", show_alert=True)
 
             if actual_turn == "processing": 
-                if time.time() - b.get("processing_start", 0) > 5:
+                if time.time() - b.get("processing_start", 0) > 2.0:
                     b["current_turn"] = button_turn
                     actual_turn = button_turn
                 else:
@@ -550,9 +536,12 @@ def handle_pvp_callback(bot, call):
 
             if action != "viewteam":
                 now = time.time()
-                if now - b.get("last_edit", 0) < 1.2:
+                if now - b.get("last_edit", 0) < 0.5:
                     return safe_answer(bot, call.id, "⏳ Please don't click so fast!")
                 b["last_edit"] = now
+                
+            # INSTANT BUTTON FEEDBACK
+            safe_answer(bot, call.id, "")
 
             if action == "move":
                 b["current_turn"] = "processing"
