@@ -59,6 +59,7 @@ FORM_TYPE_CHANGES = {
     "Mega Aggron": "Steel",
     "Mega Lopunny": "Normal/Fighting",
     "Mega Audino": "Normal/Fairy",
+    "Mega Meganium": "Grass/Fairy", # <-- Custom type for your custom Mega!
     "Primal Groudon": "Ground/Fire",
     "Crowned Zacian": "Fairy/Steel",
     "Crowned Zamazenta": "Fighting/Steel",
@@ -75,7 +76,9 @@ MEGA_STAT_BUFFS = {
     "Crowned Zacian": {"atk": 20, "def": 0, "spd": 10},
     "Crowned Zamazenta": {"atk": -10, "def": 25, "spd": -10},
     "Shadow Rider Calyrex": {"atk": 0, "def": 0, "spd": 70},
-    "Ash-Greninja": {"atk": 50, "def": 0, "spd": 10}
+    "Ash-Greninja": {"atk": 50, "def": 0, "spd": 10},
+    "Mega Dragonite": {"atk": 40, "def": 20, "spd": 20}, # <-- Custom buff!
+    "Mega Meganium": {"atk": 10, "def": 40, "spd": 30} # <-- Custom buff!
 }
 
 # --- HELPERS ---
@@ -377,7 +380,7 @@ def handle_pvp_callback(bot, call):
         
         if action == "settings":
             chal = pending_challenges.get(call.message.message_id)
-            if chal and call.from_user.id == chal["p1_id"]: render_settings_ui(bot, call.message.chat.id, call.message.message_id, chal)
+            if chal and call.fromuser.id == chal["p1_id"]: render_settings_ui(bot, call.message.chat.id, call.message.message_id, chal)
             return
         elif action == "setm":
             chal = pending_challenges.get(call.message.message_id)
