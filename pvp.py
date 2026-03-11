@@ -315,11 +315,31 @@ def render_pvp_ui(bot, chat_id, battle_id):
             except: pass
         else: logger.error(f"UI Update error: {e}")
 
-# --- COMMAND HANDLER ---
+# --- COMMAND HANDLER (WITH NEW PROTECTIONS) ---
 def handle_pvp_command(bot, message):
-    if not message.reply_to_message: return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
-    p1_id, p2_id = message.from_user.id, message.reply_to_message.from_user.id
-    if p1_id == p2_id: return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
+    if not message.reply_to_message: 
+        return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
+        
+    target = message.reply_to_message
+    
+    # 1. Anti-Bot and Anti-Channel Protection
+    if target.from_user.is_bot or target.sender_chat:
+        return bot.reply_to(message, escape_md("❌ You cannot challenge bots or channels!"))
+        
+    p1_id = message.from_user.id
+    p2_id = target.from_user.id
+    
+    # 2. Block Self-Challenge
+    if p1_id == p2_id: 
+        return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
+        
+    # 3. Ensure Challenger is registered
+    if not db.get_user(p1_id):
+        return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
+        
+    # 4. Ensure Target is registered
+    if not db.get_user(p2_id):
+        return bot.reply_to(message, escape_md(f"❌ {target.from_user.first_name} hasn't registered yet! They need to /start the bot to play."))
     
     if is_in_battle(p1_id) or is_in_battle(p2_id): 
         return bot.reply_to(message, escape_md("❌ Someone is already in a battle!"))
@@ -342,7 +362,7 @@ def handle_pvp_command(bot, message):
     timer = threading.Timer(60.0, challenge_timeout, args=(bot, message.chat.id, sent.message_id))
     timer.start()
     
-    chal = {"name": message.from_user.first_name, "p2_name": message.reply_to_message.from_user.first_name,
+    chal = {"name": message.from_user.first_name, "p2_name": target.from_user.first_name,
             "timer": timer, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id, 
             "mode": mode, "size": size, "can_switch": can_switch}
     
