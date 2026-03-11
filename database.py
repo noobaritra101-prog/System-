@@ -175,7 +175,7 @@ def delete_pokemon(user_id, name):
             conn.commit()
             return deleted
 
-# ==================== DAILY TASKS (PATCHED) ====================
+# ==================== DAILY TASKS ====================
 def _ensure_daily_tasks(cur, user_id):
     """Helper to reset tasks automatically at midnight."""
     today = datetime.date.today()
@@ -198,16 +198,19 @@ def get_daily_tasks(user_id):
             cur.execute("SELECT catch_count, pvp_count, trade_count, catch_claimed, pvp_claimed, trade_claimed FROM daily_tasks WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
             conn.commit()
+            
             if row:
-                # FIX: We map our modern database column names to exactly what tasks.py expects!
-                return {
-                    'prog_c1': row['catch_count'],
-                    'prog_p1': row['pvp_count'],
-                    'prog_t1': row['trade_count'],
-                    'claim_c1': row['catch_claimed'],
-                    'claim_p1': row['pvp_claimed'],
-                    'claim_t1': row['trade_claimed']
-                }
+                # ULTIMATE FIX: This maps our progress counters to tiers 1, 2, 3, 4, and 5!
+                # tasks.py can now ask for ANY tier and it will safely return the correct number.
+                tasks_data = {}
+                for i in range(1, 6):
+                    tasks_data[f'prog_c{i}'] = row['catch_count']
+                    tasks_data[f'prog_p{i}'] = row['pvp_count']
+                    tasks_data[f'prog_t{i}'] = row['trade_count']
+                    tasks_data[f'claim_c{i}'] = row['catch_claimed']
+                    tasks_data[f'claim_p{i}'] = row['pvp_claimed']
+                    tasks_data[f'claim_t{i}'] = row['trade_claimed']
+                return tasks_data
             return None
 
 def update_task_catch(user_id):
@@ -232,13 +235,13 @@ def update_task_trade(user_id):
             conn.commit()
 
 def claim_task_reward(user_id, task_type):
-    # This safely bridges the claim IDs that tasks.py sends to our new column names
-    col_map = {
-        'c1': 'catch_claimed', 'catch': 'catch_claimed',
-        'p1': 'pvp_claimed', 'pvp': 'pvp_claimed',
-        't1': 'trade_claimed', 'trade': 'trade_claimed'
-    }
-    col = col_map.get(task_type)
+    # This smartly looks at the first letter ('c', 'p', or 't') so it handles 'p1', 'p2', 'p3', etc. perfectly!
+    category = str(task_type)[0].lower()
+    col = None
+    if category == 'c': col = 'catch_claimed'
+    elif category == 'p': col = 'pvp_claimed'
+    elif category == 't': col = 'trade_claimed'
+    
     if not col: return
     
     with get_db_connection() as conn:
