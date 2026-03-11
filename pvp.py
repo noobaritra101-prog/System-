@@ -254,11 +254,11 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
     ui_text = (
         f"{log_content}\n\n"
-        f"*[{escape_md(def_name)}](tg://user?id={def_id})'s {escape_md(def_poke['name'])}{def_mega}*\n"
+        f"*{def_mention}'s {escape_md(def_poke['name'])}{def_mega}*\n"
         f" *\\[{escape_md(format_types(def_poke['types']))}\\] Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}*\n"
         f"`{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}`{escape_md(def_status)}\n\n"
         f"Current turn: {act_mention}\n"
-        f"*[{escape_md(active_name)}](tg://user?id={act_id})'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(format_types(active_poke['types']))}\\]*\n"
+        f"*{act_mention}'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(format_types(active_poke['types']))}\\]*\n"
         f"*Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}*\n"
         f"`{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}`{escape_md(act_status)}\n\n"
     )
@@ -338,7 +338,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
             except: pass
         else: logger.error(f"UI Update error: {e}")
 
-# --- COMMAND HANDLER (WITH NEW PROTECTIONS) ---
+# --- COMMAND HANDLER (WITH NEW PROTECTIONS & START BUTTON) ---
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: 
         return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
@@ -360,9 +360,16 @@ def handle_pvp_command(bot, message):
     if not db.get_user(p1_id):
         return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
         
-    # 4. Ensure Target is registered
+    # 4. Ensure Target is registered & Send Start Button
     if not db.get_user(p2_id):
-        return bot.reply_to(message, escape_md(f"❌ {target.from_user.first_name} hasn't registered yet! They need to /start the bot to play."))
+        target_name = escape_md(target.from_user.first_name)
+        err_msg = f"*🛰️ [{target_name}](tg://user?id={p2_id}) hasn't registered yet\\!*\n*They need to /start the bot to play❗❗*"
+        
+        kb = types.InlineKeyboardMarkup()
+        bot_username = bot.get_me().username
+        kb.add(types.InlineKeyboardButton("Start me ❗", url=f"https://t.me/{bot_username}?start=1"))
+        
+        return bot.reply_to(message, err_msg, reply_markup=kb, parse_mode="MarkdownV2")
     
     if is_in_battle(p1_id) or is_in_battle(p2_id): 
         return bot.reply_to(message, escape_md("❌ Someone is already in a battle!"))
