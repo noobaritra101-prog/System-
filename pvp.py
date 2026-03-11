@@ -237,6 +237,13 @@ def render_pvp_ui(bot, chat_id, battle_id):
     active_name, active_poke = (b["p1_name"], b["p1_team"][b["p1_idx"]]) if turn == "p1" else (b["p2_name"], b["p2_team"][b["p2_idx"]])
     def_name, def_poke = (b["p2_name"], b["p2_team"][b["p2_idx"]]) if turn == "p1" else (b["p1_name"], b["p1_team"][b["p1_idx"]])
     
+    # Establish Mentions based on the current turn
+    act_id = b["p1_id"] if turn == "p1" else b["p2_id"]
+    def_id = b["p2_id"] if turn == "p1" else b["p1_id"]
+    
+    act_mention = f"[{escape_md(active_name)}](tg://user?id={act_id})"
+    def_mention = f"[{escape_md(def_name)}](tg://user?id={def_id})"
+    
     log_content = escape_md(b['log'].strip()) if b['log'] else "The battle begins\\!"
     
     act_status = f" \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
@@ -247,12 +254,12 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
     ui_text = (
         f"{log_content}\n\n"
-        f"*{escape_md(def_name)}*'s {escape_md(def_poke['name'])}{def_mega} \\[{escape_md(format_types(def_poke['types']))}\\]\n"
-        f"Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}\n"
+        f"*[{escape_md(def_name)}](tg://user?id={def_id})'s {escape_md(def_poke['name'])}{def_mega}*\n"
+        f" *\\[{escape_md(format_types(def_poke['types']))}\\] Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}*\n"
         f"`{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}`{escape_md(def_status)}\n\n"
-        f"Current turn: *{escape_md(active_name)}*\n"
-        f"*{escape_md(active_name)}*'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(format_types(active_poke['types']))}\\]\n"
-        f"Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}\n"
+        f"Current turn: {act_mention}\n"
+        f"*[{escape_md(active_name)}](tg://user?id={act_id})'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(format_types(active_poke['types']))}\\]*\n"
+        f"*Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}*\n"
         f"`{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}`{escape_md(act_status)}\n\n"
     )
 
@@ -270,7 +277,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
             m_pow = m.get('power', 0)
             m_acc = m.get('acc', 100)
             
-            moves_block += f" {m_name} \\[{m_type_display}\\]\n Power: {m_pow}, Accuracy: {m_acc}\n"
+            moves_block += f" *{m_name} \\[{m_type_display}\\]*\n *Power: {m_pow}, Accuracy: {m_acc}*\n"
             move_buttons.append(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
             
         ui_text += moves_block
