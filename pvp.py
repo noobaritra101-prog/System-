@@ -101,7 +101,16 @@ def battle_timeout(bot, chat_id, battle_id):
         if turn == "processing": return 
         loser_name = b.get(turn + "_name", "Player")
         winner_name = b["p2_name"] if turn == "p1" else b["p1_name"]
+        
+        loser_id = b[turn + "_id"]
+        winner_id = b["p2_id"] if turn == "p1" else b["p1_id"]
+        
         pvp_battles.pop(battle_id, None)
+        
+        # --- BATTLE STATS: Timeout Loss ---
+        db.update_battle_stats(winner_id, is_win=True)
+        db.update_battle_stats(loser_id, is_win=False)
+        
         try: bot.edit_message_text(f"⏳ *{escape_md(loser_name)} ran out of time\\!*\n\n🏆 *{escape_md(winner_name)} WINS THE BATTLE\\!*", chat_id, battle_id, parse_mode="MarkdownV2")
         except Exception: pass
 
@@ -575,7 +584,12 @@ def handle_pvp_callback(bot, call):
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
+                        
+                        # --- BATTLE STATS: Attacker Wins! ---
                         db.update_task_pvp(b[actual_turn + "_id"])
+                        db.update_battle_stats(b[actual_turn + "_id"], is_win=True)
+                        db.update_battle_stats(b[defender + "_id"], is_win=False)
+                        
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = defender
                 elif atk["hp"] <= 0:
@@ -586,7 +600,12 @@ def handle_pvp_callback(bot, call):
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
+                        
+                        # --- BATTLE STATS: Defender Wins! ---
                         db.update_task_pvp(b[defender + "_id"])
+                        db.update_battle_stats(b[defender + "_id"], is_win=True)
+                        db.update_battle_stats(b[actual_turn + "_id"], is_win=False)
+                        
                         return end_battle(battle_id)
                     b["state"] = "force_switch"; b["current_turn"] = actual_turn
                 else:
@@ -703,6 +722,12 @@ def handle_pvp_callback(bot, call):
                 if LOG_GROUP_ID:
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
                     except: pass
+                
+                # --- BATTLE STATS: Fleeing is a Loss ---
+                runner_id = b[actual_turn + "_id"]
+                winner_id = b["p2_id"] if actual_turn == "p1" else b["p1_id"]
+                db.update_battle_stats(runner_id, is_win=False)
+                db.update_battle_stats(winner_id, is_win=True)
                 
             elif action == "back": 
                 b["state"] = "menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
