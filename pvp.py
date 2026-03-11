@@ -60,6 +60,10 @@ FORM_TYPE_CHANGES = {
     "Mega Lopunny": "Normal/Fighting",
     "Mega Audino": "Normal/Fairy",
     "Mega Meganium": "Grass/Fairy", 
+    "Mega Raichu X": "Electric/Fighting",
+    "Mega Raichu Y": "Electric/Fairy",
+    "Mega Lucario Z": "Fighting/Psychic",
+    "Mega Zeraora": "Electric/Fighting",
     "Primal Groudon": "Ground/Fire",
     "Crowned Zacian": "Fairy/Steel",
     "Crowned Zamazenta": "Fighting/Steel",
@@ -71,6 +75,9 @@ MEGA_STAT_BUFFS = {
     "Mega Charizard Y": {"atk": 20, "def": 0, "spd": 0},
     "Mega Mewtwo X": {"atk": 80, "def": 10, "spd": 0},
     "Mega Mewtwo Y": {"atk": 40, "def": -20, "spd": 10},
+    "Mega Raichu X": {"atk": 50, "def": 10, "spd": 40},
+    "Mega Raichu Y": {"atk": 10, "def": 30, "spd": 60},
+    "Mega Lucario Z": {"atk": 40, "def": 20, "spd": 40},
     "Primal Groudon": {"atk": 30, "def": 20, "spd": 0},
     "Primal Kyogre": {"atk": 50, "def": 0, "spd": 0},
     "Crowned Zacian": {"atk": 20, "def": 0, "spd": 10},
@@ -293,6 +300,12 @@ def render_pvp_ui(bot, chat_id, battle_id):
                types.InlineKeyboardButton("Mega Form Y", callback_data=f"pvp_mega_{battle_id}_{turn}_Y"))
         kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
+    elif b["state"] == "mega_lucario_choice":
+        ui_text += f" Choose a Mega Evolution form:\n"
+        kb.row(types.InlineKeyboardButton("Standard Mega", callback_data=f"pvp_mega_{battle_id}_{turn}_Standard"),
+               types.InlineKeyboardButton("Mega Form Z", callback_data=f"pvp_mega_{battle_id}_{turn}_Z"))
+        kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
+
     elif b["state"] in ["switch_menu", "force_switch"]:
         ui_text += f" 🔄 Choose a Pokémon to switch into:\n" if b["state"] == "switch_menu" else f" 💀 Choose a replacement Pokémon:\n"
         btns = [types.InlineKeyboardButton(f"{'🔴' if p['hp'] > 0 else '💀'} {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
@@ -466,7 +479,7 @@ def handle_pvp_callback(bot, call):
                                 for m in p["moves"]:
                                     if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
                         
-                        special_forms = ["Charizard", "Mewtwo", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex", "Greninja"]
+                        special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex", "Greninja"]
                         p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
                         p["is_mega"] = False
                         
@@ -668,12 +681,19 @@ def handle_pvp_callback(bot, call):
                 
                 old_name = p['name']
                 
-                if old_name in ["Charizard", "Mewtwo"] and len(parts) == 4:
+                # --- NEW BRANCHING MENUS ---
+                if old_name in ["Charizard", "Mewtwo", "Raichu"] and len(parts) == 4:
                     b["state"] = "mega_xy_choice"
                     render_pvp_ui(bot, call.message.chat.id, battle_id)
                     return
+                
+                if old_name == "Lucario" and len(parts) == 4:
+                    b["state"] = "mega_lucario_choice"
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                    return
                     
-                xy_choice = parts[4] if len(parts) == 5 and old_name in ["Charizard", "Mewtwo"] else ""
+                xy_choice = parts[4] if len(parts) == 5 and old_name in ["Charizard", "Mewtwo", "Raichu"] else ""
+                z_choice = parts[4] if len(parts) == 5 and old_name == "Lucario" else ""
                 
                 if old_name in ["Groudon", "Kyogre"]:
                     new_name = f"Primal {old_name}"
@@ -696,9 +716,17 @@ def handle_pvp_callback(bot, call):
                     search_name = "greninja-ash"
                     icon = "💧"
                 else:
-                    new_name = f"Mega {old_name}" + (f" {xy_choice}" if xy_choice else "")
+                    if z_choice == "Standard" or (not z_choice and not xy_choice):
+                        new_name = f"Mega {old_name}"
+                        search_name = f"{old_name.lower()}-mega"
+                    elif z_choice == "Z":
+                        new_name = f"Mega {old_name} Z"
+                        search_name = f"{old_name.lower()}-mega-z"
+                    else:
+                        new_name = f"Mega {old_name}" + (f" {xy_choice}" if xy_choice else "")
+                        search_name = f"{old_name.lower()}-mega" + (f"-{xy_choice.lower()}" if xy_choice else "")
+                    
                     action_verb = "Mega Evolved"
-                    search_name = f"{old_name.lower()}-mega" + (f"-{xy_choice.lower()}" if xy_choice else "")
                     icon = "💎"
 
                 buffs = MEGA_STAT_BUFFS.get(new_name, {"atk": 30, "def": 30, "spd": 20})
