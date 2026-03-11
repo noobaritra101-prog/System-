@@ -197,26 +197,32 @@ def get_dex_text(name, page="info"):
         return text
 
 # ================== USER COMMANDS ==================
-@bot.message_handler(commands=["start", "help"])
+@bot.message_handler(commands=["start"])
 def cmd_start(message):
     is_new = db.add_user_if_new(message.from_user.id)
     if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Main Group ✨", url="https://t.me/sexagamechat"), types.InlineKeyboardButton("Owner 👑", url="https://t.me/Dark_monarchx"))
     
-    text = (
-        "🌟 *Welcome to the Pokémon Safari* 🌟\n\n"
-        "🔎 `/scout` \\- Search for shiny Pokémon\n"
-        "🌍 `/travel` \\- Change region\n"
-        "📱 `/pokedex <name>` \\- Check stats\n"
-        "🥊 `/pvp` \\- Reply to a user to battle\n"
-        "🎒 `/myteam` \\- View your PvP team secrets \\(in Battle\\)\n"
-        "🪪 `/profile` \\- View your Trainer Card\n"
-        "🔄 `/trade` \\- Reply to a user to trade\n"
-        "🏆 `/flex` \\- View the Global Leaderboard\n"
-        "📋 `/task` \\- Daily Rewards\n"
-        "⌨️ `/open` \\- Open scout button \\(DM only\\)"
+    # Custom Inline Buttons
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("Oᴡɴᴇʀ ⚡", url="https://t.me/monarch_sama"),
+        types.InlineKeyboardButton("Mᴀɪɴ Gʀᴏᴜᴘ ⚡", url="https://t.me/sexagamechat")
     )
+    
+    # Escape user's name for safe Markdown rendering
+    user_name = escape_md(message.from_user.first_name)
+    
+    # Premium Custom Font UI
+    text = (
+        f"Hҽყ {user_name}\n\n"
+        f"*Wᴇʟᴄσɱᴇ ᴛσ Sᴇxᴀ ✨*\n"
+        f"*Tʜᴇ Sʜɪɴʏ Pᴏᴋᴇ́ᴍᴏɴ Aᴅᴠᴇɴᴛᴜʀᴇ*\n\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"*🔎 Hᴜɴᴛ • 🎯 Cᴀᴛᴄʜ • 💎 Fʟᴇx*\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"*🌍 Yᴏᴜʀ Jᴏᴜʀɴᴇʏ Bᴇɢɪɴs Nᴏᴡ*"
+    )
+    
     safe_send(message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
     
     if is_new and LOG_GROUP_ID is not None:
@@ -1053,7 +1059,7 @@ def cb_handler(call):
                 types.InlineKeyboardButton("<<", callback_data=f"{action}_{uid}_0"),
                 types.InlineKeyboardButton("<", callback_data=f"{action}_{uid}_{max(0, page_idx - 1)}"),
                 types.InlineKeyboardButton(">", callback_data=f"{action}_{uid}_{min(len(pages) - 1, page_idx + 1)}"),
-                types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}") # <-- THE FIX
+                types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}") 
             )
             try: 
                 bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
