@@ -175,7 +175,7 @@ def delete_pokemon(user_id, name):
             conn.commit()
             return deleted
 
-# ==================== DAILY TASKS (RESTORED) ====================
+# ==================== DAILY TASKS (PATCHED) ====================
 def _ensure_daily_tasks(cur, user_id):
     """Helper to reset tasks automatically at midnight."""
     today = datetime.date.today()
@@ -193,13 +193,22 @@ def _ensure_daily_tasks(cur, user_id):
 
 def get_daily_tasks(user_id):
     with get_db_connection() as conn:
-        # We use DictCursor so tasks.py can access data by column name or index
         with conn.cursor(cursor_factory=DictCursor) as cur:
             _ensure_daily_tasks(cur, user_id)
             cur.execute("SELECT catch_count, pvp_count, trade_count, catch_claimed, pvp_claimed, trade_claimed FROM daily_tasks WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
             conn.commit()
-            return row
+            if row:
+                # FIX: We map our modern database column names to exactly what tasks.py expects!
+                return {
+                    'prog_c1': row['catch_count'],
+                    'prog_p1': row['pvp_count'],
+                    'prog_t1': row['trade_count'],
+                    'claim_c1': row['catch_claimed'],
+                    'claim_p1': row['pvp_claimed'],
+                    'claim_t1': row['trade_claimed']
+                }
+            return None
 
 def update_task_catch(user_id):
     with get_db_connection() as conn:
@@ -223,11 +232,18 @@ def update_task_trade(user_id):
             conn.commit()
 
 def claim_task_reward(user_id, task_type):
-    col = f"{task_type}_claimed"
+    # This safely bridges the claim IDs that tasks.py sends to our new column names
+    col_map = {
+        'c1': 'catch_claimed', 'catch': 'catch_claimed',
+        'p1': 'pvp_claimed', 'pvp': 'pvp_claimed',
+        't1': 'trade_claimed', 'trade': 'trade_claimed'
+    }
+    col = col_map.get(task_type)
+    if not col: return
+    
     with get_db_connection() as conn:
         with conn.cursor() as cur:
-            if task_type in ['catch', 'pvp', 'trade']:
-                cur.execute(f"UPDATE daily_tasks SET {col} = TRUE WHERE user_id = %s", (user_id,))
+            cur.execute(f"UPDATE daily_tasks SET {col} = TRUE WHERE user_id = %s", (user_id,))
             conn.commit()
 
 # ==================== PVP & BATTLE STATS ====================
