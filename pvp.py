@@ -102,7 +102,10 @@ def get_faster_player(b):
 def challenge_timeout(bot, chat_id, message_id):
     chal = pending_challenges.pop(message_id, None)
     if chal:
-        try: bot.edit_message_text("⏳ *Challenge expired\\.*", chat_id, message_id, parse_mode="MarkdownV2")
+        p1_name = escape_md(chal["name"])
+        p1_id = chal["p1_id"]
+        mention = f"[{p1_name}](tg://user?id={p1_id})"
+        try: bot.edit_message_text(f"*{mention}’s Cʜᴀʟʟᴇɴɢᴇ Hᴀs Exᴘɪʀᴇᴅ ⏳*", chat_id, message_id, parse_mode="MarkdownV2")
         except Exception: pass
 
 def battle_timeout(bot, chat_id, battle_id):
@@ -110,9 +113,9 @@ def battle_timeout(bot, chat_id, battle_id):
     if b:
         turn = b["current_turn"]
         if turn == "processing": return 
+        
         loser_name = b.get(turn + "_name", "Player")
         winner_name = b["p2_name"] if turn == "p1" else b["p1_name"]
-        
         loser_id = b[turn + "_id"]
         winner_id = b["p2_id"] if turn == "p1" else b["p1_id"]
         
@@ -121,7 +124,10 @@ def battle_timeout(bot, chat_id, battle_id):
         db.update_battle_stats(winner_id, is_win=True)
         db.update_battle_stats(loser_id, is_win=False)
         
-        try: bot.edit_message_text(f"⏳ *{escape_md(loser_name)} ran out of time\\!*\n\n🏆 *{escape_md(winner_name)} WINS THE BATTLE\\!*", chat_id, battle_id, parse_mode="MarkdownV2")
+        loser_mention = f"[{escape_md(loser_name)}](tg://user?id={loser_id})"
+        win_mention = f"[{escape_md(winner_name)}](tg://user?id={winner_id})"
+        
+        try: bot.edit_message_text(f"⏳ *{loser_mention} ʀᴀɴ ᴏᴜᴛ ᴏғ ᴛɪᴍᴇ\\!*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", chat_id, battle_id, parse_mode="MarkdownV2")
         except Exception: pass
 
 def end_battle(battle_id):
@@ -189,7 +195,6 @@ def update_challenge_message(bot, chat_id, message_id, chal):
     p2_id = chal["p2_id"]
     size = chal["size"]
     
-    # Custom Font Mapping
     mode_str = chal["mode"]
     if mode_str == "Mix": mode_text = "Mɪx"
     elif mode_str == "6ls": mode_text = "6ʟs"
@@ -216,10 +221,12 @@ def update_challenge_message(bot, chat_id, message_id, chal):
         if "message is not modified" not in str(e).lower(): pass
 
 def render_settings_ui(bot, chat_id, message_id, chal):
-    text = f"⚙️ *Battle Settings*\n\nConfigure the rules for this match:"
+    text = f"⚙️ *Bᴀᴛᴛʟᴇ Sᴇᴛᴛɪɴɢs*\n\nCᴏɴғɪɢᴜʀᴇ ᴛʜᴇ ʀᴜʟᴇs ғᴏʀ ᴛʜɪs ᴍᴀᴛᴄʜ:"
     kb = types.InlineKeyboardMarkup(row_width=3)
     
-    m_0, m_6, m_m = ("✅ 0ls" if chal['mode'] == "0ls" else "0ls"), ("✅ 6ls" if chal['mode'] == "6ls" else "6ls"), ("✅ Mix" if chal['mode'] == "Mix" else "Mix")
+    m_0 = "✅ 0ʟs" if chal['mode'] == "0ls" else "0ʟs"
+    m_6 = "✅ 6ʟs" if chal['mode'] == "6ls" else "6ʟs"
+    m_m = "✅ Mɪx" if chal['mode'] == "Mix" else "Mɪx"
     kb.row(types.InlineKeyboardButton(m_0, callback_data=f"pvp_setm_{chal['p1_id']}_0ls"),
            types.InlineKeyboardButton(m_6, callback_data=f"pvp_setm_{chal['p1_id']}_6ls"),
            types.InlineKeyboardButton(m_m, callback_data=f"pvp_setm_{chal['p1_id']}_Mix"))
@@ -227,10 +234,10 @@ def render_settings_ui(bot, chat_id, message_id, chal):
     sz_btns = [types.InlineKeyboardButton(f"✅ {s}" if chal['size'] == s else str(s), callback_data=f"pvp_sets_{chal['p1_id']}_{s}") for s in range(1, 7)]
     kb.add(*sz_btns)
     
-    sw_lbl = "🔄 Switch: ON" if chal['can_switch'] else "🚫 Switch: OFF"
+    sw_lbl = "🔄 Sᴡɪᴛᴄʜ: Oɴ" if chal['can_switch'] else "🚫 Sᴡɪᴛᴄʜ: Oғғ"
     kb.row(types.InlineKeyboardButton(sw_lbl, callback_data=f"pvp_setsw_{chal['p1_id']}"))
-    kb.row(types.InlineKeyboardButton("💾 Save as Default", callback_data=f"pvp_setsave_{chal['p1_id']}"))
-    kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_setback_{chal['p1_id']}"))
+    kb.row(types.InlineKeyboardButton("💾 Sᴀᴠᴇ Sᴇᴛᴛɪɴɢs", callback_data=f"pvp_setsave_{chal['p1_id']}"))
+    kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_setback_{chal['p1_id']}"))
     try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
     except Exception as e: 
         if "message is not modified" not in str(e).lower(): pass
@@ -254,7 +261,8 @@ def render_pvp_ui(bot, chat_id, battle_id):
     act_mention = f"[{escape_md(active_name)}](tg://user?id={act_id})"
     def_mention = f"[{escape_md(def_name)}](tg://user?id={def_id})"
     
-    log_content = escape_md(b['log'].strip()) if b['log'] else "The battle begins\\!"
+    # Logs are permanently forced to be Bold
+    log_content = f"*{escape_md(b['log'].strip())}*" if b['log'] else "*Tʜᴇ ʙᴀᴛᴛʟᴇ ʙᴇɢɪɴs\\!*"
     
     act_status = f" \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
     def_status = f" \\[{STATUS_EMOJIS.get(def_poke['status'], '')}\\]" if def_poke.get('status') else ""
@@ -308,34 +316,34 @@ def render_pvp_ui(bot, chat_id, battle_id):
             
             kb.row(types.InlineKeyboardButton(btn_lbl, callback_data=f"pvp_mega_{battle_id}_{turn}"))
             
-        kb.row(types.InlineKeyboardButton("🔄 Switch", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
-               types.InlineKeyboardButton("🏃 Run", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
+        kb.row(types.InlineKeyboardButton("🔄 Sᴡɪᴛᴄʜ", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
+               types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
                
     elif b["state"] == "mega_xy_choice":
         ui_text += f" Choose a Mega Evolution form:\n"
         kb.row(types.InlineKeyboardButton("Mega Form X", callback_data=f"pvp_mega_{battle_id}_{turn}_X"),
                types.InlineKeyboardButton("Mega Form Y", callback_data=f"pvp_mega_{battle_id}_{turn}_Y"))
-        kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
+        kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
     elif b["state"] == "mega_lucario_choice":
         ui_text += f" Choose a Mega Evolution form:\n"
         kb.row(types.InlineKeyboardButton("Standard Mega", callback_data=f"pvp_mega_{battle_id}_{turn}_Standard"),
                types.InlineKeyboardButton("Mega Form Z", callback_data=f"pvp_mega_{battle_id}_{turn}_Z"))
-        kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
+        kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
     elif b["state"] in ["switch_menu", "force_switch"]:
         ui_text += f" 🔄 Choose a Pokémon to switch into:\n" if b["state"] == "switch_menu" else f" 💀 Choose a replacement Pokémon:\n"
         btns = [types.InlineKeyboardButton(f"{'🔴' if p['hp'] > 0 else '💀'} {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
         for i in range(0, len(btns), 3): kb.add(*btns[i:i+3])
         
-        kb.row(types.InlineKeyboardButton("📋 View Team", callback_data=f"pvp_viewteam_{battle_id}_{turn}"))
+        kb.row(types.InlineKeyboardButton("📋 Vɪᴇᴡ Tᴇᴀᴍ", callback_data=f"pvp_viewteam_{battle_id}_{turn}"))
         if b["state"] == "switch_menu": 
-            kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
+            kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_back_{battle_id}_{turn}"))
             
     elif b["state"] == "run_confirm":
-        ui_text += f" ⚠️ Are you sure you want to flee the battle?\n"
-        kb.row(types.InlineKeyboardButton("✅ Confirm Flee", callback_data=f"pvp_run_{battle_id}_{turn}"),
-               types.InlineKeyboardButton("❌ Cancel", callback_data=f"pvp_back_{battle_id}_{turn}"))
+        ui_text += f" *⚠️ Aʀᴇ ʏᴏᴜ sᴜʀᴇ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ғʟᴇᴇ ᴛʜᴇ ʙᴀᴛᴛʟᴇ?*\n"
+        kb.row(types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ Fʟᴇᴇ", callback_data=f"pvp_run_{battle_id}_{turn}"),
+               types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
     try: 
         bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -348,29 +356,25 @@ def render_pvp_ui(bot, chat_id, battle_id):
             except: pass
         else: logger.error(f"UI Update error: {e}")
 
-# --- COMMAND HANDLER (WITH NEW PROTECTIONS & START BUTTON) ---
+# --- COMMAND HANDLER ---
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: 
         return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
         
     target = message.reply_to_message
     
-    # 1. Anti-Bot and Anti-Channel Protection
     if target.from_user.is_bot or target.sender_chat:
         return bot.reply_to(message, escape_md("❌ You cannot challenge bots or channels!"))
         
     p1_id = message.from_user.id
     p2_id = target.from_user.id
     
-    # 2. Block Self-Challenge
     if p1_id == p2_id: 
         return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
         
-    # 3. Ensure Challenger is registered
     if not db.get_user(p1_id):
         return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
         
-    # 4. Ensure Target is registered & Send Start Button
     if not db.get_user(p2_id):
         target_name = escape_md(target.from_user.first_name)
         err_msg = f"*🛰️ [{target_name}](tg://user?id={p2_id}) hasn't registered yet\\!*\n*They need to /start the bot to play❗❗*"
@@ -634,7 +638,8 @@ def handle_pvp_callback(bot, call):
                     dfn["hp"] = 0; dfn["status"] = None
                     b["log"] += f"{dfn['name']} fainted!\n"
                     if all(p["hp"] <= 0 for p in b[defender + "_team"]):
-                        bot.edit_message_text(f"{escape_md(b['log'].strip())}\n\n🏆 *{escape_md(b[actual_turn+'_name'])} WINS\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        win_mention = f"[{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']})"
+                        bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
@@ -650,7 +655,8 @@ def handle_pvp_callback(bot, call):
                     atk["hp"] = 0; atk["status"] = None
                     b["log"] += f"{atk['name']} fainted from status effect!\n"
                     if all(p["hp"] <= 0 for p in b[actual_turn + "_team"]):
-                        bot.edit_message_text(f"{escape_md(b['log'].strip())}\n\n🏆 *{escape_md(b[defender+'_name'])} WINS\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        win_mention = f"[{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']})"
+                        bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
@@ -787,14 +793,20 @@ def handle_pvp_callback(bot, call):
                 
             elif action == "run": 
                 end_battle(battle_id)
-                bot.edit_message_text(f"🏃 *{escape_md(b[actual_turn+'_name'])} fled\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                runner_id = b[actual_turn + "_id"]
+                runner_name = escape_md(b[actual_turn+'_name'])
+                runner_mention = f"[{runner_name}](tg://user?id={runner_id})"
+                
+                winner_id = b["p2_id"] if actual_turn == "p1" else b["p1_id"]
+                winner_name = b["p2_name"] if actual_turn == "p1" else b["p1_name"]
+                win_mention = f"[{escape_md(winner_name)}](tg://user?id={winner_id})"
+                
+                bot.edit_message_text(f"🏃 *{runner_mention} ғʟᴇᴅ\\!*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                 if LOG_GROUP_ID:
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
                     except: pass
                 
                 # --- BATTLE STATS: Fleeing is a Loss ---
-                runner_id = b[actual_turn + "_id"]
-                winner_id = b["p2_id"] if actual_turn == "p1" else b["p1_id"]
                 db.update_battle_stats(runner_id, is_win=False)
                 db.update_battle_stats(winner_id, is_win=True)
                 
