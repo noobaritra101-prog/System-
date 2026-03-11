@@ -185,20 +185,31 @@ def apply_nature(p, n):
 def update_challenge_message(bot, chat_id, message_id, chal):
     p1_name = escape_md(chal["name"])
     p2_name = escape_md(chal["p2_name"])
+    p1_id = chal["p1_id"]
+    p2_id = chal["p2_id"]
     size = chal["size"]
-    mode = chal["mode"]
-    sw_text = "ON" if chal["can_switch"] else "OFF"
     
-    text = (f"🥊 *{p1_name}* challenged *{p2_name}* to a {size}v{size} Random Battle\\!\n\n"
-            f"⚙️ *Mode:* {mode}\n"
-            f"🔄 *Switching:* {sw_text}\n\n"
-            f"_You have 60 seconds to accept\\._")
+    # Custom Font Mapping
+    mode_str = chal["mode"]
+    if mode_str == "Mix": mode_text = "Mɪx"
+    elif mode_str == "6ls": mode_text = "6ʟs"
+    elif mode_str == "0ls": mode_text = "0ʟs"
+    else: mode_text = escape_md(mode_str)
+    
+    sw_text = "Oɴ" if chal["can_switch"] else "Oғғ"
+    
+    act_mention = f"[{p1_name}](tg://user?id={p1_id})"
+    def_mention = f"[{p2_name}](tg://user?id={p2_id})"
+    
+    text = (f"*{act_mention} ᴄʜᴀʟʟᴇɴɢᴇᴅ {def_mention} ᴛᴏ ᴀ {size} ᴠ {size} Rᴀɴᴅᴏᴍ Bᴀᴛᴛʟᴇ ❗❗*\n\n"
+            f"⚙️ Mᴏᴅᴇ: {mode_text}\n"
+            f"🔄 Sᴡɪᴛᴄʜɪɴɢ: {sw_text}")
     
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("⚙️ Settings", callback_data=f"pvp_settings_{chal['p1_id']}"))
+    kb.add(types.InlineKeyboardButton("⚙️ Sᴇᴛᴛɪɴɢs", callback_data=f"pvp_settings_{chal['p1_id']}"))
     kb.add(
-        types.InlineKeyboardButton("⚔️ Accept", callback_data=f"pvp_accept_{chal['p1_id']}_{chal['p2_id']}"),
-        types.InlineKeyboardButton("❌ Decline", callback_data=f"pvp_decline_{chal['p1_id']}_{chal['p2_id']}")
+        types.InlineKeyboardButton("✔️ Aᴄᴄᴇᴘᴛ", callback_data=f"pvp_accept_{chal['p1_id']}_{chal['p2_id']}"),
+        types.InlineKeyboardButton("✖️ Dᴇᴄʟɪɴᴇ", callback_data=f"pvp_decline_{chal['p1_id']}_{chal['p2_id']}")
     )
     try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
     except Exception as e: 
@@ -337,25 +348,29 @@ def render_pvp_ui(bot, chat_id, battle_id):
             except: pass
         else: logger.error(f"UI Update error: {e}")
 
-# --- COMMAND HANDLER ---
+# --- COMMAND HANDLER (WITH NEW PROTECTIONS & START BUTTON) ---
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: 
         return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
         
     target = message.reply_to_message
     
+    # 1. Anti-Bot and Anti-Channel Protection
     if target.from_user.is_bot or target.sender_chat:
         return bot.reply_to(message, escape_md("❌ You cannot challenge bots or channels!"))
         
     p1_id = message.from_user.id
     p2_id = target.from_user.id
     
+    # 2. Block Self-Challenge
     if p1_id == p2_id: 
         return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
         
+    # 3. Ensure Challenger is registered
     if not db.get_user(p1_id):
         return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
         
+    # 4. Ensure Target is registered & Send Start Button
     if not db.get_user(p2_id):
         target_name = escape_md(target.from_user.first_name)
         err_msg = f"*🛰️ [{target_name}](tg://user?id={p2_id}) hasn't registered yet\\!*\n*They need to /start the bot to play❗❗*"
