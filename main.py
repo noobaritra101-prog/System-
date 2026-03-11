@@ -25,7 +25,8 @@ from api_utils import (
     get_pokemon_stats_sync,
     get_pokemon_id_sync,
     REGION_DEX,
-    pokemon_name_to_id_cache
+    pokemon_name_to_id_cache,
+    LEGENDARY_NAMES
 )
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
@@ -45,7 +46,7 @@ def safe_send(chat_id, text, reply_to_id=None, reply_markup=None):
         return bot.send_message(chat_id, text, reply_to_message_id=reply_to_id, reply_markup=reply_markup, parse_mode="MarkdownV2")
     except Exception as e:
         if "429" in str(e) or "Too Many Requests" in str(e):
-            time.sleep(2.5) # Wait out the rate limit
+            time.sleep(2.5) 
             try: return bot.send_message(chat_id, text, reply_to_message_id=reply_to_id, reply_markup=reply_markup, parse_mode="MarkdownV2")
             except: pass
         return None
@@ -98,7 +99,7 @@ def start_scout(chat_id, user_id, reply_to_id=None):
         active_hunts[sent.message_id] = {"user_id": user_id, "start_time": time.time(), "timer": timer, "name": name}
     except Exception as e: 
         if "429" in str(e):
-            time.sleep(2) # Auto retry if hit by rate limit
+            time.sleep(2) 
             try:
                 sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
                 timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, chat_id, name))
@@ -109,7 +110,6 @@ def start_scout(chat_id, user_id, reply_to_id=None):
             logger.error(f"Failed to send scout photo: {e}")
 
 def process_catch(call, uid, pid, name):
-    """Background process for throwing a Pokeball without blocking the bot"""
     try:
         try:
             bot.edit_message_caption(caption="🔴 *Throwing Pokéball\\.\\.\\.*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
@@ -211,6 +211,7 @@ def cmd_start(message):
         "📱 `/pokedex <name>` \\- Check stats\n"
         "🥊 `/pvp` \\- Reply to a user to battle\n"
         "🎒 `/myteam` \\- View your PvP team secrets \\(in Battle\\)\n"
+        "🪪 `/profile` \\- View your Trainer Card\n"
         "🔄 `/trade` \\- Reply to a user to trade\n"
         "🏆 `/flex` \\- View the Global Leaderboard\n"
         "📋 `/task` \\- Daily Rewards\n"
@@ -246,13 +247,63 @@ def cmd_task(message):
     db.add_user_if_new(message.from_user.id)
     tasks.render_tasks_ui(bot, message.chat.id, message.from_user.id)
 
-@bot.message_handler(commands=["profile"])
+# --- TEXT-BASED TRAINER CARD PROFILE ---
+@bot.message_handler(commands=["profile", "trainer"])
 def cmd_profile(message):
-    user = db.get_user(message.from_user.id)
-    if not user: return safe_send(message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
-    tries_left, region = db.update_user_tries(message.from_user.id)
-    count = len(db.list_user_pokemon_names(message.from_user.id))
-    safe_send(message.chat.id, f"👤 *Trainer Profile*\n━━━━━━━━━━━━━━\n🌍 *Region:* {escape_md(region)}\n🏆 *Pokémon:* {count}\n🔋 *Scouts Left:* {tries_left}/300", reply_to_id=message.message_id)
+    user_id = message.from_user.id
+    user = db.get_user(user_id)
+    
+    if not user: 
+        return safe_send(message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+        
+    tries_left, region = db.update_user_tries(user_id)
+    names = db.list_user_pokemon_names(user_id)
+    count = len(names)
+    
+    # Check for the rarest Pokemon in their bag
+    rarest_caught = "None"
+    if names:
+        rarest_list = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p]
+        rarest_caught = rarest_list[0] if rarest_list else names[-1]
+            
+    # Fetch Battle Stats
+    try:
+        wins, losses = db.get_battle_stats(user_id)
+    except Exception:
+        wins, losses = 0, 0 
+        
+    total_battles = wins + losses
+    
+    # Safely escape text for Telegram Markdown
+    user_name = escape_md(message.from_user.first_name)
+    rarest_md = escape_md(rarest_caught)
+    region_md = escape_md(region)
+    
+    text = (
+        "✦─────────────────✦\n"
+        "🪪  𝗧𝗥𝗔𝗜𝗡𝗘𝗥 𝗖𝗔𝗥𝗗  🪪\n"
+        "✦─────────────────✦\n\n"
+        f"👤  {user_name}\n"
+        f"🆔  `{user_id}`\n"
+        f"🌍  {region_md}\n\n"
+        "✦───────────────✦\n"
+        "𝗖𝗼𝗹𝗹𝗲𝗰𝘁𝗶𝗼𝗻\n"
+        f"🎒  {count} 𝗣𝗼𝗸é𝗺𝗼𝗻\n"
+        f"⭐  {rarest_md}  \\(𝗿𝗮𝗿𝗲𝘀𝘁 𝗰𝗮𝘂𝗴𝗵𝘁\\)\n\n"
+        "✦───────────────✦\n"
+        "𝗦𝗰𝗼𝘂𝘁𝘀\n"
+        f"🔋  {tries_left} / 300 𝗿𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴\n\n"
+        "✦─────────────────✦\n"
+        "𝗕𝗔𝗧𝗧𝗟𝗘 𝗥𝗘𝗖𝗢𝗥𝗗\n"
+        "✦─────────────────✦\n\n"
+        f"🏆  𝗪𝗶𝗻𝘀          {wins}\n"
+        f"❌  𝗟𝗼𝘀𝘀𝗲𝘀        {losses}\n"
+        f"📊  𝗧𝗼𝘁𝗮𝗹 𝗕𝗮𝘁𝘁𝗹𝗲𝘀 {total_battles}\n\n"
+        "✦─────────────────✦\n"
+        f"© 𝗣𝗼𝗸é𝗧𝗿𝗮𝗶𝗻𝗲𝗿 {user_name}"
+    )
+    
+    safe_send(message.chat.id, text, reply_to_id=message.message_id)
 
 @bot.message_handler(commands=["travel"])
 def cmd_travel(message):
@@ -375,7 +426,6 @@ def cmd_myteam(message):
             safe_send(message.chat.id, escape_md("⚠️ I cannot DM you! Please send me a private message first so I can share your team details privately."), reply_to_id=message.message_id)
         else:
             logger.error(f"Error sending /myteam DM: {e}")
-
 
 @bot.message_handler(commands=["trade"])
 def cmd_trade(message):
@@ -1002,7 +1052,7 @@ def cb_handler(call):
                 types.InlineKeyboardButton("<<", callback_data=f"{action}_{uid}_0"),
                 types.InlineKeyboardButton("<", callback_data=f"{action}_{uid}_{max(0, page_idx - 1)}"),
                 types.InlineKeyboardButton(">", callback_data=f"{action}_{uid}_{min(len(pages) - 1, page_idx + 1)}"),
-                types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
+                types.KeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}")
             )
             try: 
                 bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
