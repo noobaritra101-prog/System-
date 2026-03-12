@@ -2,11 +2,12 @@
 from telebot import types
 import database as db
 from api_utils import escape_md
+import random
 
 def to_small_caps(text):
     small_caps_map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
-        'h': 'ʜ', 'i': 'ɪ', 'j': 'ɪ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
+        'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
         'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
         'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
     }
@@ -47,7 +48,7 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
     pvp_icon = "✅" if pvp_done >= pvp_task['goal'] else "☒"
     catch_icon = "✅" if catch_done >= catch_task['goal'] else "☒"
     
-    # 5. Build the UI Text (Keeping your exact layout!)
+    # 5. Build the UI Text
     text = (
         "━━━━━━━━━━━━━━\n"
         f"📅 *{to_small_caps('Your Daily Tasks')}*\n"
@@ -109,14 +110,41 @@ def handle_task_callback(bot, call):
         if not all_done:
             return bot.answer_callback_query(call.id, "🔒 You haven't completed all tasks yet!", show_alert=True)
             
-        # Give them their rewards
+        # Complete tasks in DB
         db.claim_task_reward(user_id, 'catch')
         db.claim_task_reward(user_id, 'pvp')
         db.claim_task_reward(user_id, 'catch_specific')
         
-        # Give Legendary Jackpot
-        db.add_caught_pokemon(user_id, "Arceus", "Galar", "Task Reward")
-        bot.answer_callback_query(call.id, "🎉 JACKPOT! You claimed a ✨ Shiny Arceus!", show_alert=True)
+        # --- MYSTERY BOX LOGIC ---
+        NON_LEGENDARY_POOL = [
+            "Charizard", "Lucario", "Gengar", "Dragonite", "Garchomp", 
+            "Metagross", "Tyranitar", "Salamence", "Greninja", "Eevee", 
+            "Snorlax", "Gyarados", "Arcanine", "Togekiss", "Scizor",
+            "Slaking", "Aegislash", "Volcarona", "Blaziken", "Sceptile",
+            "Aggron", "Milotic", "Lapras", "Hydreigon", "Goodra"
+        ]
+        
+        LEGENDARY_POOL = [
+            "Articuno", "Zapdos", "Moltres", "Mewtwo", "Mew", 
+            "Raikou", "Entei", "Suicune", "Lugia", "Ho-Oh", "Celebi",
+            "Latias", "Latios", "Kyogre", "Groudon", "Rayquaza", "Jirachi",
+            "Dialga", "Palkia", "Giratina", "Cresselia", "Darkrai",
+            "Zacian", "Zamazenta" 
+        ]
+        
+        # 10% Chance for Legendary, 90% for Non-Legendary
+        if random.random() < 0.10:
+            reward_poke = random.choice(LEGENDARY_POOL)
+            rarity_tag = "🌟 LEGENDARY"
+        else:
+            reward_poke = random.choice(NON_LEGENDARY_POOL)
+            rarity_tag = "✨ RARE"
+            
+        # Add to inventory
+        db.add_caught_pokemon(user_id, reward_poke, "Task")
+        
+        # Alert the user
+        bot.answer_callback_query(call.id, f"🎁 BOX OPENED! You claimed a {rarity_tag} Shiny {reward_poke}!", show_alert=True)
         render_tasks_ui(bot, call.message.chat.id, user_id, call.message.message_id)
 
 def check_and_update_catch(user_id, pokemon_name):
