@@ -4,31 +4,38 @@ import database as db
 from api_utils import escape_md
 
 def to_small_caps(text):
-    """Converts regular text into the premium small-caps font."""
     small_caps_map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
-        'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
+        'h': 'ʜ', 'i': 'ɪ', 'j': 'ɪ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
         'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
         'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
     }
     return "".join(char if char.isupper() else small_caps_map.get(char.lower(), char) for char in text)
 
 def render_tasks_ui(bot, chat_id, user_id, message_id=None):
-    t = db.get_daily_tasks(user_id)
+    tasks_list = db.get_daily_tasks(user_id)
     
-    # 1. Cap progress at the maximum target
-    p1_done = 1 if t['prog_p1'] else 0
-    p2_done = 1 if t['prog_p2'] else 0
-    pvp_done = min(t['prog_pvp'], t['target_pvp'])
-    catch_done = min(t['prog_catch'], t['target_catch'])
+    if not tasks_list:
+        bot.send_message(chat_id, "❌ No tasks available today.")
+        return
+
+    # Extract the 3 tasks from the new database format
+    catch_task = next((t for t in tasks_list if t['task_type'] == 'catch'), None)
+    pvp_task = next((t for t in tasks_list if t['task_type'] == 'pvp'), None)
+    spec_task = next((t for t in tasks_list if t['task_type'] == 'catch_specific'), None)
+
+    # 1. Cap progress
+    spec_done = 1 if spec_task['progress'] >= spec_task['goal'] else 0
+    pvp_done = min(pvp_task['progress'], pvp_task['goal'])
+    catch_done = min(catch_task['progress'], catch_task['goal'])
     
-    # 2. Calculate percentages (Each task is worth 25%)
-    p1_pct = 25 if p1_done else 0
-    p2_pct = 25 if p2_done else 0
-    pvp_pct = (pvp_done / t['target_pvp']) * 25 if t['target_pvp'] > 0 else 25
-    catch_pct = (catch_done / t['target_catch']) * 25 if t['target_catch'] > 0 else 25
+    # 2. Calculate percentages (3 tasks = 33.3% each)
+    spec_pct = 33.4 if spec_done else 0
+    pvp_pct = (pvp_done / pvp_task['goal']) * 33.3 if pvp_task['goal'] > 0 else 33.3
+    catch_pct = (catch_done / catch_task['goal']) * 33.3 if catch_task['goal'] > 0 else 33.3
     
-    total_pct = int(p1_pct + p2_pct + pvp_pct + catch_pct)
+    total_pct = int(spec_pct + pvp_pct + catch_pct)
+    if total_pct > 99: total_pct = 100
     
     # 3. Generate visual progress bar (10 blocks total)
     filled_blocks = int(total_pct / 10)
@@ -36,37 +43,37 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
     progress_bar = "▰" * filled_blocks + "▱" * empty_blocks
     
     # 4. Generate Task Icons
-    p1_icon = "✅" if p1_done else "☒"
-    p2_icon = "✅" if p2_done else "☒"
-    pvp_icon = "✅" if pvp_done >= t['target_pvp'] else "☒"
-    catch_icon = "✅" if catch_done >= t['target_catch'] else "☒"
+    spec_icon = "✅" if spec_done else "☒"
+    pvp_icon = "✅" if pvp_done >= pvp_task['goal'] else "☒"
+    catch_icon = "✅" if catch_done >= catch_task['goal'] else "☒"
     
-    # 5. Build the UI Text
+    # 5. Build the UI Text (Keeping your exact layout!)
     text = (
         "━━━━━━━━━━━━━━\n"
         f"📅 *{to_small_caps('Your Daily Tasks')}*\n"
         "━━━━━━━━━━━━━━\n"
-        f"• Cᴀᴛᴄʜ ᴀ ᴡɪʟᴅ {escape_md(to_small_caps(t['target_p1']))} 【{p1_icon}】\n"
-        f"• Wɪɴ {t['target_pvp']} PᴠP ᴍᴀᴛᴄʜ{'ᴇs' if t['target_pvp']>1 else ''} \\({pvp_done}/{t['target_pvp']}\\) 【{pvp_icon}】\n"
-        f"• Cᴀᴛᴄʜ ᴀ ᴡɪʟᴅ {escape_md(to_small_caps(t['target_p2']))} 【{p2_icon}】\n"
-        f"• Cᴀᴛᴄʜ {t['target_catch']} Pᴏᴋᴇ́ᴍᴏɴ \\({catch_done}/{t['target_catch']}\\) 【{catch_icon}】\n"
+        f"• Cᴀᴛᴄʜ ᴀ ᴡɪʟᴅ {escape_md(to_small_caps(spec_task['target']))} 【{spec_icon}】\n"
+        f"• Wɪɴ {pvp_task['goal']} PᴠP ᴍᴀᴛᴄʜ{'ᴇs' if pvp_task['goal']>1 else ''} \\({pvp_done}/{pvp_task['goal']}\\) 【{pvp_icon}】\n"
+        f"• Cᴀᴛᴄʜ {catch_task['goal']} Pᴏᴋᴇ́ᴍᴏɴ \\({catch_done}/{catch_task['goal']}\\) 【{catch_icon}】\n"
         "━━━━━━━━━━━━━━\n"
         f"*{to_small_caps('Completion')} %*\n"
         f"`{progress_bar}` 【{total_pct}%】\n"
         "━━━━━━━━━━━━━━\n"
-        f"🎁 *Rᴇᴡᴀʀᴅ:* ✨ Sʜɪɴʏ {escape_md(to_small_caps(t['reward_poke']))}"
+        f"🎁 *Rᴇᴡᴀʀᴅ:* ✨ Sʜɪɴʏ Mʏsᴛᴇʀʏ Bᴏx"
     )
     
     # 6. Build the Buttons
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    btn_refresh = types.InlineKeyboardButton("Rᴇғʀᴇsʜ 🌀", callback_data=f"taskrefresh_{user_id}")
+    all_claimed = all(t['completed'] for t in tasks_list)
     
-    if t["claimed"]:
-        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍᴇᴅ ✅", callback_data=f"taskclaim_{user_id}")
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    btn_refresh = types.InlineKeyboardButton("Rᴇғʀᴇsʜ 🌀", callback_data=f"task_refresh_{user_id}")
+    
+    if all_claimed:
+        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍᴇᴅ ✅", callback_data=f"task_claim_{user_id}")
     elif total_pct >= 100:
-        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍ 🎁", callback_data=f"taskclaim_{user_id}")
+        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍ 🎁", callback_data=f"task_claim_{user_id}")
     else:
-        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍ 🔒", callback_data=f"taskclaim_{user_id}")
+        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍ 🔒", callback_data=f"task_claim_{user_id}")
         
     kb.add(btn_refresh, btn_claim)
     
@@ -79,42 +86,45 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
 
 
 def handle_task_callback(bot, call):
-    action = call.data.split("_")[0]
-    user_id = int(call.data.split("_")[1])
+    parts = call.data.split("_")
+    action = parts[1]
+    user_id = int(parts[2])
     
     if call.from_user.id != user_id:
         return bot.answer_callback_query(call.id, "❌ Not your tasks!", show_alert=True)
         
-    if action == "taskrefresh":
+    if action == "refresh":
         bot.answer_callback_query(call.id, "🔄 Refreshing progress...")
         render_tasks_ui(bot, call.message.chat.id, user_id, call.message.message_id)
         
-    elif action == "taskclaim":
-        t = db.get_daily_tasks(user_id)
-        if t["claimed"]:
+    elif action == "claim":
+        tasks_list = db.get_daily_tasks(user_id)
+        all_claimed = all(t['completed'] for t in tasks_list)
+        
+        if all_claimed:
             return bot.answer_callback_query(call.id, "❌ You already claimed today's reward!", show_alert=True)
             
-        pvp_done = min(t['prog_pvp'], t['target_pvp'])
-        catch_done = min(t['prog_catch'], t['target_catch'])
-        all_done = (t['prog_p1'] and t['prog_p2'] and pvp_done >= t['target_pvp'] and catch_done >= t['target_catch'])
+        all_done = all(t['progress'] >= t['goal'] for t in tasks_list)
         
         if not all_done:
             return bot.answer_callback_query(call.id, "🔒 You haven't completed all tasks yet!", show_alert=True)
             
-        success, reward = db.claim_daily_reward(user_id)
-        if success:
-            db.add_caught_pokemon(user_id, reward, "Task Reward")
-            bot.answer_callback_query(call.id, f"🎉 You claimed a Shiny {reward}!", show_alert=True)
-            render_tasks_ui(bot, call.message.chat.id, user_id, call.message.message_id)
-        else:
-            bot.answer_callback_query(call.id, "❌ Error claiming reward.", show_alert=True)
+        # Give them their rewards
+        db.claim_task_reward(user_id, 'catch')
+        db.claim_task_reward(user_id, 'pvp')
+        db.claim_task_reward(user_id, 'catch_specific')
+        
+        # Give Legendary Jackpot
+        db.add_caught_pokemon(user_id, "Arceus", "Galar", "Task Reward")
+        bot.answer_callback_query(call.id, "🎉 JACKPOT! You claimed a ✨ Shiny Arceus!", show_alert=True)
+        render_tasks_ui(bot, call.message.chat.id, user_id, call.message.message_id)
 
 def check_and_update_catch(user_id, pokemon_name):
-    """Called from main.py whenever a Pokémon is successfully caught."""
-    try: db.update_task_catch(user_id, pokemon_name)
+    try: 
+        db.update_task_catch(user_id)
+        db.update_task_specific_catch(user_id, pokemon_name)
     except: pass
 
 def add_pvp_win(user_id):
-    """Called from pvp.py whenever the user wins a battle."""
     try: db.update_task_pvp(user_id)
     except: pass
