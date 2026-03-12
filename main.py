@@ -65,7 +65,6 @@ def safe_send(chat_id, text, reply_to_id=None, reply_markup=None):
 def auto_flee(message_id, chat_id, pokemon_name):
     if message_id not in active_hunts: return
     try:
-        # Added escape_md to prevent parsing errors on hyphens (e.g. Ho-Oh)
         fled_cap = f"💨 Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(pokemon_name.title()))} Fʟᴇᴅ\\!"
         bot.edit_message_caption(
             caption=fled_cap,
@@ -98,8 +97,10 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     for msg_id, hunt in to_cancel:
         hunt["timer"].cancel()
         active_hunts.pop(msg_id, None)
-        # We no longer edit the message here! This saves API calls and speeds up the bot.
-        # The button will just say "Fled" when clicked via the callback handler below.
+        try:
+            fled_cap = f"💨 Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(hunt['name'].title()))} Fʟᴇᴅ\\!"
+            bot.edit_message_caption(caption=fled_cap, chat_id=hunt["chat_id"], message_id=msg_id, reply_markup=None, parse_mode="MarkdownV2")
+        except: pass
 
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
     if not poke_id:
@@ -140,7 +141,7 @@ def process_catch(call, uid, pid, name):
     msg_id = call.message.message_id
     
     try:
-        # --- COMPRESSED ANIMATION FOR MAXIMUM SPEED ---
+        # --- FRAME 1: THROW BALL ---
         try:
             bot.edit_message_caption(caption="🔴 *Yᴏᴜ ᴛʜʀᴇᴡ ᴀ Pᴏᴋᴇ́ʙᴀʟʟ\\!*", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
         except Exception as e:
@@ -154,11 +155,8 @@ def process_catch(call, uid, pid, name):
             poke_name_capped = name.title()
             db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
             
-            # Wrapped tasks in a try/except so a task error NEVER breaks the catch animation again!
-            try: 
-                tasks.check_and_update_catch(uid, poke_name_capped)
-            except Exception as e: 
-                logger.error(f"Ignored task error during catch: {e}")
+            try: tasks.check_and_update_catch(uid, poke_name_capped)
+            except Exception as e: logger.error(f"Ignored task error during catch: {e}")
             
             if LOG_GROUP_ID:
                 try: 
@@ -257,14 +255,14 @@ def cmd_open(message):
         return safe_send(message.chat.id, escape_md("⚠️ The /open command only works in private messages (DM)."), reply_to_id=message.message_id)
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
     kb.add(types.KeyboardButton("🔎 Scout"))
-    bot.send_message(message.chat.id, escape_md("⌨️ Action menu opened! Use /close to hide it."), reply_markup=kb, parse_mode="MarkdownV2")
+    bot.send_message(message.chat.id, "⌨️ *Mᴇɴᴜ Oᴘᴇɴᴇᴅ\\!*\n/close ᴛᴏ Hɪᴅᴇ", reply_markup=kb, parse_mode="MarkdownV2")
 
 @bot.message_handler(commands=["close"])
 def cmd_close(message):
     if message.chat.type != "private":
         return safe_send(message.chat.id, escape_md("⚠️ The /close command only works in private messages (DM)."), reply_to_id=message.message_id)
     remove_kb = types.ReplyKeyboardRemove()
-    bot.send_message(message.chat.id, escape_md("⌨️ Action menu closed! Use /open to bring it back."), reply_markup=remove_kb, parse_mode="MarkdownV2")
+    bot.send_message(message.chat.id, "⌨️ *Mᴇɴᴜ Cʟᴏsᴇᴅ\\!*\nTʏᴘᴇ /open ᴛᴏ Rᴇᴏᴘᴇɴ\\.", reply_markup=remove_kb, parse_mode="MarkdownV2")
 
 @bot.message_handler(func=lambda message: message.text == "🔎 Scout" and message.chat.type == "private")
 def text_scout(message):
@@ -330,9 +328,18 @@ def cmd_profile(message):
 @bot.message_handler(commands=["travel"])
 def cmd_travel(message):
     if not db.get_user(message.from_user.id): return safe_send(message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
-    kb = types.InlineKeyboardMarkup()
-    for r in REGIONS: kb.add(types.InlineKeyboardButton(f"✈️ {r}", callback_data=f"travel_{message.from_user.id}_{r}"))
-    safe_send(message.chat.id, "*Choose a region to travel to:*", reply_to_id=message.message_id, reply_markup=kb)
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    btns = [types.InlineKeyboardButton(f"{to_small_caps(r)}", callback_data=f"travel_{message.from_user.id}_{r}") for r in REGIONS]
+    
+    # Add buttons in a neat 2-column grid
+    for i in range(0, len(btns), 2):
+        if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
+        else: kb.add(btns[i])
+            
+    kb.add(types.InlineKeyboardButton("Cᴀɴᴄᴇʟ ↩️", callback_data=f"travel_cancel_{message.from_user.id}"))
+    
+    safe_send(message.chat.id, "🌍 *Wʜᴇʀᴇ Wᴏᴜʟᴅ Yᴏᴜ Lɪᴋᴇ Tᴏ Tʀᴀᴠᴇʟ, Tʀᴀɪɴᴇʀ?*", reply_to_id=message.message_id, reply_markup=kb)
 
 @bot.message_handler(commands=["scout"])
 def cmd_scout(message):
@@ -442,7 +449,10 @@ def cmd_myteam(message):
     try:
         bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
         if message.chat.type != "private":
-            safe_send(message.chat.id, escape_md("✅ I have secretly sent your team strategy to your DMs!"), reply_to_id=message.message_id)
+            bot_username = bot.get_me().username
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("Cʜᴇᴄᴋ DMs ❗❗", url=f"https://t.me/{bot_username}"))
+            safe_send(message.chat.id, "📩 *I’ᴠᴇ Sᴇɴᴛ Yᴏᴜʀ Tᴇᴀᴍ Sᴛʀᴀᴛᴇɢʏ Tᴏ Yᴏᴜʀ DMs\\!*", reply_to_id=message.message_id, reply_markup=kb)
     except Exception as e:
         if "Forbidden" in str(e) or "chat not found" in str(e).lower():
             safe_send(message.chat.id, escape_md("⚠️ I cannot DM you! Please send me a private message first so I can share your team details privately."), reply_to_id=message.message_id)
@@ -998,7 +1008,15 @@ def cb_handler(call):
         if call.data.startswith("task"):
             return tasks.handle_task_callback(bot, call)
 
-        if call.data.startswith("travel_"):
+        # --- TRAVEL MENUS ---
+        elif call.data.startswith("travel_cancel_"):
+            uid = int(call.data.split("_")[2])
+            if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu.")
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            return
+            
+        elif call.data.startswith("travel_"):
             parts = call.data.split("_", 2)
             uid, region = int(parts[1]), parts[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu.")
