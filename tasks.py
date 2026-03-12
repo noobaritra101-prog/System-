@@ -3,6 +3,16 @@ from telebot import types
 import database as db
 from api_utils import escape_md
 
+def to_small_caps(text):
+    """Converts regular text into the premium small-caps font."""
+    small_caps_map = {
+        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
+        'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
+        'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
+        'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
+    }
+    return "".join(char if char.isupper() else small_caps_map.get(char.lower(), char) for char in text)
+
 def render_tasks_ui(bot, chat_id, user_id, message_id=None):
     t = db.get_daily_tasks(user_id)
     
@@ -34,29 +44,29 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
     # 5. Build the UI Text
     text = (
         "━━━━━━━━━━━━━━\n"
-        "📅 *Your Daily Tasks*\n"
+        f"📅 *{to_small_caps('Your Daily Tasks')}*\n"
         "━━━━━━━━━━━━━━\n"
-        f"• Catch a wild {escape_md(t['target_p1'])} 【{p1_icon}】\n"
-        f"• Win {t['target_pvp']} PvP match{'es' if t['target_pvp']>1 else ''} \\({pvp_done}/{t['target_pvp']}\\) 【{pvp_icon}】\n"
-        f"• Catch a wild {escape_md(t['target_p2'])} 【{p2_icon}】\n"
-        f"• Catch {t['target_catch']} Pokémon \\({catch_done}/{t['target_catch']}\\) 【{catch_icon}】\n"
+        f"• Cᴀᴛᴄʜ ᴀ ᴡɪʟᴅ {escape_md(to_small_caps(t['target_p1']))} 【{p1_icon}】\n"
+        f"• Wɪɴ {t['target_pvp']} PᴠP ᴍᴀᴛᴄʜ{'ᴇs' if t['target_pvp']>1 else ''} \\({pvp_done}/{t['target_pvp']}\\) 【{pvp_icon}】\n"
+        f"• Cᴀᴛᴄʜ ᴀ ᴡɪʟᴅ {escape_md(to_small_caps(t['target_p2']))} 【{p2_icon}】\n"
+        f"• Cᴀᴛᴄʜ {t['target_catch']} Pᴏᴋᴇ́ᴍᴏɴ \\({catch_done}/{t['target_catch']}\\) 【{catch_icon}】\n"
         "━━━━━━━━━━━━━━\n"
-        "*Completion %*\n"
-        f"{progress_bar} 【{total_pct}%】\n"
+        f"*{to_small_caps('Completion')} %*\n"
+        f"`{progress_bar}` 【{total_pct}%】\n"
         "━━━━━━━━━━━━━━\n"
-        f"🎁 *Reward:* ✨ Shiny {escape_md(t['reward_poke'])}"
+        f"🎁 *Rᴇᴡᴀʀᴅ:* ✨ Sʜɪɴʏ {escape_md(to_small_caps(t['reward_poke']))}"
     )
     
     # 6. Build the Buttons
     kb = types.InlineKeyboardMarkup(row_width=2)
-    btn_refresh = types.InlineKeyboardButton("Refresh 🌀", callback_data=f"taskrefresh_{user_id}")
+    btn_refresh = types.InlineKeyboardButton("Rᴇғʀᴇsʜ 🌀", callback_data=f"taskrefresh_{user_id}")
     
     if t["claimed"]:
-        btn_claim = types.InlineKeyboardButton("Claimed ✅", callback_data=f"taskclaim_{user_id}")
+        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍᴇᴅ ✅", callback_data=f"taskclaim_{user_id}")
     elif total_pct >= 100:
-        btn_claim = types.InlineKeyboardButton("Claim 🎁", callback_data=f"taskclaim_{user_id}")
+        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍ 🎁", callback_data=f"taskclaim_{user_id}")
     else:
-        btn_claim = types.InlineKeyboardButton("Claim 🔒", callback_data=f"taskclaim_{user_id}")
+        btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍ 🔒", callback_data=f"taskclaim_{user_id}")
         
     kb.add(btn_refresh, btn_claim)
     
@@ -93,6 +103,7 @@ def handle_task_callback(bot, call):
             
         success, reward = db.claim_daily_reward(user_id)
         if success:
+            db.add_caught_pokemon(user_id, reward, "Task Reward")
             bot.answer_callback_query(call.id, f"🎉 You claimed a Shiny {reward}!", show_alert=True)
             render_tasks_ui(bot, call.message.chat.id, user_id, call.message.message_id)
         else:
@@ -100,8 +111,10 @@ def handle_task_callback(bot, call):
 
 def check_and_update_catch(user_id, pokemon_name):
     """Called from main.py whenever a Pokémon is successfully caught."""
-    db.update_task_catch(user_id, pokemon_name)
+    try: db.update_task_catch(user_id, pokemon_name)
+    except: pass
 
 def add_pvp_win(user_id):
     """Called from pvp.py whenever the user wins a battle."""
-    db.update_task_pvp(user_id)
+    try: db.update_task_pvp(user_id)
+    except: pass
