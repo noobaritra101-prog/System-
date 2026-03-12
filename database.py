@@ -53,7 +53,7 @@ def init_db():
                     )
                 """)
                 
-                # --- AUTO-MIGRATION ---
+                # --- AUTO-MIGRATION: PVP SETTINGS ---
                 cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='size'")
                 if not cur.fetchone():
                     cur.execute("ALTER TABLE pvp_settings ADD COLUMN size INTEGER DEFAULT 6")
@@ -88,6 +88,18 @@ def init_db():
                         PRIMARY KEY (user_id, task_type)
                     )
                 """)
+                conn.commit()
+
+                # --- AUTO-MIGRATION: FIX OLD TASKS SCHEMA RULE ---
+                try:
+                    # This safely drops the old single-user rule and replaces it with the 3-task rule
+                    cur.execute("ALTER TABLE tasks DROP CONSTRAINT tasks_pkey")
+                    cur.execute("ALTER TABLE tasks ADD PRIMARY KEY (user_id, task_type)")
+                    conn.commit()
+                    logger.info("🔧 Migrated: Updated Tasks primary key to allow multiple daily tasks!")
+                except Exception:
+                    conn.rollback() # If it's already fixed, ignore it safely
+                # -------------------------------------------------------
                 
                 # Speed Indexes
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_pokemons_user_id ON pokemons(user_id)")
@@ -283,9 +295,11 @@ def get_daily_tasks(user_id):
                     (user_id, 'catch_specific', specific_target, 0, 1, 'jackpot', 1, False, today)
                 ]
                 
+                # ON CONFLICT added to make this 100% immune to crashing
                 psycopg2.extras.execute_batch(cur, """
                     INSERT INTO tasks (user_id, task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id, task_type) DO NOTHING
                 """, new_tasks)
                 conn.commit()
                 
