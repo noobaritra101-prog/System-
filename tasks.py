@@ -1,107 +1,131 @@
 # tasks.py
 from telebot import types
 import database as db
-from api_utils import escape_md
+import time
+import random
+from api_utils import escape_md, fetch_random_pokemon_id_and_name_sync
+
+def to_small_caps(text):
+    """Converts regular text into the premium small-caps font."""
+    small_caps_map = {
+        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
+        'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
+        'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
+        'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
+    }
+    return "".join(char if char.isupper() else small_caps_map.get(char.lower(), char) for char in text)
+
+def check_and_update_catch(user_id, pokemon_name):
+    """Called automatically from main.py when a pokemon is caught to update tasks."""
+    try:
+        db.update_task_catch(user_id)
+        db.update_task_specific_catch(user_id, pokemon_name)
+    except Exception as e:
+        pass # Silently ignore so it never interrupts the catch animation
 
 def render_tasks_ui(bot, chat_id, user_id, message_id=None):
-    t = db.get_daily_tasks(user_id)
+    tasks_list = db.get_daily_tasks(user_id)
     
-    # 1. Cap progress at the maximum target
-    p1_done = 1 if t['prog_p1'] else 0
-    p2_done = 1 if t['prog_p2'] else 0
-    pvp_done = min(t['prog_pvp'], t['target_pvp'])
-    catch_done = min(t['prog_catch'], t['target_catch'])
-    
-    # 2. Calculate percentages (Each task is worth 25%)
-    p1_pct = 25 if p1_done else 0
-    p2_pct = 25 if p2_done else 0
-    pvp_pct = (pvp_done / t['target_pvp']) * 25 if t['target_pvp'] > 0 else 25
-    catch_pct = (catch_done / t['target_catch']) * 25 if t['target_catch'] > 0 else 25
-    
-    total_pct = int(p1_pct + p2_pct + pvp_pct + catch_pct)
-    
-    # 3. Generate visual progress bar (10 blocks total)
-    filled_blocks = int(total_pct / 10)
-    empty_blocks = 10 - filled_blocks
-    progress_bar = "▰" * filled_blocks + "▱" * empty_blocks
-    
-    # 4. Generate Task Icons
-    p1_icon = "✅" if p1_done else "☒"
-    p2_icon = "✅" if p2_done else "☒"
-    pvp_icon = "✅" if pvp_done >= t['target_pvp'] else "☒"
-    catch_icon = "✅" if catch_done >= t['target_catch'] else "☒"
-    
-    # 5. Build the UI Text
-    text = (
-        "━━━━━━━━━━━━━━\n"
-        "📅 *Your Daily Tasks*\n"
-        "━━━━━━━━━━━━━━\n"
-        f"• Catch a wild {escape_md(t['target_p1'])} 【{p1_icon}】\n"
-        f"• Win {t['target_pvp']} PvP match{'es' if t['target_pvp']>1 else ''} \\({pvp_done}/{t['target_pvp']}\\) 【{pvp_icon}】\n"
-        f"• Catch a wild {escape_md(t['target_p2'])} 【{p2_icon}】\n"
-        f"• Catch {t['target_catch']} Pokémon \\({catch_done}/{t['target_catch']}\\) 【{catch_icon}】\n"
-        "━━━━━━━━━━━━━━\n"
-        "*Completion %*\n"
-        f"{progress_bar} 【{total_pct}%】\n"
-        "━━━━━━━━━━━━━━\n"
-        f"🎁 *Reward:* ✨ Shiny {escape_md(t['reward_poke'])}"
-    )
-    
-    # 6. Build the Buttons
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    btn_refresh = types.InlineKeyboardButton("Refresh 🌀", callback_data=f"taskrefresh_{user_id}")
-    
-    if t["claimed"]:
-        btn_claim = types.InlineKeyboardButton("Claimed ✅", callback_data=f"taskclaim_{user_id}")
-    elif total_pct >= 100:
-        btn_claim = types.InlineKeyboardButton("Claim 🎁", callback_data=f"taskclaim_{user_id}")
-    else:
-        btn_claim = types.InlineKeyboardButton("Claim 🔒", callback_data=f"taskclaim_{user_id}")
+    if not tasks_list:
+        text = "❌ *Nᴏ ᴛᴀsᴋs ᴀᴠᴀɪʟᴀʙʟᴇ ᴛᴏᴅᴀʏ\\.*"
+        if message_id:
+            try: bot.edit_message_text(text, chat_id, message_id, parse_mode="MarkdownV2")
+            except: pass
+        else:
+            bot.send_message(chat_id, text, parse_mode="MarkdownV2")
+        return
+
+    text = "📋 *Yᴏᴜʀ Dᴀɪʟʏ Mɪssɪᴏɴs*\n━━━━━━━━━━━━━━\n\n"
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    buttons = []
+
+    for i, t in enumerate(tasks_list):
+        t_type = t['task_type']
+        target = t['target']
+        prog = t['progress']
+        goal = t['goal']
+        completed = t['completed']
+
+        # Cap the visual progress so it doesn't show 15/10
+        display_prog = min(prog, goal)
+
+        # Format dynamic descriptions
+        if t_type == 'catch': desc = f"Cᴀᴛᴄʜ {goal} Pᴏᴋᴇ́ᴍᴏɴ"
+        elif t_type == 'pvp': desc = f"Wɪɴ {goal} PᴠP Bᴀᴛᴛʟᴇs"
+        elif t_type == 'catch_specific': desc = f"Cᴀᴛᴄʜ ᴀ {target}"
+        else: desc = "Uɴᴋɴᴏᴡɴ Mɪssɪᴏɴ"
+
+        status_icon = "✅" if completed else ("⏳" if prog >= goal else "🏃")
+        text += f"*{i+1}\\. {escape_md(to_small_caps(desc))}* {status_icon}\n"
+        text += f"  └ Pʀᴏɢʀᴇss: {display_prog}/{goal}\n"
         
-    kb.add(btn_refresh, btn_claim)
-    
-    # 7. Send or Edit Message
+        if not completed:
+            text += f"  └ Rᴇᴡᴀʀᴅ: {t['reward_amount']} {escape_md(to_small_caps(t['reward_type']).title())}\n\n"
+        else:
+            text += "  └ Rᴇᴡᴀʀᴅ: Cʟᴀɪᴍᴇᴅ\\!\n\n"
+
+        # Interactive Button logic
+        if completed:
+            buttons.append(types.InlineKeyboardButton(f"✅ {i+1}", callback_data="ignore"))
+        elif prog >= goal:
+            buttons.append(types.InlineKeyboardButton(f"🎁 Cʟᴀɪᴍ {i+1}", callback_data=f"task_claim_{user_id}_{t_type}"))
+        else:
+            buttons.append(types.InlineKeyboardButton(f"❌ {i+1}", callback_data="ignore"))
+
+    # Neatly format buttons
+    if len(buttons) == 3:
+        kb.row(*buttons)
+    else:
+        for b in buttons: kb.add(b)
+        
+    kb.row(types.InlineKeyboardButton("🌀 Rᴇғʀᴇsʜ Mɪssɪᴏɴs", callback_data=f"task_refresh_{user_id}"))
+
     if message_id:
         try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
-        except: pass
+        except Exception as e: pass
     else:
         bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
 
-
 def handle_task_callback(bot, call):
-    action = call.data.split("_")[0]
-    user_id = int(call.data.split("_")[1])
+    parts = call.data.split("_")
     
-    if call.from_user.id != user_id:
-        return bot.answer_callback_query(call.id, "❌ Not your tasks!", show_alert=True)
-        
-    if action == "taskrefresh":
-        bot.answer_callback_query(call.id, "🔄 Refreshing progress...")
-        render_tasks_ui(bot, call.message.chat.id, user_id, call.message.message_id)
-        
-    elif action == "taskclaim":
-        t = db.get_daily_tasks(user_id)
-        if t["claimed"]:
-            return bot.answer_callback_query(call.id, "❌ You already claimed today's reward!", show_alert=True)
+    if parts[1] == "refresh":
+        owner_id = int(parts[2])
+        if call.from_user.id != owner_id:
+            return bot.answer_callback_query(call.id, "❌ Not your tasks!", show_alert=True)
             
-        pvp_done = min(t['prog_pvp'], t['target_pvp'])
-        catch_done = min(t['prog_catch'], t['target_catch'])
-        all_done = (t['prog_p1'] and t['prog_p2'] and pvp_done >= t['target_pvp'] and catch_done >= t['target_catch'])
-        
-        if not all_done:
-            return bot.answer_callback_query(call.id, "🔒 You haven't completed all tasks yet!", show_alert=True)
+        bot.answer_callback_query(call.id, "🔄 Refreshing tasks...")
+        render_tasks_ui(bot, call.message.chat.id, owner_id, call.message.message_id)
+        return
+
+    if parts[1] == "claim":
+        owner_id = int(parts[2])
+        if call.from_user.id != owner_id:
+            return bot.answer_callback_query(call.id, "❌ Not your tasks!", show_alert=True)
             
-        success, reward = db.claim_daily_reward(user_id)
-        if success:
-            bot.answer_callback_query(call.id, f"🎉 You claimed a Shiny {reward}!", show_alert=True)
-            render_tasks_ui(bot, call.message.chat.id, user_id, call.message.message_id)
+        task_type = parts[3]
+        reward = db.claim_task_reward(owner_id, task_type)
+
+        if reward:
+            r_type, r_amount = reward
+            
+            # --- AUTOMATED REWARD DISTRIBUTION LOGIC ---
+            if r_type == 'shiny':
+                # Give them a random strong Pokemon
+                poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync("Galar") 
+                if not name: name = "Mewtwo"
+                db.add_caught_pokemon(owner_id, name.title(), "Task Reward")
+                bot.answer_callback_query(call.id, f"🎉 Claimed! You received a ✨ {name.title()}!", show_alert=True)
+                
+            elif r_type == 'jackpot':
+                # Legendary Jackpot for specific catches
+                db.add_caught_pokemon(owner_id, "Arceus", "Task Reward")
+                bot.answer_callback_query(call.id, f"🎰 JACKPOT! You received a ✨ Arceus!", show_alert=True)
+                
+            else:
+                bot.answer_callback_query(call.id, f"🎉 You claimed {r_amount} {r_type}!", show_alert=True)
+            
+            # Re-render UI instantly to show it has been claimed
+            render_tasks_ui(bot, call.message.chat.id, owner_id, call.message.message_id)
         else:
-            bot.answer_callback_query(call.id, "❌ Error claiming reward.", show_alert=True)
-
-def check_and_update_catch(user_id, pokemon_name):
-    """Called from main.py whenever a Pokémon is successfully caught."""
-    db.update_task_catch(user_id, pokemon_name)
-
-def add_pvp_win(user_id):
-    """Called from pvp.py whenever the user wins a battle."""
-    db.update_task_pvp(user_id)
+            bot.answer_callback_query(call.id, "⚠️ This task is not finished or already claimed!", show_alert=True)
