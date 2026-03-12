@@ -39,7 +39,17 @@ TYPE_EMOJIS = {
     'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
 }
 
-# --- ANTI-SPAM HELPER ---
+# --- TEXT HELPERS ---
+def to_small_caps(text):
+    """Converts regular text into the premium small-caps font."""
+    small_caps_map = {
+        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
+        'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
+        'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
+        'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
+    }
+    return "".join(char if char.isupper() else small_caps_map.get(char.lower(), char) for char in text)
+
 def safe_send(chat_id, text, reply_to_id=None, reply_markup=None):
     """Safely sends messages and automatically handles Telegram Rate Limits (429)"""
     try:
@@ -55,8 +65,9 @@ def safe_send(chat_id, text, reply_to_id=None, reply_markup=None):
 def auto_flee(message_id, chat_id, pokemon_name):
     if message_id not in active_hunts: return
     try:
+        fled_cap = f"Tʜᴇ Wɪʟᴅ ✨ {to_small_caps(pokemon_name.title())} Fʟᴇᴅ\\!"
         bot.edit_message_caption(
-            caption=f"💨 The wild ✨ *{escape_md(pokemon_name.title())}* fled\\!",
+            caption=fled_cap,
             chat_id=chat_id, message_id=message_id, reply_markup=None, parse_mode="MarkdownV2"
         )
     except Exception as e:
@@ -76,70 +87,58 @@ def start_scout(chat_id, user_id, reply_to_id=None):
         return safe_send(chat_id, escape_md("⚠️ Error checking your profile."), reply_to_id)
     if tries_left <= 0:
         return safe_send(chat_id, escape_md("💤 You have no scouts left today. Rest and come back tomorrow!"), reply_to_id)
-    if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
-        return safe_send(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_id)
-
-    # ⚡ INSTANT FEEDBACK UI: Solves the "Slow" feeling by showing immediate action!
-    status_msg = None
-    try: status_msg = bot.send_message(chat_id, "🔎 *Scouting the tall grass\\.\\.\\.*", reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
-    except: pass
+        
+    # --- OVERRIDE PREVIOUS SCOUT ---
+    to_cancel = []
+    for msg_id, hunt in list(active_hunts.items()):
+        if hunt["user_id"] == user_id:
+            to_cancel.append((msg_id, hunt))
+            
+    for msg_id, hunt in to_cancel:
+        hunt["timer"].cancel()
+        active_hunts.pop(msg_id, None)
+        try:
+            fled_cap = f"Tʜᴇ Wɪʟᴅ ✨ {to_small_caps(hunt['name'].title())} Fʟᴇᴅ\\!"
+            bot.edit_message_caption(caption=fled_cap, chat_id=hunt["chat_id"], message_id=msg_id, parse_mode="MarkdownV2")
+        except: pass
 
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
     if not poke_id:
-        if status_msg: 
-            try: bot.delete_message(chat_id, status_msg.message_id)
-            except: pass
         return safe_send(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_id)
 
     img_url = official_shiny_artwork_url(base_id)
-    caption = f"🌍 A wild ✨ *{escape_md(name.title())}* appeared in *{escape_md(region)}*\\!\n\n🎒 What will you do?"
+    
+    # Premium Small Caps UI
+    p_name = to_small_caps(name.title())
+    p_reg = to_small_caps(region)
+    caption = f"A Wɪʟᴅ ✨ {p_name} Aᴘᴘᴇᴀʀᴇᴅ ɪɴ {p_reg}\\!\n\n🎒 Wʜᴀᴛ Wɪʟʟ Yᴏᴜ Dᴏ, Tʀᴀɪɴᴇʀ?"
     
     kb = types.InlineKeyboardMarkup()
     kb.add(
-        types.InlineKeyboardButton("🔴 Catch", callback_data=f"catch_{user_id}_{poke_id}_{name[:16]}"),
-        types.InlineKeyboardButton("🏃‍♂️ Run", callback_data=f"run_{user_id}_{name[:16]}")
+        types.InlineKeyboardButton("🎯 Cᴀᴛᴄʜ", callback_data=f"catch_{user_id}_{poke_id}_{name[:16]}"),
+        types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"run_{user_id}_{name[:16]}")
     )
 
     try:
-        # Send the final image
         sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
-        
-        # Delete the instant loading message so it looks clean
-        if status_msg: 
-            try: bot.delete_message(chat_id, status_msg.message_id)
-            except: pass
-            
         timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, chat_id, name))
         timer.start()
-        active_hunts[sent.message_id] = {"user_id": user_id, "start_time": time.time(), "timer": timer, "name": name}
+        active_hunts[sent.message_id] = {"user_id": user_id, "chat_id": chat_id, "start_time": time.time(), "timer": timer, "name": name}
     except Exception as e: 
-        if status_msg: 
-            try: bot.delete_message(chat_id, status_msg.message_id)
-            except: pass
         if "429" in str(e):
             time.sleep(2) 
             try:
                 sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
                 timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, chat_id, name))
                 timer.start()
-                active_hunts[sent.message_id] = {"user_id": user_id, "start_time": time.time(), "timer": timer, "name": name}
+                active_hunts[sent.message_id] = {"user_id": user_id, "chat_id": chat_id, "start_time": time.time(), "timer": timer, "name": name}
             except: pass
         else:
             logger.error(f"Failed to send scout photo: {e}")
 
 def process_catch(call, uid, pid, name):
     try:
-        try:
-            bot.edit_message_caption(caption="🔴 *Throwing Pokéball\\.\\.\\.*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
-        except Exception as e:
-            if "429" in str(e):
-                time.sleep(2)
-                try: bot.edit_message_caption(caption="🔴 *Throwing Pokéball\\.\\.\\.*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
-                except: pass
-
-        # ⚡ REDUCED ARTIFICIAL DELAY FOR MAXIMUM SPEED (Down to 0.4s) ⚡
-        time.sleep(0.4) 
-        
+        # INSTANT CATCH CALCULATION - NO DELAYS
         catch_rate = get_species_catch_rate_sync(pid)
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
             poke_name_capped = name.title()
@@ -153,7 +152,7 @@ def process_catch(call, uid, pid, name):
                     bot.send_message(LOG_GROUP_ID, f"🟢 *Catch Log:* [{escape_md(u_name)}](tg://user?id={uid}) caught a ✨ Shiny {escape_md(poke_name_capped)}\\!", parse_mode="MarkdownV2")
                 except: pass
             
-            cap = f"✨ *Gotcha\\!* Shiny *{escape_md(poke_name_capped)}* was caught\\!\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\."
+            cap = f"✨ *Gᴏᴛᴄʜᴀ\\!* Sʜɪɴʏ *{escape_md(to_small_caps(poke_name_capped))}* ᴡᴀs ᴄᴀᴜɢʜᴛ\\!\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\."
             try: bot.edit_message_caption(caption=cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             except Exception as e:
                 if "429" in str(e):
@@ -161,7 +160,7 @@ def process_catch(call, uid, pid, name):
                     try: bot.edit_message_caption(caption=cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
                     except: pass
         else:
-            cap = f"💨 Oh no\\! Shiny *{escape_md(name.title())}* broke free and fled\\!"
+            cap = f"Tʜᴇ Wɪʟᴅ ✨ {to_small_caps(name.title())} Fʟᴇᴅ\\!"
             try: bot.edit_message_caption(caption=cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             except Exception as e:
                 if "429" in str(e):
@@ -308,7 +307,7 @@ def cmd_profile(message):
         f"⭐  {rarest_md}  \\(𝗿𝗮𝗿𝗲𝘀𝘁 𝗰𝗮𝘂𝗴𝗵𝘁\\)\n\n"
         "✦───────────────✦\n"
         "𝗦𝗰𝗼𝘂𝘁𝘀\n"
-        f"🔋  {tries_left} / 300 𝗿𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴\n\n"
+        f"🔋  {tries_left} / 2500 𝗿𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴\n\n"
         "✦─────────────────✦\n"
         "𝗕𝗔𝗧𝗧𝗟𝗘 𝗥𝗘𝗖𝗢𝗥𝗗\n"
         "✦─────────────────✦\n\n"
@@ -610,7 +609,7 @@ def execute_world_spawn(message, pokemon_name):
         sent = bot.send_photo(message.chat.id, img_url, caption=cap, reply_to_message_id=message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
         timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, message.chat.id, poke_name))
         timer.start()
-        active_hunts[sent.message_id] = {"user_id": "ANY", "start_time": time.time(), "timer": timer, "name": poke_name}
+        active_hunts[sent.message_id] = {"user_id": "ANY", "chat_id": message.chat.id, "start_time": time.time(), "timer": timer, "name": poke_name}
     except Exception as e:
         logger.error(f"Group spawn error: {e}")
         safe_send(message.chat.id, escape_md("❌ Failed to spawn the event Pokémon."), reply_to_id=message.message_id)
@@ -658,7 +657,7 @@ def execute_user_stats(message, args_str):
     text += f"🆔 *ID:* `{target_id}`\n"
     text += f"👤 *Name:* [{escape_md(target_name)}](tg://user?id={target_id})\n"
     text += f"🌍 *Region:* {escape_md(region)}\n"
-    text += f"🔋 *Scouts Left:* {tries}/300\n"
+    text += f"🔋 *Scouts Left:* {tries}/2500\n"
     text += f"🎒 *Total Pokémon:* {total_caught}\n"
     
     safe_send(message.chat.id, text, reply_to_id=message.message_id)
@@ -1042,7 +1041,9 @@ def cb_handler(call):
             
             active_hunts[call.message.message_id]["timer"].cancel()
             active_hunts.pop(call.message.message_id, None)
-            try: bot.edit_message_caption(caption=f"🏃‍♂️ You got away safely from *{escape_md(name.capitalize())}*\\.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+            
+            fled_cap = f"Tʜᴇ Wɪʟᴅ ✨ {to_small_caps(name.title())} Fʟᴇᴅ\\!"
+            try: bot.edit_message_caption(caption=fled_cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             except: pass
 
         elif call.data.startswith("mypoke_") or call.data.startswith("plist_"):
