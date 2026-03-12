@@ -258,6 +258,7 @@ def update_battle_stats(user_id, is_win=True):
             """, (user_id, win_inc, loss_inc))
             conn.commit()
 
+# ================== TASKS MODULE ==================
 def update_task_pvp(user_id):
     """Increments a PvP task if the user currently has one active."""
     with get_conn() as conn:
@@ -268,6 +269,34 @@ def update_task_pvp(user_id):
                     SET progress = progress + 1 
                     WHERE user_id = %s AND task_type = 'pvp' AND completed = FALSE
                 """, (user_id,))
+                conn.commit()
+            except:
+                conn.rollback()
+
+def update_task_catch(user_id):
+    """Increments a general catch task if the user currently has one active."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute("""
+                    UPDATE tasks 
+                    SET progress = progress + 1 
+                    WHERE user_id = %s AND task_type = 'catch' AND completed = FALSE
+                """, (user_id,))
+                conn.commit()
+            except:
+                conn.rollback()
+
+def update_task_specific_catch(user_id, pokemon_name):
+    """Increments a specific catch task if the user caught the exact target."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute("""
+                    UPDATE tasks 
+                    SET progress = progress + 1 
+                    WHERE user_id = %s AND task_type = 'catch_specific' AND target ILIKE %s AND completed = FALSE
+                """, (user_id, pokemon_name))
                 conn.commit()
             except:
                 conn.rollback()
