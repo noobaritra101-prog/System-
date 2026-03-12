@@ -65,7 +65,8 @@ def safe_send(chat_id, text, reply_to_id=None, reply_markup=None):
 def auto_flee(message_id, chat_id, pokemon_name):
     if message_id not in active_hunts: return
     try:
-        fled_cap = f"💨 Tʜᴇ Wɪʟᴅ ✨ {to_small_caps(pokemon_name.title())} Fʟᴇᴅ\\!"
+        # Added escape_md to prevent parsing errors on hyphens (e.g. Ho-Oh)
+        fled_cap = f"💨 Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(pokemon_name.title()))} Fʟᴇᴅ\\!"
         bot.edit_message_caption(
             caption=fled_cap,
             chat_id=chat_id, message_id=message_id, reply_markup=None, parse_mode="MarkdownV2"
@@ -97,11 +98,8 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     for msg_id, hunt in to_cancel:
         hunt["timer"].cancel()
         active_hunts.pop(msg_id, None)
-        try:
-            fled_cap = f"💨 Tʜᴇ Wɪʟᴅ ✨ {to_small_caps(hunt['name'].title())} Fʟᴇᴅ\\!"
-            # REMOVE THE BUTTONS (reply_markup=None) SO THEY CAN'T BE CLICKED
-            bot.edit_message_caption(caption=fled_cap, chat_id=hunt["chat_id"], message_id=msg_id, reply_markup=None, parse_mode="MarkdownV2")
-        except: pass
+        # We no longer edit the message here! This saves API calls and speeds up the bot.
+        # The button will just say "Fled" when clicked via the callback handler below.
 
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
     if not poke_id:
@@ -109,9 +107,9 @@ def start_scout(chat_id, user_id, reply_to_id=None):
 
     img_url = official_shiny_artwork_url(base_id)
     
-    # Premium Small Caps UI
-    p_name = to_small_caps(name.title())
-    p_reg = to_small_caps(region)
+    # Premium Small Caps UI with Markdown Escaping
+    p_name = escape_md(to_small_caps(name.title()))
+    p_reg = escape_md(to_small_caps(region))
     caption = f"A Wɪʟᴅ ✨ {p_name} Aᴘᴘᴇᴀʀᴇᴅ ɪɴ {p_reg}\\!\n\n🎒 Wʜᴀᴛ Wɪʟʟ Yᴏᴜ Dᴏ, Tʀᴀɪɴᴇʀ?"
     
     kb = types.InlineKeyboardMarkup()
@@ -142,28 +140,25 @@ def process_catch(call, uid, pid, name):
     msg_id = call.message.message_id
     
     try:
-        # --- FRAME 1: THROW BALL ---
+        # --- COMPRESSED ANIMATION FOR MAXIMUM SPEED ---
         try:
             bot.edit_message_caption(caption="🔴 *Yᴏᴜ ᴛʜʀᴇᴡ ᴀ Pᴏᴋᴇ́ʙᴀʟʟ\\!*", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
         except Exception as e:
-            if "429" in str(e): time.sleep(1.5)
+            if "429" in str(e): time.sleep(1)
             
-        time.sleep(0.8) # Perfect suspense delay
+        time.sleep(0.7) # Single, ultra-fast suspense delay
         
-        # --- FRAME 2: WIGGLE ---
-        try:
-            bot.edit_message_caption(caption="🔄 *Wɪɢɢʟᴇ\\.\\.\\. Wɪɢɢʟᴇ\\.\\.\\.*", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
-        except Exception as e:
-            if "429" in str(e): time.sleep(1.5)
-            
-        time.sleep(0.8) # Wait for outcome
-
-        # --- FRAME 3: OUTCOME ---
+        # --- OUTCOME ---
         catch_rate = get_species_catch_rate_sync(pid)
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
             poke_name_capped = name.title()
             db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
-            tasks.check_and_update_catch(uid, poke_name_capped)
+            
+            # Wrapped tasks in a try/except so a task error NEVER breaks the catch animation again!
+            try: 
+                tasks.check_and_update_catch(uid, poke_name_capped)
+            except Exception as e: 
+                logger.error(f"Ignored task error during catch: {e}")
             
             if LOG_GROUP_ID:
                 try: 
@@ -175,7 +170,7 @@ def process_catch(call, uid, pid, name):
             try: bot.edit_message_caption(caption=cap, chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
             except Exception as e: pass
         else:
-            cap = f"💨 *Oʜ ɴᴏ\\!* Tʜᴇ Wɪʟᴅ ✨ {to_small_caps(name.title())} ʙʀᴏᴋᴇ ғʀᴇᴇ ᴀɴᴅ ғʟᴇᴅ\\!"
+            cap = f"💨 *Oʜ ɴᴏ\\!* Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(name.title()))} ʙʀᴏᴋᴇ ғʀᴇᴇ ᴀɴᴅ ғʟᴇᴅ\\!"
             try: bot.edit_message_caption(caption=cap, chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
             except Exception as e: pass
             
@@ -1031,7 +1026,10 @@ def cb_handler(call):
             catcher_name = call.from_user.first_name
             db.add_user_if_new(catcher_id)
             db.add_caught_pokemon(catcher_id, name.title(), "Event")
-            tasks.check_and_update_catch(catcher_id, name.title())
+            
+            # Safe task check
+            try: tasks.check_and_update_catch(catcher_id, name.title())
+            except: pass
             
             cap = f"🎉 *{escape_md(catcher_name)}* was the fastest and caught the ✨ *{escape_md(name.title())}*\\!"
             try: bot.edit_message_caption(caption=cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
@@ -1043,7 +1041,7 @@ def cb_handler(call):
             uid, pid, name = int(parts[1]), int(parts[2]), parts[3]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Hands off! This scout is not yours.")
             
-            # THE CRITICAL FIX: If they click an overridden scout, alert them it already fled!
+            # Critical Fix: Do not allow catching if it was overridden!
             if call.message.message_id not in active_hunts: 
                 return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
             
@@ -1059,7 +1057,6 @@ def cb_handler(call):
             uid, name = int(parts[1]), parts[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "This scout is not yours.")
             
-            # THE CRITICAL FIX: Ensure they can't click run on a dead scout either
             if call.message.message_id not in active_hunts: 
                 return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
             
@@ -1069,7 +1066,7 @@ def cb_handler(call):
             active_hunts[call.message.message_id]["timer"].cancel()
             active_hunts.pop(call.message.message_id, None)
             
-            fled_cap = f"💨 Tʜᴇ Wɪʟᴅ ✨ {to_small_caps(name.title())} Fʟᴇᴅ\\!"
+            fled_cap = f"💨 Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(name.title()))} Fʟᴇᴅ\\!"
             try: bot.edit_message_caption(caption=fled_cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             except: pass
 
