@@ -11,21 +11,21 @@ from config import logger, MEGA_POKEMON
 pokemon_cache = {}
 pokemon_name_to_id_cache = {}
 
-# Comprehensive list of Legendary, Mythical, and Ultra Beast Pokémon
+# PERFECTED API-FORMAT LIST: Lowercase and hyphenated exactly as the API outputs them
 LEGENDARY_NAMES = {
-    "Articuno", "Zapdos", "Moltres", "Mewtwo", "Mew", "Raikou", "Entei", "Suicune", 
-    "Lugia", "Ho-oh", "Celebi", "Regirock", "Regice", "Registeel", "Latias", "Latios", 
-    "Kyogre", "Groudon", "Rayquaza", "Jirachi", "Deoxys", "Uxie", "Mesprit", "Azelf", 
-    "Dialga", "Palkia", "Heatran", "Regigigas", "Giratina", "Cresselia", "Phione", 
-    "Manaphy", "Darkrai", "Shaymin", "Arceus", "Victini", "Cobalion", "Terrakion", 
-    "Virizion", "Tornadus", "Thundurus", "Reshiram", "Zekrom", "Landorus", "Kyurem", 
-    "Keldeo", "Meloetta", "Genesect", "Xerneas", "Yveltal", "Zygarde", "Diancie", 
-    "Hoopa", "Volcanion", "Type: null", "Silvally", "Tapu koko", "Tapu lele", "Tapu bulu", 
-    "Tapu fini", "Cosmog", "Cosmoem", "Solgaleo", "Lunala", "Nihilego", "Buzzwole", 
-    "Pheromosa", "Xurkitree", "Celesteela", "Kartana", "Guzzlord", "Necrozma", "Magearna", 
-    "Marshadow", "Poipole", "Naganadel", "Stakataka", "Blacephalon", "Zeraora", "Meltan", 
-    "Melmetal", "Zacian", "Zamazenta", "Eternatus", "Kubfu", "Urshifu", "Zarude", 
-    "Regieleki", "Regidrago", "Glastrier", "Spectrier", "Calyrex"
+    "articuno", "zapdos", "moltres", "mewtwo", "mew", "raikou", "entei", "suicune", 
+    "lugia", "ho-oh", "celebi", "regirock", "regice", "registeel", "latias", "latios", 
+    "kyogre", "groudon", "rayquaza", "jirachi", "deoxys", "deoxys-normal", "uxie", "mesprit", "azelf", 
+    "dialga", "palkia", "heatran", "regigigas", "giratina", "giratina-altered", "cresselia", "phione", 
+    "manaphy", "darkrai", "shaymin", "shaymin-land", "arceus", "victini", "cobalion", "terrakion", 
+    "virizion", "tornadus", "tornadus-incarnate", "thundurus", "thundurus-incarnate", "reshiram", "zekrom", "landorus", "landorus-incarnate", "kyurem", 
+    "keldeo", "keldeo-ordinary", "meloetta", "meloetta-aria", "genesect", "xerneas", "yveltal", "zygarde", "zygarde-50", "diancie", 
+    "hoopa", "hoopa-confined", "volcanion", "type-null", "silvally", "tapu-koko", "tapu-lele", "tapu-bulu", 
+    "tapu-fini", "cosmog", "cosmoem", "solgaleo", "lunala", "nihilego", "buzzwole", 
+    "pheromosa", "xurkitree", "celesteela", "kartana", "guzzlord", "necrozma", "magearna", 
+    "marshadow", "poipole", "naganadel", "stakataka", "blacephalon", "zeraora", "meltan", 
+    "melmetal", "zacian", "zacian-hero", "zamazenta", "zamazenta-hero", "eternatus", "kubfu", "urshifu", "urshifu-single-strike", "zarude", 
+    "regieleki", "regidrago", "glastrier", "spectrier", "calyrex", "enamorus", "enamorus-incarnate"
 }
 
 # --- REGION BOUNDARIES (Generations 1 to 8) ---
@@ -180,16 +180,22 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                 async with session.get(url, timeout=10) as response:
                     if response.status != 200: continue
                     data = await response.json()
-                    name = data["name"].capitalize()
+                    
+                    # Store raw API name for legendary checking (e.g. "tapu-koko")
+                    raw_api_name = data["name"]
+                    
+                    # Format name for display (e.g. "Tapu Koko")
+                    name = raw_api_name.replace("-", " ").title()
                     
                     # REQUIREMENT 1: Only Fully Evolved Pokemon (Base XP > 150)
                     if data.get("base_experience", 0) < 150: 
                         continue 
                     
-                    # REQUIREMENT 2: Legendary Filtering (0ls vs 6ls)
-                    if force_legendary is True and name not in LEGENDARY_NAMES: 
+                    # REQUIREMENT 2: Legendary Filtering (0ls vs 6ls) using the RAW api name
+                    is_legendary = raw_api_name in LEGENDARY_NAMES
+                    if force_legendary is True and not is_legendary: 
                         continue
-                    if force_legendary is False and name in LEGENDARY_NAMES: 
+                    if force_legendary is False and is_legendary: 
                         continue
 
                     stats = {s["stat"]["name"]: s["base_stat"] for s in data["stats"]}
@@ -247,7 +253,6 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                     
                     random.shuffle(final_moves)
                     
-                    # --- FIX: Passing PURE Base Stats directly from the PokeAPI ---
                     return {
                         "name": name,
                         "types": types_str,
