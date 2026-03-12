@@ -56,7 +56,7 @@ def auto_flee(message_id, chat_id, pokemon_name):
     if message_id not in active_hunts: return
     try:
         bot.edit_message_caption(
-            caption=f"💨 The wild ✨ *{escape_md(pokemon_name.capitalize())}* fled\\!",
+            caption=f"💨 The wild ✨ *{escape_md(pokemon_name.title())}* fled\\!",
             chat_id=chat_id, message_id=message_id, reply_markup=None, parse_mode="MarkdownV2"
         )
     except Exception as e:
@@ -79,12 +79,20 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     if any(hunt["user_id"] == user_id for hunt in active_hunts.values()):
         return safe_send(chat_id, escape_md("⏳ You already have an active scout. Complete it first!"), reply_to_id)
 
+    # ⚡ INSTANT FEEDBACK UI: Solves the "Slow" feeling by showing immediate action!
+    status_msg = None
+    try: status_msg = bot.send_message(chat_id, "🔎 *Scouting the tall grass\\.\\.\\.*", reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
+    except: pass
+
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
     if not poke_id:
+        if status_msg: 
+            try: bot.delete_message(chat_id, status_msg.message_id)
+            except: pass
         return safe_send(chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_id)
 
     img_url = official_shiny_artwork_url(base_id)
-    caption = f"🌍 A wild ✨ *{escape_md(name)}* appeared in *{escape_md(region)}*\\!\n\n🎒 What will you do?"
+    caption = f"🌍 A wild ✨ *{escape_md(name.title())}* appeared in *{escape_md(region)}*\\!\n\n🎒 What will you do?"
     
     kb = types.InlineKeyboardMarkup()
     kb.add(
@@ -93,11 +101,21 @@ def start_scout(chat_id, user_id, reply_to_id=None):
     )
 
     try:
+        # Send the final image
         sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
+        
+        # Delete the instant loading message so it looks clean
+        if status_msg: 
+            try: bot.delete_message(chat_id, status_msg.message_id)
+            except: pass
+            
         timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, chat_id, name))
         timer.start()
         active_hunts[sent.message_id] = {"user_id": user_id, "start_time": time.time(), "timer": timer, "name": name}
     except Exception as e: 
+        if status_msg: 
+            try: bot.delete_message(chat_id, status_msg.message_id)
+            except: pass
         if "429" in str(e):
             time.sleep(2) 
             try:
@@ -119,10 +137,12 @@ def process_catch(call, uid, pid, name):
                 try: bot.edit_message_caption(caption="🔴 *Throwing Pokéball\\.\\.\\.*", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
                 except: pass
 
-        time.sleep(1.5) 
+        # ⚡ REDUCED ARTIFICIAL DELAY FOR MAXIMUM SPEED (Down to 0.4s) ⚡
+        time.sleep(0.4) 
+        
         catch_rate = get_species_catch_rate_sync(pid)
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
-            poke_name_capped = name.capitalize()
+            poke_name_capped = name.title()
             db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
             
             tasks.check_and_update_catch(uid, poke_name_capped)
@@ -141,7 +161,7 @@ def process_catch(call, uid, pid, name):
                     try: bot.edit_message_caption(caption=cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
                     except: pass
         else:
-            cap = f"💨 Oh no\\! Shiny *{escape_md(name.capitalize())}* broke free and fled\\!"
+            cap = f"💨 Oh no\\! Shiny *{escape_md(name.title())}* broke free and fled\\!"
             try: bot.edit_message_caption(caption=cap, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             except Exception as e:
                 if "429" in str(e):
@@ -202,17 +222,13 @@ def cmd_start(message):
     is_new = db.add_user_if_new(message.from_user.id)
     if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
     
-    # Custom Inline Buttons
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
         types.InlineKeyboardButton("Oᴡɴᴇʀ ⚡", url="https://t.me/monarch_sama"),
         types.InlineKeyboardButton("Mᴀɪɴ Gʀᴏᴜᴘ ⚡", url="https://t.me/sexagamechat")
     )
     
-    # Escape user's name for safe Markdown rendering
     user_name = escape_md(message.from_user.first_name)
-    
-    # Premium Custom Font UI
     text = (
         f"Hҽყ {user_name}\n\n"
         f"*Wᴇʟᴄσɱᴇ ᴛσ Sᴇxᴀ ✨*\n"
@@ -266,21 +282,15 @@ def cmd_profile(message):
     names = db.list_user_pokemon_names(user_id)
     count = len(names)
     
-    # Check for the rarest Pokemon in their bag
     rarest_caught = "None"
     if names:
         rarest_list = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p]
         rarest_caught = rarest_list[0] if rarest_list else names[-1]
             
-    # Fetch Battle Stats
-    try:
-        wins, losses = db.get_battle_stats(user_id)
-    except Exception:
-        wins, losses = 0, 0 
+    try: wins, losses = db.get_battle_stats(user_id)
+    except Exception: wins, losses = 0, 0 
         
     total_battles = wins + losses
-    
-    # Safely escape text for Telegram Markdown
     user_name = escape_md(message.from_user.first_name)
     rarest_md = escape_md(rarest_caught)
     region_md = escape_md(region)
@@ -383,7 +393,7 @@ def cmd_release(message):
     if not db.get_user(message.from_user.id): return safe_send(message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2: return safe_send(message.chat.id, escape_md("📝 Usage: /release <pokemon_name>"), reply_to_id=message.message_id)
-    poke_name = parts[1].strip().capitalize()
+    poke_name = parts[1].strip().title()
     if db.delete_pokemon(message.from_user.id, poke_name): safe_send(message.chat.id, escape_md(f"👋 You released {poke_name} back into the wild."), reply_to_id=message.message_id)
     else: safe_send(message.chat.id, escape_md(f"❌ You don't have a {poke_name} to release."), reply_to_id=message.message_id)
 
@@ -432,7 +442,6 @@ def cmd_myteam(message):
             safe_send(message.chat.id, escape_md("⚠️ I cannot DM you! Please send me a private message first so I can share your team details privately."), reply_to_id=message.message_id)
         else:
             logger.error(f"Error sending /myteam DM: {e}")
-
 
 @bot.message_handler(commands=["trade"])
 def cmd_trade(message):
@@ -601,7 +610,6 @@ def execute_world_spawn(message, pokemon_name):
         sent = bot.send_photo(message.chat.id, img_url, caption=cap, reply_to_message_id=message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
         timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(sent.message_id, message.chat.id, poke_name))
         timer.start()
-        # Track globally by setting user_id to 'ANY'
         active_hunts[sent.message_id] = {"user_id": "ANY", "start_time": time.time(), "timer": timer, "name": poke_name}
     except Exception as e:
         logger.error(f"Group spawn error: {e}")
@@ -712,7 +720,6 @@ def cmd_execute(message):
     if module not in EXECUTE_MODULES or action not in EXECUTE_MODULES[module]["actions"]:
         return safe_send(message.chat.id, escape_md(f"❌ Invalid module or action. Use /modules to check valid combinations."), reply_to_id=message.message_id)
 
-    # Router Logic
     if module == "world":
         if action == "stats":
             threading.Thread(target=execute_world_stats, args=(message,), daemon=True).start()
@@ -875,7 +882,7 @@ def cmd_broadcasts(message):
         try:
             bot.forward_message(target_id, message.chat.id, message.reply_to_message.message_id)
             success += 1
-            time.sleep(0.1) # Prevents spam blocks during mass broadcast
+            time.sleep(0.1)
         except: failed += 1
     safe_send(message.chat.id, escape_md(f"📢 Broadcast complete! Success: {success}, Failed: {failed}"), reply_to_id=message.message_id)
 
