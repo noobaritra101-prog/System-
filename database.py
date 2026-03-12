@@ -5,6 +5,8 @@ from psycopg2 import pool
 from contextlib import contextmanager
 import datetime
 import random
+import csv
+import io
 from config import DATABASE_URL, logger
 
 # ================== CONNECTION POOL ==================
@@ -73,7 +75,7 @@ def init_db():
                     )
                 """)
                 
-                # Tasks Table
+                # Tasks Table (Multi-Row Format)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS tasks (
                         user_id BIGINT,
@@ -92,13 +94,12 @@ def init_db():
 
                 # --- AUTO-MIGRATION: FIX OLD TASKS SCHEMA RULE ---
                 try:
-                    # This safely drops the old single-user rule and replaces it with the 3-task rule
                     cur.execute("ALTER TABLE tasks DROP CONSTRAINT tasks_pkey")
                     cur.execute("ALTER TABLE tasks ADD PRIMARY KEY (user_id, task_type)")
                     conn.commit()
                     logger.info("🔧 Migrated: Updated Tasks primary key to allow multiple daily tasks!")
                 except Exception:
-                    conn.rollback() # If it's already fixed, ignore it safely
+                    conn.rollback() 
                 # -------------------------------------------------------
                 
                 # Speed Indexes
@@ -176,7 +177,7 @@ def get_all_users():
             return [row[0] for row in cur.fetchall()]
 
 # ================== POKEMON MANAGEMENT ==================
-def add_caught_pokemon(user_id, name, region):
+def add_caught_pokemon(user_id, name, region, source="Wild"):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("INSERT INTO pokemons (user_id, name, region) VALUES (%s, %s, %s)", (user_id, name, region))
@@ -274,18 +275,15 @@ def update_battle_stats(user_id, is_win=True):
 
 # ================== TASKS MODULE ==================
 def get_daily_tasks(user_id):
-    """Fetches daily tasks for the user. Generates them if they are expired or missing."""
     today = datetime.date.today()
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset FROM tasks WHERE user_id = %s", (user_id,))
             tasks = cur.fetchall()
             
-            # If the user has no tasks OR tasks are from yesterday, clear and regenerate
             if not tasks or tasks[0][7] is None or tasks[0][7] < today:
                 cur.execute("DELETE FROM tasks WHERE user_id = %s", (user_id,))
                 
-                # Popular targets for specific catch missions
                 targets = ["Pikachu", "Eevee", "Charmander", "Squirtle", "Bulbasaur", "Snorlax", "Gengar", "Lucario", "Ralts", "Bagon", "Magikarp", "Gible", "Beldum", "Dratini"]
                 specific_target = random.choice(targets)
                 
@@ -295,7 +293,6 @@ def get_daily_tasks(user_id):
                     (user_id, 'catch_specific', specific_target, 0, 1, 'jackpot', 1, False, today)
                 ]
                 
-                # ON CONFLICT added to make this 100% immune to crashing
                 psycopg2.extras.execute_batch(cur, """
                     INSERT INTO tasks (user_id, task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -303,25 +300,15 @@ def get_daily_tasks(user_id):
                 """, new_tasks)
                 conn.commit()
                 
-                # Fetch the newly generated tasks
                 cur.execute("SELECT task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset FROM tasks WHERE user_id = %s", (user_id,))
                 tasks = cur.fetchall()
                 
-            # Format the SQL results into a friendly dictionary for tasks.py
             return [
-                {
-                    "task_type": t[0], 
-                    "target": t[1], 
-                    "progress": t[2], 
-                    "goal": t[3], 
-                    "reward_type": t[4], 
-                    "reward_amount": t[5], 
-                    "completed": t[6]
-                } for t in tasks
+                {"task_type": t[0], "target": t[1], "progress": t[2], "goal": t[3], "reward_type": t[4], "reward_amount": t[5], "completed": t[6]} 
+                for t in tasks
             ]
 
 def claim_task_reward(user_id, task_type):
-    """Marks a task as completed and returns the reward details."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -334,46 +321,28 @@ def claim_task_reward(user_id, task_type):
             return reward
 
 def update_task_pvp(user_id):
-    """Increments a PvP task if the user currently has one active."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             try:
-                cur.execute("""
-                    UPDATE tasks 
-                    SET progress = progress + 1 
-                    WHERE user_id = %s AND task_type = 'pvp' AND completed = FALSE
-                """, (user_id,))
+                cur.execute("UPDATE tasks SET progress = progress + 1 WHERE user_id = %s AND task_type = 'pvp' AND completed = FALSE", (user_id,))
                 conn.commit()
-            except:
-                conn.rollback()
+            except: conn.rollback()
 
 def update_task_catch(user_id):
-    """Increments a general catch task if the user currently has one active."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             try:
-                cur.execute("""
-                    UPDATE tasks 
-                    SET progress = progress + 1 
-                    WHERE user_id = %s AND task_type = 'catch' AND completed = FALSE
-                """, (user_id,))
+                cur.execute("UPDATE tasks SET progress = progress + 1 WHERE user_id = %s AND task_type = 'catch' AND completed = FALSE", (user_id,))
                 conn.commit()
-            except:
-                conn.rollback()
+            except: conn.rollback()
 
 def update_task_specific_catch(user_id, pokemon_name):
-    """Increments a specific catch task if the user caught the exact target."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             try:
-                cur.execute("""
-                    UPDATE tasks 
-                    SET progress = progress + 1 
-                    WHERE user_id = %s AND task_type = 'catch_specific' AND target ILIKE %s AND completed = FALSE
-                """, (user_id, pokemon_name))
+                cur.execute("UPDATE tasks SET progress = progress + 1 WHERE user_id = %s AND task_type = 'catch_specific' AND target ILIKE %s AND completed = FALSE", (user_id, pokemon_name))
                 conn.commit()
-            except:
-                conn.rollback()
+            except: conn.rollback()
 
 # ================== GROUP MANAGEMENT ==================
 def add_group(group_id):
@@ -424,7 +393,6 @@ def export_all_data():
     return data
 
 def restore_sqlite_data(users_data, pokemons_data, groups_data):
-    """Bulk imports data from old SQLite database to PostgreSQL"""
     with get_conn() as conn:
         with conn.cursor() as cur:
             psycopg2.extras.execute_batch(cur, """
@@ -443,5 +411,20 @@ def restore_sqlite_data(users_data, pokemons_data, groups_data):
                 VALUES (%s)
                 ON CONFLICT (group_id) DO NOTHING
             """, [(g[0],) for g in groups_data])
-            
         conn.commit()
+
+def export_table_csv(table_name):
+    allowed_tables = ['users', 'pokemons', 'groups', 'battle_stats']
+    if table_name not in allowed_tables: return None
+        
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT * FROM {table_name}")
+            colnames = [desc[0] for desc in cur.description]
+            rows = cur.fetchall()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(colnames)
+    writer.writerows(rows)
+    return output.getvalue()
