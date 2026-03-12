@@ -50,6 +50,19 @@ def init_db():
                         can_switch BOOLEAN DEFAULT TRUE
                     )
                 """)
+                
+                # --- AUTO-MIGRATION: Fixes the missing columns error ---
+                cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='size'")
+                if not cur.fetchone():
+                    cur.execute("ALTER TABLE pvp_settings ADD COLUMN size INTEGER DEFAULT 6")
+                    logger.info("🔧 Migrated: Added 'size' column to pvp_settings")
+                    
+                cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='can_switch'")
+                if not cur.fetchone():
+                    cur.execute("ALTER TABLE pvp_settings ADD COLUMN can_switch BOOLEAN DEFAULT TRUE")
+                    logger.info("🔧 Migrated: Added 'can_switch' column to pvp_settings")
+                # -------------------------------------------------------
+
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS battle_stats (
                         user_id BIGINT PRIMARY KEY,
