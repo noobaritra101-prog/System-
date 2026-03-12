@@ -143,8 +143,12 @@ def battle_timeout(bot, chat_id, battle_id):
         
         pvp_battles.pop(battle_id, None)
         
-        db.update_battle_stats(winner_id, is_win=True)
-        db.update_battle_stats(loser_id, is_win=False)
+        # BULLETPROOF STAT SAVING
+        try: db.update_battle_stats(winner_id, is_win=True)
+        except Exception as e: logger.error(f"Stat Save Error: {e}")
+        
+        try: db.update_battle_stats(loser_id, is_win=False)
+        except Exception as e: logger.error(f"Stat Save Error: {e}")
         
         loser_mention = f"[{escape_md(loser_name)}](tg://user?id={loser_id})"
         win_mention = f"[{escape_md(winner_name)}](tg://user?id={winner_id})"
@@ -654,35 +658,57 @@ def handle_pvp_callback(bot, call):
                         dmg = max(1, atk["max_hp"] // 8); atk["hp"] = max(0, atk["hp"] - dmg)
                         b["log"] += f"☠️ {atk['name']} is hurt by poison!\n"
 
+                # 🛑 FAINT & WIN/LOSS LOGIC 🛑
                 if dfn["hp"] <= 0:
                     dfn["hp"] = 0; dfn["status"] = None
                     b["log"] += f"{dfn['name']} fainted!\n"
+                    
                     if all(p["hp"] <= 0 for p in b[defender + "_team"]):
                         win_mention = f"[{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']})"
                         bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
                         
-                        db.update_task_pvp(b[actual_turn + "_id"])
-                        db.update_battle_stats(b[actual_turn + "_id"], is_win=True)
-                        db.update_battle_stats(b[defender + "_id"], is_win=False)
+                        # 🛡️ BULLETPROOF DATABASE UPDATES
+                        try: db.update_task_pvp(b[actual_turn + "_id"])
+                        except Exception as e: logger.error(f"Task PvP Error: {e}")
+                        
+                        try: db.update_battle_stats(b[actual_turn + "_id"], is_win=True)
+                        except Exception as e: logger.error(f"Stat Save Error: {e}")
+                        
+                        try: db.update_battle_stats(b[defender + "_id"], is_win=False)
+                        except Exception as e: logger.error(f"Stat Save Error: {e}")
+                        
                         return end_battle(battle_id)
+                        
                     b["state"] = "force_switch"; b["current_turn"] = defender
+                    
                 elif atk["hp"] <= 0:
                     atk["hp"] = 0; atk["status"] = None
                     b["log"] += f"{atk['name']} fainted from status effect!\n"
+                    
                     if all(p["hp"] <= 0 for p in b[actual_turn + "_team"]):
                         win_mention = f"[{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']})"
                         bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
                         
-                        db.update_task_pvp(b[defender + "_id"])
-                        db.update_battle_stats(b[defender + "_id"], is_win=True)
-                        db.update_battle_stats(b[actual_turn + "_id"], is_win=False)
+                        # 🛡️ BULLETPROOF DATABASE UPDATES
+                        try: db.update_task_pvp(b[defender + "_id"])
+                        except Exception as e: logger.error(f"Task PvP Error: {e}")
+                        
+                        try: db.update_battle_stats(b[defender + "_id"], is_win=True)
+                        except Exception as e: logger.error(f"Stat Save Error: {e}")
+                        
+                        try: db.update_battle_stats(b[actual_turn + "_id"], is_win=False)
+                        except Exception as e: logger.error(f"Stat Save Error: {e}")
+                        
                         return end_battle(battle_id)
+                        
                     b["state"] = "force_switch"; b["current_turn"] = actual_turn
                 else:
                     b["current_turn"] = defender
@@ -837,8 +863,12 @@ def handle_pvp_callback(bot, call):
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
                     except: pass
                 
-                db.update_battle_stats(runner_id, is_win=False)
-                db.update_battle_stats(winner_id, is_win=True)
+                # 🛡️ BULLETPROOF DATABASE UPDATES
+                try: db.update_battle_stats(runner_id, is_win=False)
+                except Exception as e: logger.error(f"Stat Save Error: {e}")
+                
+                try: db.update_battle_stats(winner_id, is_win=True)
+                except Exception as e: logger.error(f"Stat Save Error: {e}")
                 
             elif action == "back": 
                 b["state"] = "menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
