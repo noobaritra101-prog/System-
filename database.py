@@ -1,8 +1,10 @@
 # database.py
 import psycopg2
+import psycopg2.extras
 from psycopg2 import pool
 from contextlib import contextmanager
 import datetime
+import random
 from config import DATABASE_URL, logger
 
 # ================== CONNECTION POOL ==================
@@ -51,7 +53,7 @@ def init_db():
                     )
                 """)
                 
-                # --- AUTO-MIGRATION: Fixes the missing columns error ---
+                # --- AUTO-MIGRATION ---
                 cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='size'")
                 if not cur.fetchone():
                     cur.execute("ALTER TABLE pvp_settings ADD COLUMN size INTEGER DEFAULT 6")
@@ -74,7 +76,7 @@ def init_db():
                 # Tasks Table
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS tasks (
-                        user_id BIGINT PRIMARY KEY,
+                        user_id BIGINT,
                         task_type TEXT,
                         target TEXT,
                         progress INTEGER DEFAULT 0,
@@ -82,7 +84,8 @@ def init_db():
                         reward_type TEXT,
                         reward_amount INTEGER,
                         completed BOOLEAN DEFAULT FALSE,
-                        last_reset DATE
+                        last_reset DATE,
+                        PRIMARY KEY (user_id, task_type)
                     )
                 """)
                 
@@ -176,7 +179,6 @@ def list_user_pokemon_names(user_id):
 def delete_pokemon(user_id, name):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Delete only one instance of the pokemon using its id
             cur.execute("""
                 DELETE FROM pokemons 
                 WHERE id = (
@@ -259,6 +261,64 @@ def update_battle_stats(user_id, is_win=True):
             conn.commit()
 
 # ================== TASKS MODULE ==================
+def get_daily_tasks(user_id):
+    """Fetches daily tasks for the user. Generates them if they are expired or missing."""
+    today = datetime.date.today()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset FROM tasks WHERE user_id = %s", (user_id,))
+            tasks = cur.fetchall()
+            
+            # If the user has no tasks OR tasks are from yesterday, clear and regenerate
+            if not tasks or tasks[0][7] is None or tasks[0][7] < today:
+                cur.execute("DELETE FROM tasks WHERE user_id = %s", (user_id,))
+                
+                # Popular targets for specific catch missions
+                targets = ["Pikachu", "Eevee", "Charmander", "Squirtle", "Bulbasaur", "Snorlax", "Gengar", "Lucario", "Ralts", "Bagon", "Magikarp", "Gible", "Beldum", "Dratini"]
+                specific_target = random.choice(targets)
+                
+                new_tasks = [
+                    (user_id, 'catch', 'Any', 0, 10, 'shiny', 1, False, today),
+                    (user_id, 'pvp', 'Any', 0, 3, 'shiny', 1, False, today),
+                    (user_id, 'catch_specific', specific_target, 0, 1, 'jackpot', 1, False, today)
+                ]
+                
+                psycopg2.extras.execute_batch(cur, """
+                    INSERT INTO tasks (user_id, task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, new_tasks)
+                conn.commit()
+                
+                # Fetch the newly generated tasks
+                cur.execute("SELECT task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset FROM tasks WHERE user_id = %s", (user_id,))
+                tasks = cur.fetchall()
+                
+            # Format the SQL results into a friendly dictionary for tasks.py
+            return [
+                {
+                    "task_type": t[0], 
+                    "target": t[1], 
+                    "progress": t[2], 
+                    "goal": t[3], 
+                    "reward_type": t[4], 
+                    "reward_amount": t[5], 
+                    "completed": t[6]
+                } for t in tasks
+            ]
+
+def claim_task_reward(user_id, task_type):
+    """Marks a task as completed and returns the reward details."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE tasks SET completed = TRUE 
+                WHERE user_id = %s AND task_type = %s AND progress >= goal AND completed = FALSE
+                RETURNING reward_type, reward_amount
+            """, (user_id, task_type))
+            reward = cur.fetchone()
+            conn.commit()
+            return reward
+
 def update_task_pvp(user_id):
     """Increments a PvP task if the user currently has one active."""
     with get_conn() as conn:
@@ -353,20 +413,17 @@ def restore_sqlite_data(users_data, pokemons_data, groups_data):
     """Bulk imports data from old SQLite database to PostgreSQL"""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Users
             psycopg2.extras.execute_batch(cur, """
                 INSERT INTO users (user_id, tries_left, region, last_reset) 
                 VALUES (%s, %s, %s, %s)
                 ON CONFLICT (user_id) DO NOTHING
             """, users_data)
             
-            # Pokemons
             psycopg2.extras.execute_batch(cur, """
                 INSERT INTO pokemons (user_id, name, region) 
                 VALUES (%s, %s, %s)
             """, pokemons_data)
             
-            # Groups
             psycopg2.extras.execute_batch(cur, """
                 INSERT INTO groups (group_id) 
                 VALUES (%s)
