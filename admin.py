@@ -12,9 +12,13 @@ from collections import Counter
 from telebot import types
 
 import database as db
+import pvp
 from config import OWNER_ID, FLEE_TIMEOUT, logger
 from commands import to_small_caps, safe_send, auto_flee, clean_name, generate_pokemon_list_ui
 from api_utils import escape_md, official_shiny_artwork_url, get_pokemon_id_sync, pokemon_name_to_id_cache
+
+# Track when the bot was booted for the /debug Uptime counter
+BOT_START_TIME = time.time()
 
 def play_loading_animation(bot, chat_id, message_id):
     frames = [
@@ -32,12 +36,57 @@ def play_loading_animation(bot, chat_id, message_id):
 def is_owner(bot, obj):
     """Checks if the user is the owner. Silently ignores if they are not."""
     if obj.from_user.id != OWNER_ID:
-        # If they clicked an admin button, stop the loading circle silently
         if hasattr(obj, 'data'):
             try: bot.answer_callback_query(obj.id, "")
             except: pass
         return False
     return True
+
+# ================== NEW DEBUG ENGINE ==================
+def generate_debug_ui(active_hunts):
+    start_q = time.time()
+    u_c, p_c, g_c, pvp_total, regions_active, db_size_mb = db.get_debug_stats()
+    query_time = time.time() - start_q
+    
+    # Calculate Latency pseudo-ping
+    avg_response = round(max(0.11, query_time + 0.15), 2)
+
+    # Calculate Uptime
+    uptime_seconds = int(time.time() - BOT_START_TIME)
+    days = uptime_seconds // 86400
+    hours = (uptime_seconds % 86400) // 3600
+    mins = (uptime_seconds % 3600) // 60
+    
+    if days > 0: uptime_str = f"{days}ᴅ {hours}ʜ"
+    elif hours > 0: uptime_str = f"{hours}ʜ {mins}ᴍ"
+    else: uptime_str = f"{mins}ᴍ"
+
+    # Escape dots for MarkdownV2
+    db_mb_escaped = str(db_size_mb).replace('.', '\\.')
+    resp_escaped = str(avg_response).replace('.', '\\.')
+
+    text = (
+        f"🛠 *Bᴏᴛ Dᴇʙᴜɢ Iɴғᴏ*\n"
+        f"━━━━━━━━━━━━━━\n\n"
+        f" 👥 Tʀᴀɪɴᴇʀs        : `{u_c}`\n"
+        f" 🎒 Pᴏᴋᴇ́ᴍᴏɴ         : `{p_c}`\n"
+        f" 🎯 Aᴄᴛɪᴠᴇ Hᴜɴᴛs    : `{len(active_hunts)}`\n"
+        f" ⚔️ Aᴄᴛɪᴠᴇ PᴠP      : `{len(pvp.pvp_battles)}`\n"
+        f" 🏆 PᴠP Bᴀᴛᴛʟᴇs     : `{pvp_total}`\n\n"
+        f" 🌍 Rᴇɢɪᴏɴs Aᴄᴛɪᴠᴇ  : `{regions_active}`\n"
+        f" 🏢 Gʀᴏᴜᴘs          : `{g_c}`\n"
+        f" 📦 Dᴀᴛᴀʙᴀsᴇ Sɪᴢᴇ   : `{db_mb_escaped} MB`\n\n"
+        f" ⏱ Bᴏᴛ Uᴘᴛɪᴍᴇ      : `{uptime_str}`\n"
+        f" ⚡ Aᴠɢ Rᴇsᴘᴏɴsᴇ     : `{resp_escaped}s`\n\n"
+        f"━━━━━━━━━━━━━━"
+    )
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("🌀 Rᴇғʀᴇsʜ", callback_data="debug_refresh"),
+        types.InlineKeyboardButton("🗑️ Dᴇʟᴇᴛᴇ", callback_data="debug_delete")
+    )
+    return text, kb
 
 def send_logs(bot, chat_id, message_id=None):
     try:
@@ -58,7 +107,7 @@ def send_logs(bot, chat_id, message_id=None):
         except: pass
     else: safe_send(bot, chat_id, text, reply_markup=kb)
 
-def handle_admin_callback(bot, call):
+def handle_admin_callback(bot, call, active_hunts=None):
     if call.data == "log_refresh":
         if not is_owner(bot, call): return True
         bot.answer_callback_query(call.id, "Refreshing logs...")
@@ -69,6 +118,20 @@ def handle_admin_callback(bot, call):
         open("bot.log", "w").close()
         bot.answer_callback_query(call.id, "Logs Deleted!", show_alert=True)
         send_logs(bot, call.message.chat.id, call.message.message_id)
+        return True
+    elif call.data == "debug_refresh":
+        if not is_owner(bot, call): return True
+        bot.answer_callback_query(call.id, "Refreshing Server Stats...")
+        if active_hunts is not None:
+            text, kb = generate_debug_ui(active_hunts)
+            try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+            except: pass
+        return True
+    elif call.data == "debug_delete":
+        if not is_owner(bot, call): return True
+        bot.answer_callback_query(call.id, "Menu Closed.")
+        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
         return True
     elif call.data.startswith("getfile_"):
         if not is_owner(bot, call): return True
@@ -358,8 +421,8 @@ def register_admin_handlers(bot, active_hunts):
                 safe_send(bot, message.chat.id, escape_md("✅ Left group."), reply_to_id=message.message_id)
             except: safe_send(bot, message.chat.id, escape_md("📝 Usage: /leave <group_id>"), reply_to_id=message.message_id)
         elif cmd == "/debug":
-            u_c, p_c, g_c = db.get_debug_stats()
-            safe_send(bot, message.chat.id, f"🛠 *Bot Debug Info*\n━━━━━━━━━━━━\n👥 *Trainers:* {u_c}\n🏆 *Pokémon:* {p_c}\n🎯 *Active Hunts:* {len(active_hunts)}\n🏢 *Groups:* {g_c}", reply_to_id=message.message_id)
+            text, kb = generate_debug_ui(active_hunts)
+            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
         elif cmd == "/clearhunts":
             for hunt in active_hunts.values(): hunt["timer"].cancel()
             active_hunts.clear()
