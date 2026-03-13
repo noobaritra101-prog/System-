@@ -374,18 +374,7 @@ def get_all_groups():
             cur.execute("SELECT group_id FROM groups")
             return [row[0] for row in cur.fetchall()]
 
-# ================== ADMIN TOOLS ==================
-def get_debug_stats():
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM users")
-            u_c = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM pokemons")
-            p_c = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM groups")
-            g_c = cur.fetchone()[0]
-            return u_c, p_c, g_c
-
+# ================== NEW ADVANCED ADMIN TOOLS ==================
 def export_all_data():
     data = {"users": [], "pokemons": [], "groups": [], "battle_stats": []}
     with get_conn() as conn:
@@ -439,3 +428,35 @@ def export_table_csv(table_name):
     writer.writerow(colnames)
     writer.writerows(rows)
     return output.getvalue()
+
+def get_debug_stats():
+    """Calculates all backend data for the /debug panel"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM users")
+            u_c = cur.fetchone()[0]
+            
+            cur.execute("SELECT COUNT(*) FROM pokemons")
+            p_c = cur.fetchone()[0]
+            
+            cur.execute("SELECT COUNT(*) FROM groups")
+            g_c = cur.fetchone()[0]
+            
+            # Calculate Total PVP Matches Played
+            cur.execute("SELECT SUM(wins + losses) FROM battle_stats")
+            pvp_sum = cur.fetchone()[0]
+            pvp_total = int(pvp_sum / 2) if pvp_sum else 0
+            
+            # Calculate Unique Regions
+            cur.execute("SELECT COUNT(DISTINCT region) FROM users")
+            regions_active = cur.fetchone()[0] or 0
+            
+            # Calculate Cloud Storage space used by DB
+            try:
+                cur.execute("SELECT pg_database_size(current_database())")
+                db_bytes = cur.fetchone()[0]
+                db_size_mb = round(db_bytes / (1024 * 1024), 2) if db_bytes else 0.0
+            except:
+                db_size_mb = 0.0
+                
+            return u_c, p_c, g_c, pvp_total, regions_active, db_size_mb
