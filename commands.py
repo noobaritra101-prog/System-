@@ -21,7 +21,6 @@ TYPE_EMOJIS = {
 }
 
 def clean_name(name):
-    """Strips newlines and formatting characters from names to prevent MarkdownV2 crashes."""
     if not name: return "Trainer"
     return name.replace('\n', ' ').replace('\r', '').replace('*', '').replace('_', '').strip()
 
@@ -42,6 +41,61 @@ def safe_send(bot, chat_id, text, reply_to_id=None, reply_markup=None):
             try: return bot.send_message(chat_id, text, reply_to_message_id=reply_to_id, reply_markup=reply_markup, parse_mode="MarkdownV2")
             except: pass
         return None
+
+# ================== NEW INVENTORY UI GENERATOR ==================
+def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
+    names = db.list_user_pokemon_names(uid)
+    if not names:
+        return escape_md("🎒 No Pokémon found."), None
+
+    page_size = 20
+    pages = [names[i:i + page_size] for i in range(0, len(names), page_size)]
+    
+    if page_idx < 0: page_idx = 0
+    if page_idx >= len(pages): page_idx = len(pages) - 1
+
+    title = "🎒 𝗬𝗢𝗨𝗥 𝗣𝗢𝗞𝗘𝗠𝗢𝗡" if not is_admin else f"🎒 𝗣𝗢𝗞𝗘𝗠𝗢𝗡 (𝗨𝗜𝗗: {uid})"
+    
+    text = f"{title}\n━━━━━━━━━━━━━━━━\n"
+    text += f"📃 Pᴀɢᴇ【{page_idx + 1} / {len(pages)}】\n\n"
+
+    for i, name in enumerate(pages[page_idx]):
+        item_num = (page_idx * page_size) + i + 1
+        
+        type_str = ""
+        try:
+            # Fetch Types dynamically for the beautiful UI
+            types_list, _ = get_pokemon_stats_sync(name.lower())
+            if types_list:
+                emojis = "/ ".join([TYPE_EMOJIS.get(t, '') for t in types_list if t]).strip()
+                if emojis:
+                    type_str = f"【{emojis}】"
+        except:
+            pass
+
+        text += f"`{item_num:02d}.` {escape_md(name)}{escape_md(type_str)}\n"
+
+    text += "\n━━━━━━━━━━━━━━━━"
+
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    if len(pages) > 1:
+        p_prev1 = max(0, page_idx - 1)
+        p_next1 = min(len(pages) - 1, page_idx + 1)
+        p_prev5 = max(0, page_idx - 5)
+        p_next5 = min(len(pages) - 1, page_idx + 5)
+        
+        kb.row(
+            types.InlineKeyboardButton("x1 ⏪", callback_data=f"{action_prefix}_{uid}_{p_prev1}"),
+            types.InlineKeyboardButton("x1 ⏩", callback_data=f"{action_prefix}_{uid}_{p_next1}")
+        )
+        kb.row(
+            types.InlineKeyboardButton("x5 ⏪", callback_data=f"{action_prefix}_{uid}_{p_prev5}"),
+            types.InlineKeyboardButton("x5 ⏩", callback_data=f"{action_prefix}_{uid}_{p_next5}")
+        )
+    else:
+        kb = None
+
+    return text, kb
 
 # ================== GAME LOGIC ==================
 def auto_flee(bot, message_id, chat_id, pokemon_name, active_hunts):
@@ -229,11 +283,8 @@ def register_user_handlers(bot, active_hunts):
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
         if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
-        names = db.list_user_pokemon_names(message.from_user.id)
-        if not names: return safe_send(bot, message.chat.id, escape_md("🎒 You don't have any Pokémon yet."))
-        pages = [names[i:i + 20] for i in range(0, len(names), 20)]
-        kb = types.InlineKeyboardMarkup(row_width=4).add(types.InlineKeyboardButton("<<", callback_data=f"mypoke_{message.from_user.id}_0"), types.InlineKeyboardButton(">>", callback_data=f"mypoke_{message.from_user.id}_{len(pages) - 1}"))
-        safe_send(bot, message.chat.id, f"🎒 *Your Pokémon* \\(Page 1/{len(pages)}\\):\n\n" + "\n".join(f"➥ {escape_md(n)}" for n in pages[0]), reply_markup=kb if len(pages)>1 else None)
+        text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
+        safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["inspect"])
     def cmd_inspect(message):
