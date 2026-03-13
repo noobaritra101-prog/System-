@@ -48,6 +48,7 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
     if not names:
         return escape_md("🎒 No Pokémon found."), None
 
+    total_poke = len(names)
     page_size = 20
     pages = [names[i:i + page_size] for i in range(0, len(names), page_size)]
     
@@ -73,9 +74,11 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
         except:
             pass
 
+        # Formatting as: 01. Skorupi【☣️/ 🐛】
         text += f"`{item_num:02d}.` {escape_md(name)}{escape_md(type_str)}\n"
 
-    text += "\n━━━━━━━━━━━━━━━━"
+    # Add the requested Total Pokemon footer
+    text += f"\n📦 Tᴏᴛᴀʟ Pᴏᴋᴇ́ᴍᴏɴ — {total_poke}\n━━━━━━━━━━━━━━━━"
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     if len(pages) > 1:
@@ -283,6 +286,8 @@ def register_user_handlers(bot, active_hunts):
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
         if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
+        
+        # Calling the new beautiful UI generator
         text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
         safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
 
