@@ -95,7 +95,7 @@ def cb_handler(call):
             db.add_caught_pokemon(catcher_id, name.title(), "Event")
             try: tasks.check_and_update_catch(catcher_id, name.title())
             except: pass
-            try: bot.edit_message_caption(caption=f"🎉 *{escape_md(call.from_user.first_name)}* was the fastest and caught the ✨ *{escape_md(name.title())}*\\!", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
+            try: bot.edit_message_caption(caption=f"🎉 *{escape_md(commands.clean_name(call.from_user.first_name))}* was the fastest and caught the ✨ *{escape_md(name.title())}*\\!", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             except: pass
 
         elif call.data.startswith("catch_"):
@@ -121,33 +121,20 @@ def cb_handler(call):
         elif call.data.startswith("mypoke_") or call.data.startswith("plist_"):
             parts = call.data.split("_")
             action, uid, page_idx = parts[0], int(parts[1]), int(parts[2])
+            
             if action == "mypoke" and call.from_user.id != uid: return bot.answer_callback_query(call.id, "This is not your bag.")
-            if action == "plist" and call.from_user.id != OWNER_ID: return bot.answer_callback_query(call.id, "Owner only.")
+            if action == "plist" and not admin.is_owner(bot, call): return
             
-            names = db.list_user_pokemon_names(uid)
-            if not names: return
+            # The new UI Engine!
+            text, kb = commands.generate_pokemon_list_ui(uid, page_idx, action_prefix=action, is_admin=(action=="plist"))
             
-            page_size = 20
-            pages = [names[i:i + page_size] for i in range(0, len(names), page_size)]
-            if page_idx < 0 or page_idx >= len(pages): return
-            
-            title = "🎒 *Your Pokémon*" if action == "mypoke" else f"🎒 *Pokémon for User {uid}*"
-            text = f"{title} \\(Page {page_idx + 1}/{len(pages)}\\):\n\n" + "\n".join(f"➥ {escape_md(n)}" for n in pages[page_idx])
-            
-            kb = types.InlineKeyboardMarkup(row_width=4)
-            kb.add(
-                types.InlineKeyboardButton("<<", callback_data=f"{action}_{uid}_0"),
-                types.InlineKeyboardButton("<", callback_data=f"{action}_{uid}_{max(0, page_idx - 1)}"),
-                types.InlineKeyboardButton(">", callback_data=f"{action}_{uid}_{min(len(pages) - 1, page_idx + 1)}"),
-                types.InlineKeyboardButton(">>", callback_data=f"{action}_{uid}_{len(pages) - 1}") 
-            )
-            try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
+            try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
             except Exception as e:
                 err_msg = str(e).lower()
                 if "message is not modified" not in err_msg:
                     if "429" in err_msg or "too many requests" in err_msg:
                         time.sleep(1.5)
-                        try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb if len(pages)>1 else None, parse_mode="MarkdownV2")
+                        try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
                         except: pass
 
     except Exception as e: logger.error(f"Callback error: {e}")
