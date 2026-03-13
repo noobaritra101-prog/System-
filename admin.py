@@ -13,8 +13,8 @@ from telebot import types
 
 import database as db
 from config import OWNER_ID, FLEE_TIMEOUT, logger
+from commands import to_small_caps, safe_send, auto_flee, clean_name
 from api_utils import escape_md, official_shiny_artwork_url, get_pokemon_id_sync, pokemon_name_to_id_cache
-from commands import to_small_caps, safe_send, auto_flee
 
 def play_loading_animation(bot, chat_id, message_id):
     frames = [
@@ -29,9 +29,13 @@ def play_loading_animation(bot, chat_id, message_id):
             time.sleep(0.4)
         except: pass
 
-def is_owner(bot, message):
-    if message.from_user.id != OWNER_ID:
-        safe_send(bot, message.chat.id, escape_md("🚫 Owner-sama only."), reply_to_id=message.message_id)
+def is_owner(bot, obj):
+    user_id = obj.from_user.id
+    if user_id != OWNER_ID:
+        if hasattr(obj, 'data'): # It's a button callback
+            bot.answer_callback_query(obj.id, "🚫 Owner-sama only!", show_alert=True)
+        else: # It's a text message
+            safe_send(bot, obj.chat.id, escape_md("🚫 Owner-sama only."), reply_to_id=obj.message_id)
         return False
     return True
 
@@ -65,9 +69,8 @@ def handle_admin_callback(bot, call):
         send_logs(bot, call.message.chat.id, call.message.message_id)
         return True
     elif call.data.startswith("getfile_"):
-        if not is_owner(bot, call): 
-            bot.answer_callback_query(call.id, "Owner only!")
-            return True
+        if not is_owner(bot, call): return True
+        
         table_name = call.data.split("_", 1)[1]
         bot.answer_callback_query(call.id, "Extracting Data...")
         csv_data = db.export_table_csv(table_name)
@@ -184,7 +187,7 @@ def register_admin_handlers(bot, active_hunts):
                 for uid, count in target_counts.most_common(10):
                     try: u_name = bot.get_chat(uid).first_name or "Trainer"
                     except: u_name = "Trainer"
-                    text += f"\\- [{escape_md(u_name)}](tg://user?id={uid}) — {count}\n"
+                    text += f"\\- [{escape_md(clean_name(u_name))}](tg://user?id={uid}) — {count}\n"
                 bot.edit_message_text(text, message.chat.id, msg.message_id, parse_mode="MarkdownV2")
             except: bot.edit_message_text(escape_md("❌ An error occurred."), message.chat.id, msg.message_id, parse_mode="MarkdownV2")
 
@@ -204,7 +207,7 @@ def register_admin_handlers(bot, active_hunts):
 
         elif module == "user" and action == "stats":
             target_id = message.reply_to_message.from_user.id if message.reply_to_message else (int(arguments) if arguments.isdigit() else None)
-            target_name = message.reply_to_message.from_user.first_name if message.reply_to_message else "Trainer"
+            target_name = clean_name(message.reply_to_message.from_user.first_name) if message.reply_to_message else "Trainer"
             if not target_id: return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to a user or provide their User ID."), reply_to_id=message.message_id)
             user_data = db.get_user(target_id)
             if not user_data: return safe_send(bot, message.chat.id, escape_md("❌ This user is not registered in the database."), reply_to_id=message.message_id)
@@ -219,7 +222,7 @@ def register_admin_handlers(bot, active_hunts):
             target_id = message.reply_to_message.from_user.id
             db.add_user_if_new(target_id)
             for p in poke_list: db.add_caught_pokemon(target_id, p, "Admin Gift")
-            safe_send(bot, message.chat.id, f"🎁 Successfully gave {len(poke_list)} Pokémon to [{escape_md(message.reply_to_message.from_user.first_name)}](tg://user?id={target_id})\\!\n\n_{escape_md(', '.join(poke_list))}_", reply_to_id=message.message_id)
+            safe_send(bot, message.chat.id, f"🎁 Successfully gave {len(poke_list)} Pokémon to [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={target_id})\\!\n\n_{escape_md(', '.join(poke_list))}_", reply_to_id=message.message_id)
 
         elif module == "server" and action == "status":
             msg = safe_send(bot, message.chat.id, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", reply_to_id=message.message_id)
@@ -294,7 +297,7 @@ def register_admin_handlers(bot, active_hunts):
         if len(args) < 2: return safe_send(bot, message.chat.id, "⚠️ *Format:* `/give <pokemon_name>`", reply_to_id=message.message_id)
         pokemon_name = args[1].strip().title()
         db.add_caught_pokemon(message.reply_to_message.from_user.id, pokemon_name, "Gift")
-        safe_send(bot, message.chat.id, f"🎁 Successfully gave *{escape_md(pokemon_name)}* to [{escape_md(message.reply_to_message.from_user.first_name)}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
+        safe_send(bot, message.chat.id, f"🎁 Successfully gave *{escape_md(pokemon_name)}* to [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["take"])
     def cmd_take(message):
@@ -303,15 +306,15 @@ def register_admin_handlers(bot, active_hunts):
         args = message.text.split(maxsplit=1)
         if len(args) < 2: return safe_send(bot, message.chat.id, "⚠️ *Format:* `/take <pokemon_name>`", reply_to_id=message.message_id)
         pokemon_name = args[1].strip().title()
-        if db.delete_pokemon(message.reply_to_message.from_user.id, pokemon_name): safe_send(bot, message.chat.id, f"🗑️ Successfully took *{escape_md(pokemon_name)}* from [{escape_md(message.reply_to_message.from_user.first_name)}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
-        else: safe_send(bot, message.chat.id, f"❌ [{escape_md(message.reply_to_message.from_user.first_name)}](tg://user?id={message.reply_to_message.from_user.id}) doesn't own a *{escape_md(pokemon_name)}*\\.", reply_to_id=message.message_id)
+        if db.delete_pokemon(message.reply_to_message.from_user.id, pokemon_name): safe_send(bot, message.chat.id, f"🗑️ Successfully took *{escape_md(pokemon_name)}* from [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
+        else: safe_send(bot, message.chat.id, f"❌ [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id}) doesn't own a *{escape_md(pokemon_name)}*\\.", reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["reset"])
     def cmd_reset(message):
         if not is_owner(bot, message): return
         if not message.reply_to_message: return safe_send(bot, message.chat.id, "⚠️ *Please reply to a user's message to reset their tries\\!*", reply_to_id=message.message_id)
         db.reset_user(message.reply_to_message.from_user.id)
-        safe_send(bot, message.chat.id, f"🔄 Successfully reset scouts for [{escape_md(message.reply_to_message.from_user.first_name)}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
+        safe_send(bot, message.chat.id, f"🔄 Successfully reset scouts for [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["plist"])
     def cmd_plist(message):
@@ -359,11 +362,8 @@ def register_admin_handlers(bot, active_hunts):
             except: safe_send(bot, message.chat.id, escape_md("📝 Usage: /leave <group_id>"), reply_to_id=message.message_id)
         elif cmd == "/debug":
             u_c, p_c, g_c = db.get_debug_stats()
-            safe_send(bot, message.chat.id, f"🛠 *Bot Debug Info*\n━━━━━━━━━━━━\n👥 *Trainers:* {u_c}\n🏆 *Pokémon:* {p_c}\n🎯 *Active Hunts:* {len(active_hunts)}\n⚔️ *Active PvP:* {len(pvp.pvp_battles)}\n🏢 *Groups:* {g_c}", reply_to_id=message.message_id)
+            safe_send(bot, message.chat.id, f"🛠 *Bot Debug Info*\n━━━━━━━━━━━━\n👥 *Trainers:* {u_c}\n🏆 *Pokémon:* {p_c}\n🎯 *Active Hunts:* {len(active_hunts)}\n🏢 *Groups:* {g_c}", reply_to_id=message.message_id)
         elif cmd == "/clearhunts":
             for hunt in active_hunts.values(): hunt["timer"].cancel()
             active_hunts.clear()
-            pvp.pvp_battles.clear()
-            try: trade.active_trades.clear()
-            except: pass
-            safe_send(bot, message.chat.id, escape_md("🧹 All active hunts, trades, and PvP battles cleared."), reply_to_id=message.message_id)
+            safe_send(bot, message.chat.id, escape_md("🧹 All active hunts cleared."), reply_to_id=message.message_id)
