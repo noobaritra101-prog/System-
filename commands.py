@@ -20,6 +20,11 @@ TYPE_EMOJIS = {
     'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
 }
 
+def clean_name(name):
+    """Strips newlines and formatting characters from names to prevent MarkdownV2 crashes."""
+    if not name: return "Trainer"
+    return name.replace('\n', ' ').replace('\r', '').replace('*', '').replace('_', '').strip()
+
 def to_small_caps(text):
     small_caps_map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
@@ -104,7 +109,7 @@ def process_catch(bot, call, uid, pid, name):
             except: pass
             
             if LOG_GROUP_ID:
-                try: bot.send_message(LOG_GROUP_ID, f"🟢 *Catch Log:* [{escape_md(call.from_user.first_name)}](tg://user?id={uid}) caught a ✨ Shiny {escape_md(poke_name_capped)}\\!", parse_mode="MarkdownV2")
+                try: bot.send_message(LOG_GROUP_ID, f"🟢 *Catch Log:* [{escape_md(clean_name(call.from_user.first_name))}](tg://user?id={uid}) caught a ✨ Shiny {escape_md(poke_name_capped)}\\!", parse_mode="MarkdownV2")
                 except: pass
             
             try: bot.edit_message_caption(caption=f"✨ *Gᴏᴛᴄʜᴀ\\!* Sʜɪɴʏ *{escape_md(to_small_caps(poke_name_capped))}* ᴡᴀs ᴄᴀᴜɢʜᴛ\\!\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\.", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
@@ -135,7 +140,7 @@ def send_leaderboard(bot, chat_id, user_id, message_id=None):
     top_trainers = db.get_top_trainers(5)
     text = "🏆 *Top Trainers Leaderboard:*\n\n"
     for i, (uid, count) in enumerate(top_trainers):
-        try: name = bot.get_chat(uid).first_name or "Trainer"
+        try: name = clean_name(bot.get_chat(uid).first_name)
         except: name = "Trainer"
         text += f"{i+1}\\. [{escape_md(name)}](tg://user?id={uid}) — {count} Pokémon\n"
     
@@ -155,7 +160,7 @@ def register_user_handlers(bot, active_hunts):
         if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
         kb = types.InlineKeyboardMarkup(row_width=2)
         kb.row(types.InlineKeyboardButton("Oᴡɴᴇʀ ⚡", url="https://t.me/monarch_sama"), types.InlineKeyboardButton("Mᴀɪɴ Gʀᴏᴜᴘ ⚡", url="https://t.me/sexagamechat"))
-        text = (f"Hҽყ {escape_md(message.from_user.first_name)}\n\n*Wᴇʟᴄσɱᴇ ᴛσ Sᴇxᴀ ✨*\n*Tʜᴇ Sʜɪɴʏ Pᴏᴋᴇ́ᴍᴏɴ Aᴅᴠᴇɴᴛᴜʀᴇ*\n\n"
+        text = (f"Hҽყ {escape_md(clean_name(message.from_user.first_name))}\n\n*Wᴇʟᴄσɱᴇ ᴛσ Sᴇxᴀ ✨*\n*Tʜᴇ Sʜɪɴʏ Pᴏᴋᴇ́ᴍᴏɴ Aᴅᴠᴇɴᴛᴜʀᴇ*\n\n"
                 f"━━━━━━━━━━━━━━━\n*🔎 Hᴜɴᴛ • 🎯 Cᴀᴛᴄʜ • 💎 Fʟᴇx*\n━━━━━━━━━━━━━━━\n*🌍 Yᴏᴜʀ Jᴏᴜʀɴᴇʏ Bᴇɢɪɴs Nᴏᴡ*")
         safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
 
@@ -190,11 +195,11 @@ def register_user_handlers(bot, active_hunts):
         rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
         wins, losses = db.get_battle_stats(user_id)
             
-        text = (f"✦─────────────────✦\n🪪  𝗧𝗥𝗔𝗜𝗡𝗘𝗥 𝗖𝗔𝗥𝗗  🪪\n✦─────────────────✦\n\n👤  {escape_md(message.from_user.first_name)}\n"
+        text = (f"✦─────────────────✦\n🪪  𝗧𝗥𝗔𝗜𝗡𝗘𝗥 𝗖𝗔𝗥𝗗  🪪\n✦─────────────────✦\n\n👤  {escape_md(clean_name(message.from_user.first_name))}\n"
                 f"🆔  `{user_id}`\n🌍  {escape_md(region)}\n\n✦───────────────✦\n𝗖𝗼𝗹𝗹𝗲𝗰𝘁𝗶𝗼𝗻\n🎒  {len(names)} 𝗣𝗼𝗸é𝗺𝗼𝗻\n"
                 f"⭐  {escape_md(rarest_caught)}  \\(𝗿𝗮𝗿𝗲𝘀𝘁 𝗰𝗮𝘂𝗴𝗵𝘁\\)\n\n✦───────────────✦\n𝗦𝗰𝗼𝘂𝘁𝘀\n🔋  {tries_left} / 2500 𝗿𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴\n\n"
                 f"✦─────────────────✦\n𝗕𝗔𝗧𝗧𝗟𝗘 𝗥𝗘𝗖𝗢𝗥𝗗\n✦─────────────────✦\n\n🏆  𝗪𝗶𝗻𝘀          {wins}\n❌  𝗟𝗼𝘀𝘀        {losses}\n"
-                f"📊  𝗧𝗼𝘁𝗮𝗹 𝗕𝗮𝘁𝘁𝗹𝗲𝘀 {wins+losses}\n\n✦─────────────────✦\n© 𝗣𝗼𝗸é𝗧𝗿𝗮𝗶𝗻𝗲𝗿 {escape_md(message.from_user.first_name)}")
+                f"📊  𝗧𝗼𝘁𝗮𝗹 𝗕𝗮𝘁𝘁𝗹𝗲𝘀 {wins+losses}\n\n✦─────────────────✦\n© 𝗣𝗼𝗸é𝗧𝗿𝗮𝗶𝗻𝗲𝗿 {escape_md(clean_name(message.from_user.first_name))}")
         safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["travel"])
