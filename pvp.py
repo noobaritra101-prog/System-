@@ -393,7 +393,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
         else:
             ui_text += f"\n💀 *Cʜᴏᴏsᴇ A Pᴏᴋᴇ́ᴍᴏɴ Tᴏ Sᴇɴᴅ Oᴜᴛ\\!*\n"
             
-        btns = [types.InlineKeyboardButton(f"{'🔴' if p['hp'] > 0 else '✖️'} {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
+        btns = [types.InlineKeyboardButton(f"{i+1}" if p['hp'] > 0 else f"✖️ {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
         
         # Format as a clean 2-column grid
         for i in range(0, len(btns), 2):
