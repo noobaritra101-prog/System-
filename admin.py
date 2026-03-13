@@ -6,6 +6,7 @@ import os
 import sys
 import json
 import io
+import sqlite3
 import subprocess
 from collections import Counter
 from telebot import types
@@ -225,6 +226,66 @@ def register_admin_handlers(bot, active_hunts):
             play_loading_animation(bot, message.chat.id, msg.message_id)
             bot.edit_message_text("🟢 *Sᴇʀᴠᴇʀ Oɴʟɪɴᴇ\\!*\n_Sᴜᴘᴀʙᴀsᴇ DB Cᴏɴɴᴇᴄᴛᴇᴅ_ ✅", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
 
+    # --- DB MIGRATE AND EXPORT TOOLS ---
+    @bot.message_handler(commands=["restore"])
+    def cmd_restore(message):
+        if not is_owner(bot, message): return
+        safe_send(bot, message.chat.id, escape_md("📥 Send me the old SQLite (.db) file to migrate it into the cloud PostgreSQL database. Max size: 20MB."), reply_to_id=message.message_id)
+
+    @bot.message_handler(content_types=["document"])
+    def handle_restore_file(message):
+        if not is_owner(bot, message): return
+        if not message.document.file_name.endswith((".db", ".sqlite", ".db3")): return
+        
+        status_msg = bot.reply_to(message, escape_md("🔄 Downloading local SQLite file..."))
+        try:
+            file_info = bot.get_file(message.document.file_id)
+            data = bot.download_file(file_info.file_path)
+            temp_file = f"temp_migrate_{int(time.time())}.db"
+            with open(temp_file, "wb") as f: f.write(data)
+            
+            bot.edit_message_text(escape_md("📦 Extracting data from SQLite..."), chat_id=message.chat.id, message_id=status_msg.message_id)
+            conn = sqlite3.connect(temp_file)
+            cur = conn.cursor()
+            
+            cur.execute("SELECT user_id, tries_left, region, last_reset FROM users")
+            users_data = [(r[0], r[1], r[2], datetime.datetime.strptime(r[3], "%Y-%m-%d").date()) for r in cur.fetchall()]
+            
+            cur.execute("SELECT user_id, name, region FROM pokemons")
+            pokemons_data = cur.fetchall()
+            
+            cur.execute("SELECT group_id FROM groups")
+            groups_data = cur.fetchall()
+            conn.close()
+            
+            bot.edit_message_text(escape_md(f"☁️ Injecting {len(users_data)} Users, {len(pokemons_data)} Pokémons into Supabase PostgreSQL..."), chat_id=message.chat.id, message_id=status_msg.message_id)
+            db.restore_sqlite_data(users_data, pokemons_data, groups_data)
+            
+            os.remove(temp_file) 
+            bot.edit_message_text(escape_md("✅ Migration Complete! Your local data is now securely in the cloud."), chat_id=message.chat.id, message_id=status_msg.message_id)
+        except Exception as e:
+            logger.error(f"Restore error: {e}")
+            bot.edit_message_text(escape_md(f"❌ Error during migration: {str(e)}"), chat_id=message.chat.id, message_id=status_msg.message_id)
+
+    @bot.message_handler(commands=["backup"])
+    def cmd_backup(message):
+        if not is_owner(bot, message): return
+        safe_send(bot, message.chat.id, escape_md("☁️ You are on a cloud database now! Backups are handled automatically via Supabase."), reply_to_id=message.message_id)
+
+    @bot.message_handler(commands=["export"])
+    def cmd_export(message):
+        if not is_owner(bot, message): return
+        status_msg = bot.reply_to(message, escape_md("🔄 Extracting data from PostgreSQL..."), parse_mode="MarkdownV2")
+        try:
+            data = db.export_all_data()
+            json_data = json.dumps(data, default=str, indent=4)
+            backup_file = io.BytesIO(json_data.encode('utf-8'))
+            backup_file.name = f"database_backup_{int(time.time())}.json"
+            bot.send_document(message.chat.id, backup_file, caption=escape_md("📦 Here is your complete database backup!"), parse_mode="MarkdownV2")
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        except Exception as e:
+            bot.edit_message_text(escape_md(f"❌ Export failed: {e}"), chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="MarkdownV2")
+
     @bot.message_handler(commands=["give"])
     def cmd_give(message):
         if not is_owner(bot, message): return
@@ -298,8 +359,11 @@ def register_admin_handlers(bot, active_hunts):
             except: safe_send(bot, message.chat.id, escape_md("📝 Usage: /leave <group_id>"), reply_to_id=message.message_id)
         elif cmd == "/debug":
             u_c, p_c, g_c = db.get_debug_stats()
-            safe_send(bot, message.chat.id, f"🛠 *Bot Debug Info*\n━━━━━━━━━━━━\n👥 *Trainers:* {u_c}\n🏆 *Pokémon:* {p_c}\n🎯 *Active Hunts:* {len(active_hunts)}\n🏢 *Groups:* {g_c}", reply_to_id=message.message_id)
+            safe_send(bot, message.chat.id, f"🛠 *Bot Debug Info*\n━━━━━━━━━━━━\n👥 *Trainers:* {u_c}\n🏆 *Pokémon:* {p_c}\n🎯 *Active Hunts:* {len(active_hunts)}\n⚔️ *Active PvP:* {len(pvp.pvp_battles)}\n🏢 *Groups:* {g_c}", reply_to_id=message.message_id)
         elif cmd == "/clearhunts":
             for hunt in active_hunts.values(): hunt["timer"].cancel()
             active_hunts.clear()
-            safe_send(bot, message.chat.id, escape_md("🧹 All active hunts cleared."), reply_to_id=message.message_id)
+            pvp.pvp_battles.clear()
+            try: trade.active_trades.clear()
+            except: pass
+            safe_send(bot, message.chat.id, escape_md("🧹 All active hunts, trades, and PvP battles cleared."), reply_to_id=message.message_id)
