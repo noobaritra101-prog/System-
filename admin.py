@@ -30,12 +30,12 @@ def play_loading_animation(bot, chat_id, message_id):
         except: pass
 
 def is_owner(bot, obj):
-    user_id = obj.from_user.id
-    if user_id != OWNER_ID:
+    """Checks if the user is the owner. Silently ignores if they are not."""
+    if obj.from_user.id != OWNER_ID:
+        # If they clicked an admin button, stop the loading circle silently
         if hasattr(obj, 'data'):
-            bot.answer_callback_query(obj.id, "🚫 Owner-sama only!", show_alert=True)
-        else:
-            safe_send(bot, obj.chat.id, escape_md("🚫 Owner-sama only."), reply_to_id=obj.message_id)
+            try: bot.answer_callback_query(obj.id, "")
+            except: pass
         return False
     return True
 
@@ -60,10 +60,12 @@ def send_logs(bot, chat_id, message_id=None):
 
 def handle_admin_callback(bot, call):
     if call.data == "log_refresh":
+        if not is_owner(bot, call): return True
         bot.answer_callback_query(call.id, "Refreshing logs...")
         send_logs(bot, call.message.chat.id, call.message.message_id)
         return True
     elif call.data == "log_delete":
+        if not is_owner(bot, call): return True
         open("bot.log", "w").close()
         bot.answer_callback_query(call.id, "Logs Deleted!", show_alert=True)
         send_logs(bot, call.message.chat.id, call.message.message_id)
