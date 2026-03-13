@@ -42,6 +42,7 @@ def safe_send(bot, chat_id, text, reply_to_id=None, reply_markup=None):
             except: pass
         return None
 
+# ================== NEW INVENTORY UI GENERATOR ==================
 def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
     names = db.list_user_pokemon_names(uid)
     if not names:
@@ -54,6 +55,7 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
     if page_idx < 0: page_idx = 0
     if page_idx >= len(pages): page_idx = len(pages) - 1
 
+    # CRITICAL FIX: Escaping the MarkdownV2 parentheses for the Admin view!
     if is_admin:
         title = f"🎒 𝗣𝗢𝗞𝗘𝗠𝗢𝗡 \\(𝗨𝗜𝗗: `{uid}`\\)"
     else:
@@ -67,15 +69,19 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
         
         type_str = ""
         try:
+            # Fetch Types dynamically for the beautiful UI
             types_list, _ = get_pokemon_stats_sync(name.lower())
             if types_list:
                 emojis = "/ ".join([TYPE_EMOJIS.get(t, '') for t in types_list if t]).strip()
                 if emojis:
                     type_str = f"【{emojis}】"
-        except: pass
+        except:
+            pass
 
+        # Formatting as: 01. Skorupi【☣️/ 🐛】
         text += f"`{item_num:02d}.` {escape_md(name)}{escape_md(type_str)}\n"
 
+    # Add the requested Total Pokemon footer
     text += f"\n📦 Tᴏᴛᴀʟ Pᴏᴋᴇ́ᴍᴏɴ — {total_poke}\n━━━━━━━━━━━━━━━━"
 
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -208,7 +214,10 @@ def send_leaderboard(bot, chat_id, user_id, message_id=None, mode="catch"):
     for i, (uid, count) in enumerate(top_players):
         try: name = clean_name(bot.get_chat(uid).first_name)
         except: name = "Trainer"
-        text += f"{i+1}\\. [{escape_md(name)}](tg://user?id={uid}) — {count} {score_label}\n"
+        
+        # 🔧 FIX: Removed the [Name](tg://user?id=uid) hidden link!
+        # Now it just prints their name in bold text, stopping all pings.
+        text += f"{i+1}\\. *{escape_md(name)}* — {count} {score_label}\n"
     
     text += f"\nYᴏᴜʀ Rᴀɴᴋ — *{user_rank}*"
     
@@ -270,6 +279,7 @@ def register_user_handlers(bot, active_hunts):
         rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
         wins, losses = db.get_battle_stats(user_id)
         
+        # Win Rate Math Calculation
         total_battles = wins + losses
         win_rate = round((wins / total_battles * 100), 1) if total_battles > 0 else 0.0
             
@@ -393,7 +403,6 @@ def register_user_handlers(bot, active_hunts):
     @bot.message_handler(commands=["flex", "top", "leaderboard"])
     def command_flex(message):
         db.add_user_if_new(message.from_user.id)
-        # Default to Catch mode
         send_leaderboard(bot, message.chat.id, message.from_user.id, mode="catch")
         
     @bot.message_handler(commands=["getid"])
