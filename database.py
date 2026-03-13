@@ -15,14 +15,12 @@ db_pool = None
 def init_db():
     global db_pool
     try:
-        # Create a connection pool (Min 1, Max 20 connections for speed)
         db_pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
         if db_pool:
             logger.info("✅ Connection pool created successfully")
             
         with get_conn() as conn:
             with conn.cursor() as cur:
-                # Core Tables
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         user_id BIGINT PRIMARY KEY,
@@ -44,8 +42,6 @@ def init_db():
                         group_id BIGINT PRIMARY KEY
                     )
                 """)
-                
-                # PvP & Stats Tables
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS pvp_settings (
                         user_id BIGINT PRIMARY KEY,
@@ -55,7 +51,6 @@ def init_db():
                     )
                 """)
                 
-                # --- AUTO-MIGRATION: PVP SETTINGS ---
                 cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='size'")
                 if not cur.fetchone():
                     cur.execute("ALTER TABLE pvp_settings ADD COLUMN size INTEGER DEFAULT 6")
@@ -65,7 +60,6 @@ def init_db():
                 if not cur.fetchone():
                     cur.execute("ALTER TABLE pvp_settings ADD COLUMN can_switch BOOLEAN DEFAULT TRUE")
                     logger.info("🔧 Migrated: Added 'can_switch' column to pvp_settings")
-                # -------------------------------------------------------
 
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS battle_stats (
@@ -74,8 +68,6 @@ def init_db():
                         losses INTEGER DEFAULT 0
                     )
                 """)
-                
-                # Tasks Table (Multi-Row Format)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS tasks (
                         user_id BIGINT,
@@ -92,17 +84,13 @@ def init_db():
                 """)
                 conn.commit()
 
-                # --- AUTO-MIGRATION: FIX OLD TASKS SCHEMA RULE ---
                 try:
                     cur.execute("ALTER TABLE tasks DROP CONSTRAINT tasks_pkey")
                     cur.execute("ALTER TABLE tasks ADD PRIMARY KEY (user_id, task_type)")
                     conn.commit()
-                    logger.info("🔧 Migrated: Updated Tasks primary key to allow multiple daily tasks!")
                 except Exception:
                     conn.rollback() 
-                # -------------------------------------------------------
                 
-                # Speed Indexes
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_pokemons_user_id ON pokemons(user_id)")
                 conn.commit()
     except Exception as e:
@@ -110,12 +98,9 @@ def init_db():
 
 @contextmanager
 def get_conn():
-    """Context manager to safely get and return a connection to the pool."""
     conn = db_pool.getconn()
-    try:
-        yield conn
-    finally:
-        db_pool.putconn(conn)
+    try: yield conn
+    finally: db_pool.putconn(conn)
 
 # ================== USER MANAGEMENT ==================
 def add_user_if_new(user_id):
@@ -225,6 +210,32 @@ def get_user_rank(user_id):
                     SELECT user_id, RANK() OVER (ORDER BY COUNT(*) DESC) as rank 
                     FROM pokemons 
                     GROUP BY user_id
+                ) sub 
+                WHERE user_id = %s
+            """, (user_id,))
+            row = cur.fetchone()
+            return row[0] if row else "Unranked"
+
+def get_top_pvp_players(limit=5):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT user_id, wins 
+                FROM battle_stats 
+                WHERE wins > 0 
+                ORDER BY wins DESC 
+                LIMIT %s
+            """, (limit,))
+            return cur.fetchall()
+
+def get_user_pvp_rank(user_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT rank FROM (
+                    SELECT user_id, RANK() OVER (ORDER BY wins DESC) as rank 
+                    FROM battle_stats 
+                    WHERE wins > 0
                 ) sub 
                 WHERE user_id = %s
             """, (user_id,))
