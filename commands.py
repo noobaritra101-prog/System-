@@ -55,7 +55,11 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
     if page_idx < 0: page_idx = 0
     if page_idx >= len(pages): page_idx = len(pages) - 1
 
-    title = "🎒 𝗬𝗢𝗨𝗥 𝗣𝗢𝗞𝗘𝗠𝗢𝗡" if not is_admin else f"🎒 𝗣𝗢𝗞𝗘𝗠𝗢𝗡 (𝗨𝗜𝗗: {uid})"
+    # CRITICAL FIX: Escaping the MarkdownV2 parentheses for the Admin view!
+    if is_admin:
+        title = f"🎒 𝗣𝗢𝗞𝗘𝗠𝗢𝗡 \\(𝗨𝗜𝗗: `{uid}`\\)"
+    else:
+        title = "🎒 𝗬𝗢𝗨𝗥 𝗣𝗢𝗞𝗘𝗠𝗢𝗡"
     
     text = f"{title}\n━━━━━━━━━━━━━━━━\n"
     text += f"📃 Pᴀɢᴇ【{page_idx + 1} / {len(pages)}】\n\n"
@@ -286,8 +290,6 @@ def register_user_handlers(bot, active_hunts):
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
         if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
-        
-        # Calling the new beautiful UI generator
         text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
         safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
 
