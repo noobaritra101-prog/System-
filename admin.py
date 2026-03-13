@@ -13,7 +13,7 @@ from telebot import types
 
 import database as db
 from config import OWNER_ID, FLEE_TIMEOUT, logger
-from commands import to_small_caps, safe_send, auto_flee, clean_name
+from commands import to_small_caps, safe_send, auto_flee, clean_name, generate_pokemon_list_ui
 from api_utils import escape_md, official_shiny_artwork_url, get_pokemon_id_sync, pokemon_name_to_id_cache
 
 def play_loading_animation(bot, chat_id, message_id):
@@ -32,9 +32,9 @@ def play_loading_animation(bot, chat_id, message_id):
 def is_owner(bot, obj):
     user_id = obj.from_user.id
     if user_id != OWNER_ID:
-        if hasattr(obj, 'data'): # It's a button callback
+        if hasattr(obj, 'data'):
             bot.answer_callback_query(obj.id, "🚫 Owner-sama only!", show_alert=True)
-        else: # It's a text message
+        else:
             safe_send(bot, obj.chat.id, escape_md("🚫 Owner-sama only."), reply_to_id=obj.message_id)
         return False
     return True
@@ -70,7 +70,6 @@ def handle_admin_callback(bot, call):
         return True
     elif call.data.startswith("getfile_"):
         if not is_owner(bot, call): return True
-        
         table_name = call.data.split("_", 1)[1]
         bot.answer_callback_query(call.id, "Extracting Data...")
         csv_data = db.export_table_csv(table_name)
@@ -229,7 +228,6 @@ def register_admin_handlers(bot, active_hunts):
             play_loading_animation(bot, message.chat.id, msg.message_id)
             bot.edit_message_text("🟢 *Sᴇʀᴠᴇʀ Oɴʟɪɴᴇ\\!*\n_Sᴜᴘᴀʙᴀsᴇ DB Cᴏɴɴᴇᴄᴛᴇᴅ_ ✅", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
 
-    # --- DB MIGRATE AND EXPORT TOOLS ---
     @bot.message_handler(commands=["restore"])
     def cmd_restore(message):
         if not is_owner(bot, message): return
@@ -323,11 +321,8 @@ def register_admin_handlers(bot, active_hunts):
         if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /plist <user_id>"), reply_to_id=message.message_id)
         try:
             uid = int(parts[1])
-            names = db.list_user_pokemon_names(uid)
-            if not names: return safe_send(bot, message.chat.id, escape_md(f"User {uid} has no Pokémon."), reply_to_id=message.message_id)
-            pages = [names[i:i + 20] for i in range(0, len(names), 20)]
-            kb = types.InlineKeyboardMarkup(row_width=4).add(types.InlineKeyboardButton("<<", callback_data=f"plist_{uid}_0"), types.InlineKeyboardButton(">>", callback_data=f"plist_{uid}_{len(pages) - 1}"))
-            safe_send(bot, message.chat.id, f"🎒 *Pokémon for User {uid}* \\(Page 1/{len(pages)}\\):\n\n" + "\n".join(f"\\- {escape_md(n)}" for n in pages[0]), reply_to_id=message.message_id, reply_markup=kb if len(pages) > 1 else None)
+            text, kb = generate_pokemon_list_ui(uid, 0, action_prefix="plist", is_admin=True)
+            safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
         except Exception as e: safe_send(bot, message.chat.id, escape_md(f"Error: {str(e)}"), reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["bcast", "gcast"])
@@ -366,4 +361,8 @@ def register_admin_handlers(bot, active_hunts):
         elif cmd == "/clearhunts":
             for hunt in active_hunts.values(): hunt["timer"].cancel()
             active_hunts.clear()
+            try: pvp.pvp_battles.clear()
+            except: pass
+            try: trade.active_trades.clear()
+            except: pass
             safe_send(bot, message.chat.id, escape_md("🧹 All active hunts cleared."), reply_to_id=message.message_id)
