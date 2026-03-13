@@ -41,7 +41,7 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
-        if admin.handle_admin_callback(bot, call): return
+        if admin.handle_admin_callback(bot, call, active_hunts): return
             
         # Route logic
         if call.data.startswith("tr_"): return trade.handle_trade_callback(bot, call)
