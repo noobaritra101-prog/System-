@@ -48,6 +48,7 @@ TYPE_CHART = {
     'Fairy': {'Fire': 0.5, 'Fighting': 2.0, 'Poison': 0.5, 'Dragon': 2.0, 'Dark': 2.0, 'Steel': 0.5}
 }
 
+# 🌟 CUSTOM OP MEGA TYPINGS 🌟
 FORM_TYPE_CHANGES = {
     "Mega Charizard X": "Fire/Dragon",
     "Mega Mewtwo X": "Psychic/Fighting",
@@ -59,23 +60,39 @@ FORM_TYPE_CHANGES = {
     "Mega Aggron": "Steel",
     "Mega Lopunny": "Normal/Fighting",
     "Mega Audino": "Normal/Fairy",
-    "Mega Meganium": "Grass/Fairy", 
+    "Primal Groudon": "Ground/Fire",
+    "Crowned Zacian": "Fairy/Steel",
+    "Crowned Zamazenta": "Fighting/Steel",
+    "Shadow Rider Calyrex": "Psychic/Ghost",
+    
+    # Custom Formes
     "Mega Raichu X": "Electric/Fighting",
     "Mega Raichu Y": "Electric/Fairy",
     "Mega Lucario Z": "Fighting/Psychic",
     "Mega Zeraora": "Electric/Fighting",
-    "Mega Emboar": "Fire/Fighting",
     "Mega Greninja": "Water/Dark",
+    
+    # Custom Megas (Previously added)
+    "Mega Meganium": "Grass/Fairy", 
+    "Mega Emboar": "Fire/Fighting",
     "Mega Malamar": "Dark/Psychic",
-    "Mega Eelektross": "Electric",
-    "Mega Falinks": "Fighting",
-    "Mega Chimecho": "Psychic",
-    "Primal Groudon": "Ground/Fire",
-    "Crowned Zacian": "Fairy/Steel",
-    "Crowned Zamazenta": "Fighting/Steel",
-    "Shadow Rider Calyrex": "Psychic/Ghost"
+    "Mega Eelektross": "Electric/Dragon",
+    "Mega Falinks": "Fighting/Steel",
+    "Mega Chimecho": "Psychic/Ghost",
+    
+    # 🔥 NEW CUSTOM MEGAS 🔥
+    "Mega Pyroar": "Fire/Dark",
+    "Mega Dragalge": "Poison/Dragon",
+    "Mega Froslass": "Ice/Ghost",
+    "Mega Clefable": "Fairy/Ghost",
+    "Mega Staraptor": "Fighting/Flying",
+    "Mega Heatran": "Fire/Steel",
+    "Mega Darkrai": "Dark/Ghost",
+    "Mega Meowstic": "Psychic/Dark",
+    "Mega Crabominable": "Fighting/Ice"
 }
 
+# 🌟 CUSTOM OP MEGA STAT BUFFS (+100 TOTAL STATS) 🌟
 MEGA_STAT_BUFFS = {
     "Mega Charizard X": {"atk": 46, "def": 33, "spd": 0},
     "Mega Charizard Y": {"atk": 20, "def": 0, "spd": 0},
@@ -90,14 +107,27 @@ MEGA_STAT_BUFFS = {
     "Crowned Zamazenta": {"atk": -10, "def": 25, "spd": -10},
     "Shadow Rider Calyrex": {"atk": 0, "def": 0, "spd": 70},
     "Ash-Greninja": {"atk": 50, "def": 0, "spd": 10},
+    
+    # Custom Buffs
     "Mega Dragonite": {"atk": 40, "def": 20, "spd": 20}, 
     "Mega Meganium": {"atk": 10, "def": 40, "spd": 30},
     "Mega Emboar": {"atk": 40, "def": 20, "spd": 20},
     "Mega Greninja": {"atk": 40, "def": 10, "spd": 30},
-    "Mega Malamar": {"atk": 20, "def": 40, "spd": 20},
-    "Mega Eelektross": {"atk": 30, "def": 30, "spd": 20},
-    "Mega Falinks": {"atk": 40, "def": 20, "spd": 20},
-    "Mega Chimecho": {"atk": 20, "def": 40, "spd": 20}
+    "Mega Malamar": {"atk": 30, "def": 40, "spd": 30},
+    "Mega Eelektross": {"atk": 40, "def": 30, "spd": 30},
+    "Mega Falinks": {"atk": 40, "def": 30, "spd": 30},
+    "Mega Chimecho": {"atk": 20, "def": 40, "spd": 40},
+    
+    # 🔥 NEW CUSTOM BUFFS 🔥
+    "Mega Pyroar": {"atk": 50, "def": 15, "spd": 35},
+    "Mega Dragalge": {"atk": 20, "def": 60, "spd": 20},
+    "Mega Froslass": {"atk": 25, "def": 25, "spd": 50},
+    "Mega Clefable": {"atk": 10, "def": 60, "spd": 30},
+    "Mega Staraptor": {"atk": 60, "def": 10, "spd": 30},
+    "Mega Heatran": {"atk": 30, "def": 50, "spd": 20},
+    "Mega Darkrai": {"atk": 40, "def": 20, "spd": 40},
+    "Mega Meowstic": {"atk": 30, "def": 30, "spd": 40},
+    "Mega Crabominable": {"atk": 60, "def": 40, "spd": 0}
 }
 
 # --- HELPERS ---
@@ -538,7 +568,15 @@ def handle_pvp_callback(bot, call):
                                 for m in p["moves"]:
                                     if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
                         
-                        special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Greninja", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex"]
+                        # 🌟 FULL MEGA ROSTER INITIALIZATION 🌟
+                        custom_megas = [
+                            "Pyroar", "Malamar", "Dragalge", "Eelektross", "Froslass", 
+                            "Clefable", "Chimecho", "Staraptor", "Heatran", "Darkrai", 
+                            "Meowstic", "Crabominable", "Dragonite", "Meganium", 
+                            "Emboar", "Falinks", "Zeraora"
+                        ]
+                        special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Greninja", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex"] + custom_megas
+                        
                         p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
                         p["is_mega"] = False
                         
@@ -671,7 +709,6 @@ def handle_pvp_callback(bot, call):
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
                         
-                        # 🛡️ BULLETPROOF DATABASE UPDATES
                         try: db.update_task_pvp(b[actual_turn + "_id"])
                         except Exception as e: logger.error(f"Task PvP Error: {e}")
                         
@@ -697,7 +734,6 @@ def handle_pvp_callback(bot, call):
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
                             except: pass
                         
-                        # 🛡️ BULLETPROOF DATABASE UPDATES
                         try: db.update_task_pvp(b[defender + "_id"])
                         except Exception as e: logger.error(f"Task PvP Error: {e}")
                         
@@ -863,7 +899,6 @@ def handle_pvp_callback(bot, call):
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
                     except: pass
                 
-                # 🛡️ BULLETPROOF DATABASE UPDATES
                 try: db.update_battle_stats(runner_id, is_win=False)
                 except Exception as e: logger.error(f"Stat Save Error: {e}")
                 
