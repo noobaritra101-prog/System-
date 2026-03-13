@@ -193,7 +193,7 @@ def register_user_handlers(bot, active_hunts):
         text = (f"✦─────────────────✦\n🪪  𝗧𝗥𝗔𝗜𝗡𝗘𝗥 𝗖𝗔𝗥𝗗  🪪\n✦─────────────────✦\n\n👤  {escape_md(message.from_user.first_name)}\n"
                 f"🆔  `{user_id}`\n🌍  {escape_md(region)}\n\n✦───────────────✦\n𝗖𝗼𝗹𝗹𝗲𝗰𝘁𝗶𝗼𝗻\n🎒  {len(names)} 𝗣𝗼𝗸é𝗺𝗼𝗻\n"
                 f"⭐  {escape_md(rarest_caught)}  \\(𝗿𝗮𝗿𝗲𝘀𝘁 𝗰𝗮𝘂𝗴𝗵𝘁\\)\n\n✦───────────────✦\n𝗦𝗰𝗼𝘂𝘁𝘀\n🔋  {tries_left} / 2500 𝗿𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴\n\n"
-                f"✦─────────────────✦\n𝗕𝗔𝗧𝗧𝗟𝗘 𝗥𝗘𝗖𝗢𝗥𝗗\n✦─────────────────✦\n\n🏆  𝗪𝗶𝗻𝘀          {wins}\n❌  𝗟𝗼𝘀𝘀𝗲𝘀        {losses}\n"
+                f"✦─────────────────✦\n𝗕𝗔𝗧𝗧𝗟𝗘 𝗥𝗘𝗖𝗢𝗥𝗗\n✦─────────────────✦\n\n🏆  𝗪𝗶𝗻𝘀          {wins}\n❌  𝗟𝗼𝘀𝘀        {losses}\n"
                 f"📊  𝗧𝗼𝘁𝗮𝗹 𝗕𝗮𝘁𝘁𝗹𝗲𝘀 {wins+losses}\n\n✦─────────────────✦\n© 𝗣𝗼𝗸é𝗧𝗿𝗮𝗶𝗻𝗲𝗿 {escape_md(message.from_user.first_name)}")
         safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
 
@@ -270,7 +270,15 @@ def register_user_handlers(bot, active_hunts):
         for i, p in enumerate(user_team):
             emojis = " / ".join([f"{t.strip()} {TYPE_EMOJIS.get(t.strip(), '⚪')}" for t in p.get('types', 'Unknown').split('/')])
             team_text += f"*{i+1}\\. {escape_md(p['name'])}* \\[{escape_md(emojis)}\\]\n🌿 *Nature:* {escape_md(p['nature'])}\n⚔️ *Moves:*\n"
-            for m in p['moves']: team_text += f"  \\- {escape_md(m['name'])} \\[{escape_md(f\"{m['type']} {TYPE_EMOJIS.get(m['type'], '')}\")}\\] \\(Pow: {m.get('power', 0)}, Acc: {m.get('acc', 100)}\\)\n"
+            
+            for m in p['moves']: 
+                m_type = m.get('type', 'Normal')
+                m_emoji = TYPE_EMOJIS.get(m_type, '')
+                m_str = escape_md(f"{m_type} {m_emoji}".strip())
+                m_pow = m.get('power', 0)
+                m_acc = m.get('acc', 100)
+                team_text += f"  \\- {escape_md(m['name'])} \\[{m_str}\\] \\(Pow: {m_pow}, Acc: {m_acc}\\)\n"
+                
             team_text += "\n"
             
         try:
