@@ -24,7 +24,7 @@ logger.addHandler(file_handler)
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
 active_hunts = {}  
 
-# Initialize Handlers
+# Initialize Handlers from both modules
 commands.register_user_handlers(bot, active_hunts)
 admin.register_admin_handlers(bot, active_hunts)
 
@@ -41,7 +41,7 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
-        # Route to admin module if handled
+        # Route to admin module first. If it handled it, stop processing.
         if admin.handle_admin_callback(bot, call): return
             
         # Route logic
