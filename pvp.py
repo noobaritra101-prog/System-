@@ -72,15 +72,13 @@ FORM_TYPE_CHANGES = {
     "Mega Zeraora": "Electric/Fighting",
     "Mega Greninja": "Water/Dark",
     
-    # Custom Megas (Previously added)
+    # Custom Megas 
     "Mega Meganium": "Grass/Fairy", 
     "Mega Emboar": "Fire/Fighting",
     "Mega Malamar": "Dark/Psychic",
     "Mega Eelektross": "Electric/Dragon",
     "Mega Falinks": "Fighting/Steel",
     "Mega Chimecho": "Psychic/Ghost",
-    
-    # 🔥 NEW CUSTOM MEGAS 🔥
     "Mega Pyroar": "Fire/Dark",
     "Mega Dragalge": "Poison/Dragon",
     "Mega Froslass": "Ice/Ghost",
@@ -92,7 +90,7 @@ FORM_TYPE_CHANGES = {
     "Mega Crabominable": "Fighting/Ice"
 }
 
-# 🌟 CUSTOM OP MEGA STAT BUFFS (+100 TOTAL STATS) 🌟
+# 🌟 CUSTOM OP MEGA STAT BUFFS 🌟
 MEGA_STAT_BUFFS = {
     "Mega Charizard X": {"atk": 46, "def": 33, "spd": 0},
     "Mega Charizard Y": {"atk": 20, "def": 0, "spd": 0},
@@ -117,8 +115,6 @@ MEGA_STAT_BUFFS = {
     "Mega Eelektross": {"atk": 40, "def": 30, "spd": 30},
     "Mega Falinks": {"atk": 40, "def": 30, "spd": 30},
     "Mega Chimecho": {"atk": 20, "def": 40, "spd": 40},
-    
-    # 🔥 NEW CUSTOM BUFFS 🔥
     "Mega Pyroar": {"atk": 50, "def": 15, "spd": 35},
     "Mega Dragalge": {"atk": 20, "def": 60, "spd": 20},
     "Mega Froslass": {"atk": 25, "def": 25, "spd": 50},
@@ -173,7 +169,6 @@ def battle_timeout(bot, chat_id, battle_id):
         
         pvp_battles.pop(battle_id, None)
         
-        # BULLETPROOF STAT SAVING
         try: db.update_battle_stats(winner_id, is_win=True)
         except Exception as e: logger.error(f"Stat Save Error: {e}")
         
@@ -393,9 +388,17 @@ def render_pvp_ui(bot, chat_id, battle_id):
         kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
     elif b["state"] in ["switch_menu", "force_switch"]:
-        ui_text += f" 🔄 Choose a Pokémon to switch into:\n" if b["state"] == "switch_menu" else f" 💀 Choose a replacement Pokémon:\n"
-        btns = [types.InlineKeyboardButton(f"{'🔴' if p['hp'] > 0 else '💀'} {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
-        for i in range(0, len(btns), 3): kb.add(*btns[i:i+3])
+        if b["state"] == "switch_menu":
+            ui_text += f"\n🔄 *Wʜɪᴄʜ Pᴏᴋᴇ́ᴍᴏɴ Wɪʟʟ Yᴏᴜ Sᴡɪᴛᴄʜ Tᴏ?*\n"
+        else:
+            ui_text += f"\n💀 *Cʜᴏᴏsᴇ A Pᴏᴋᴇ́ᴍᴏɴ Tᴏ Sᴇɴᴅ Oᴜᴛ\\!*\n"
+            
+        btns = [types.InlineKeyboardButton(f"{'🔴' if p['hp'] > 0 else '✖️'} {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
+        
+        # Format as a clean 2-column grid
+        for i in range(0, len(btns), 2):
+            if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
+            else: kb.add(btns[i])
         
         kb.row(types.InlineKeyboardButton("📋 Vɪᴇᴡ Tᴇᴀᴍ", callback_data=f"pvp_viewteam_{battle_id}_{turn}"))
         if b["state"] == "switch_menu": 
