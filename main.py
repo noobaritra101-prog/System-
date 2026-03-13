@@ -41,7 +41,6 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
-        # Route to admin module first. If it handled it, stop processing.
         if admin.handle_admin_callback(bot, call): return
             
         # Route logic
@@ -63,11 +62,17 @@ def cb_handler(call):
                 except: pass
             return
 
-        elif call.data.startswith("refresh_flex_"):
-            owner_id = int(call.data.split("_")[2])
-            if call.from_user.id != owner_id: return bot.answer_callback_query(call.id, "❌ You cannot refresh someone else's flex menu!", show_alert=True)
+        # --- DYNAMIC LEADERBOARD ROUTING ---
+        elif call.data.startswith("flex_"):
+            parts = call.data.split("_")
+            mode = parts[1] 
+            owner_id = int(parts[2])
+            
+            if call.from_user.id != owner_id: 
+                return bot.answer_callback_query(call.id, "❌ You cannot use someone else's flex menu!", show_alert=True)
+                
             bot.answer_callback_query(call.id, "🔄 Refreshing Leaderboard...")
-            return commands.send_leaderboard(bot, call.message.chat.id, owner_id, call.message.message_id)
+            return commands.send_leaderboard(bot, call.message.chat.id, owner_id, call.message.message_id, mode)
         
         elif call.data.startswith("travel_cancel_"):
             if call.from_user.id != int(call.data.split("_")[2]): return bot.answer_callback_query(call.id, "Not your menu.")
@@ -125,7 +130,6 @@ def cb_handler(call):
             if action == "mypoke" and call.from_user.id != uid: return bot.answer_callback_query(call.id, "This is not your bag.")
             if action == "plist" and not admin.is_owner(bot, call): return
             
-            # The new UI Engine!
             text, kb = commands.generate_pokemon_list_ui(uid, page_idx, action_prefix=action, is_admin=(action=="plist"))
             
             try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
