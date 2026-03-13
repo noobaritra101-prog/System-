@@ -251,16 +251,42 @@ def register_user_handlers(bot, active_hunts):
     def cmd_profile(message):
         user_id = message.from_user.id
         if not db.get_user(user_id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+        
         tries_left, region = db.update_user_tries(user_id)
         names = db.list_user_pokemon_names(user_id)
         rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
         wins, losses = db.get_battle_stats(user_id)
+        
+        # Win Rate Math Calculation
+        total_battles = wins + losses
+        win_rate = round((wins / total_battles * 100), 1) if total_battles > 0 else 0.0
             
-        text = (f"✦─────────────────✦\n🪪  𝗧𝗥𝗔𝗜𝗡𝗘𝗥 𝗖𝗔𝗥𝗗  🪪\n✦─────────────────✦\n\n👤  {escape_md(clean_name(message.from_user.first_name))}\n"
-                f"🆔  `{user_id}`\n🌍  {escape_md(region)}\n\n✦───────────────✦\n𝗖𝗼𝗹𝗹𝗲𝗰𝘁𝗶𝗼𝗻\n🎒  {len(names)} 𝗣𝗼𝗸é𝗺𝗼𝗻\n"
-                f"⭐  {escape_md(rarest_caught)}  \\(𝗿𝗮𝗿𝗲𝘀𝘁 𝗰𝗮𝘂𝗴𝗵𝘁\\)\n\n✦───────────────✦\n𝗦𝗰𝗼𝘂𝘁𝘀\n🔋  {tries_left} / 2500 𝗿𝗲𝗺𝗮𝗶𝗻𝗶𝗻𝗴\n\n"
-                f"✦─────────────────✦\n𝗕𝗔𝗧𝗧𝗟𝗘 𝗥𝗘𝗖𝗢𝗥𝗗\n✦─────────────────✦\n\n🏆  𝗪𝗶𝗻𝘀          {wins}\n❌  𝗟𝗼𝘀𝘀        {losses}\n"
-                f"📊  𝗧𝗼𝘁𝗮𝗹 𝗕𝗮𝘁𝘁𝗹𝗲𝘀 {wins+losses}\n\n✦─────────────────✦\n© 𝗣𝗼𝗸é𝗧𝗿𝗮𝗶𝗻𝗲𝗿 {escape_md(clean_name(message.from_user.first_name))}")
+        u_name = escape_md(to_small_caps(clean_name(message.from_user.first_name)))
+        region_str = escape_md(to_small_caps(region))
+        rarest_str = escape_md(to_small_caps(rarest_caught))
+        
+        text = (
+            f"*✦━━━━━━━━━━━━━━━━✦*\n"
+            f"      *🪪 Tʀᴀɪɴᴇʀ Cᴀʀᴅ 🪪*\n"
+            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+            f"*👤 Nᴀᴍᴇ — {u_name}*\n"
+            f"*🆔 Uɪᴅ — `{user_id}`*\n"
+            f"*🌍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ — {region_str}*\n\n"
+            f"*✦━━━━━━━━━━━━━━━━✦*\n"
+            f"         *Aᴅᴠᴇɴᴛᴜʀᴇ Sᴛᴀᴛs*\n"
+            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+            f"*🎒 Cᴏʟʟᴇᴄᴛɪᴏɴ — {len(names)} Pᴏᴋᴇ́ᴍᴏɴ*\n"
+            f"*⭐ Rᴀʀᴇsᴛ — {rarest_str}*\n"
+            f"*🔋 Sᴄᴏᴜᴛs Lᴇғᴛ — {tries_left} / 2500*\n\n"
+            f"*✦━━━━━━━━━━━━━━━━✦*\n"
+            f"           *Bᴀᴛᴛʟᴇ Rᴇᴄᴏʀᴅ*\n"
+            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+            f"*🏆 Wɪɴs — {wins}*\n"
+            f"*❌ Lᴏssᴇs — {losses}*\n"
+            f"*📊 Tᴏᴛᴀʟ Bᴀᴛᴛʟᴇs — {total_battles}*\n"
+            f"*📈 Wɪɴ Rᴀᴛᴇ — {escape_md(str(win_rate))}%*\n\n"
+            f"*✦━━━━━━━━━━━━━━━━✦*"
+        )
         safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["travel"])
@@ -290,6 +316,7 @@ def register_user_handlers(bot, active_hunts):
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
         if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
+        
         text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
         safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
 
