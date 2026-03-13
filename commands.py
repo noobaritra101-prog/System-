@@ -284,3 +284,7 @@ def register_user_handlers(bot, active_hunts):
     def command_flex(message):
         db.add_user_if_new(message.from_user.id)
         send_leaderboard(bot, message.chat.id, message.from_user.id)
+        
+    @bot.message_handler(commands=["getid"])
+    def cmd_getid(message):
+        safe_send(bot, message.chat.id, escape_md(f"🆔 Chat ID: {message.chat.id}\n📁 Chat Type: {message.chat.type}"), reply_to_id=message.message_id)
