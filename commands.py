@@ -47,7 +47,6 @@ def safe_send(bot, chat_id, text, reply_to_id=None, reply_markup=None):
 def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
     valid_lower_map = {n.lower(): n for n in valid_list}
     
-    # 🔧 FIX: Increased cutoff to 0.65 so it only catches actual typos!
     matches = difflib.get_close_matches(wrong_name.lower(), valid_lower_map.keys(), n=4, cutoff=0.65)
     
     wrong_name_smallcaps = to_small_caps(wrong_name.title())
@@ -56,7 +55,6 @@ def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
         if action_prefix == "dym_dex":
             return f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*", None
         else:
-            # 🔧 FIX: Now directly tells you if you don't own it!
             return f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*", None
 
     if action_prefix == "dym_dex":
@@ -392,8 +390,19 @@ def register_user_handlers(bot, active_hunts):
             text, kb = generate_did_you_mean(poke_name_raw, user_pokemon, "dym_rel", message.from_user.id)
             return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
             
-        if db.delete_pokemon(message.from_user.id, poke_name): 
-            safe_send(bot, message.chat.id, escape_md(f"👋 You released {poke_name} back into the wild."))
+        # 🛡️ THE NEW CONFIRMATION SHIELD!
+        small_name = to_small_caps(poke_name)
+        text = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
+                f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
+                f"*{escape_md(small_name)}?*\n\n"
+                f"*Tʜɪs Aᴄᴛɪᴏɴ Cᴀɴɴᴏᴛ Bᴇ Uɴᴅᴏɴᴇ\\.*")
+        
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"relc_Y_{message.from_user.id}_{poke_name[:32]}"),
+            types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"relc_N_{message.from_user.id}_{poke_name[:32]}")
+        )
+        safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
 
     @bot.message_handler(commands=["pvp"])
     def command_pvp(message): pvp.handle_pvp_command(bot, message)
