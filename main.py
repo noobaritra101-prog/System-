@@ -62,6 +62,31 @@ def cb_handler(call):
                 except: pass
             return
 
+        # --- RELEASE CONFIRMATION ROUTING ---
+        elif call.data.startswith("relc_"):
+            parts = call.data.split("_", 3)
+            action, uid, name = parts[1], int(parts[2]), parts[3]
+            
+            if call.from_user.id != uid: 
+                return bot.answer_callback_query(call.id, "❌ Not your Pokémon!", show_alert=True)
+            
+            if action == "N":
+                bot.answer_callback_query(call.id, "Release Cancelled.")
+                try: bot.delete_message(call.message.chat.id, call.message.message_id)
+                except: pass
+                return
+                
+            if action == "Y":
+                bot.answer_callback_query(call.id, "Releasing...")
+                if db.delete_pokemon(uid, name):
+                    small_name = commands.to_small_caps(name.title())
+                    text = f"🌿 *{escape_md(small_name)} Wᴀs Rᴇʟᴇᴀsᴇᴅ Bᴀᴄᴋ Iɴᴛᴏ Tʜᴇ Wɪʟᴅ\\.*"
+                    try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+                    except: pass
+                else:
+                    try: bot.edit_message_text(escape_md(f"❌ You don't have a {name.title()}."), call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+                    except: pass
+
         # --- DID YOU MEAN ENGINE ROUTING ---
         elif call.data.startswith("dym_dex_"):
             parts = call.data.split("_", 3)
@@ -95,12 +120,23 @@ def cb_handler(call):
             parts = call.data.split("_", 3)
             uid, name = int(parts[2]), parts[3].title()
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
-            bot.answer_callback_query(call.id, f"Releasing {name}...")
-            try: bot.delete_message(call.message.chat.id, call.message.message_id)
-            except: pass
+            bot.answer_callback_query(call.id, "")
             
-            if db.delete_pokemon(uid, name): 
-                commands.safe_send(bot, call.message.chat.id, escape_md(f"👋 You released {name} back into the wild."))
+            # Send them to the confirmation menu instead of instantly deleting!
+            small_name = commands.to_small_caps(name)
+            text = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
+                    f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
+                    f"*{escape_md(small_name)}?*\n\n"
+                    f"*Tʜɪs Aᴄᴛɪᴏɴ Cᴀɴɴᴏᴛ Bᴇ Uɴᴅᴏɴᴇ\\.*")
+            
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.add(
+                types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"relc_Y_{uid}_{name[:32]}"),
+                types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"relc_N_{uid}_{name[:32]}")
+            )
+            
+            try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+            except: pass
         
         # --- DYNAMIC LEADERBOARD ROUTING ---
         elif call.data.startswith("flex_"):
