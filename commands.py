@@ -179,12 +179,12 @@ def process_catch(bot, call, uid, pid, name):
             try: tasks.check_and_update_catch(uid, poke_name_capped)
             except: pass
             
-            # 🟢 NEW AESTHETIC CATCH LOG!
+            # 🟢 UPDATED LOG: Now includes clickable profile links!
             if LOG_GROUP_ID:
                 try: 
                     c_name = clean_name(call.from_user.first_name)
                     p_name = to_small_caps(poke_name_capped)
-                    log_msg = f"🟢 【Cᴀᴛᴄʜ】 {escape_md(c_name)} ᴄᴀᴜɢʜᴛ ✨ Sʜɪɴʏ {escape_md(p_name)}"
+                    log_msg = f"🟢 【Cᴀᴛᴄʜ】 [{escape_md(c_name)}](tg://user?id={uid}) ᴄᴀᴜɢʜᴛ ✨ Sʜɪɴʏ {escape_md(p_name)}"
                     bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
                 except: pass
             
@@ -249,10 +249,12 @@ def register_user_handlers(bot, active_hunts):
     def cmd_start(message):
         is_new = db.add_user_if_new(message.from_user.id)
         
-        # 🌟 NEW AESTHETIC START LOG!
+        # 🌟 UPDATED LOG: Now includes clickable profile links!
         if is_new and LOG_GROUP_ID:
             try:
-                log_msg = f"🌟 【Sᴛᴀʀᴛ】 {escape_md(clean_name(message.from_user.first_name))} ᴇɴᴛᴇʀᴇᴅ ᴛʜᴇ ᴡᴏʀʟᴅ ᴏғ Sᴇxᴀ"
+                u_name = clean_name(message.from_user.first_name)
+                u_id = message.from_user.id
+                log_msg = f"🌟 【Sᴛᴀʀᴛ】 [{escape_md(u_name)}](tg://user?id={u_id}) ᴇɴᴛᴇʀᴇᴅ ᴛʜᴇ ᴡᴏʀʟᴅ ᴏғ Sᴇxᴀ"
                 bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
             except: pass
             
