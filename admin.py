@@ -20,6 +20,9 @@ from api_utils import escape_md, official_shiny_artwork_url, get_pokemon_id_sync
 # Track when the bot was booted for the /debug Uptime counter
 BOT_START_TIME = time.time()
 
+# 📝 Track the last broadcast so we can delete it later!
+LAST_BROADCAST_MSGS = []
+
 def play_loading_animation(bot, chat_id, message_id):
     frames = [
         "▰▰▱▱▱▱▱▱▱▱ 20%",
@@ -390,19 +393,59 @@ def register_admin_handlers(bot, active_hunts):
             safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
         except Exception as e: safe_send(bot, message.chat.id, escape_md(f"Error: {str(e)}"), reply_to_id=message.message_id)
 
+    # ================== BROADCAST & DELETE ==================
     @bot.message_handler(commands=["bcast", "gcast"])
     def cmd_broadcasts(message):
         if not is_owner(bot, message): return
         if not message.reply_to_message: return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to a message to forward it."), reply_to_id=message.message_id)
+        
+        global LAST_BROADCAST_MSGS
+        LAST_BROADCAST_MSGS.clear()  # Reset the memory for the new broadcast
+        
         targets = db.get_all_groups() if message.text.startswith("/gcast") else db.get_all_users()
         success, failed = 0, 0
+        
+        status_msg = safe_send(bot, message.chat.id, escape_md("⏳ Broadcasting message..."), reply_to_id=message.message_id)
+        
         for target_id in targets:
             try:
-                bot.forward_message(target_id, message.chat.id, message.reply_to_message.message_id)
-                success += 1; time.sleep(0.1)
-            except: failed += 1
-        safe_send(bot, message.chat.id, escape_md(f"📢 Broadcast complete! Success: {success}, Failed: {failed}"), reply_to_id=message.message_id)
+                sent_msg = bot.forward_message(target_id, message.chat.id, message.reply_to_message.message_id)
+                LAST_BROADCAST_MSGS.append((target_id, sent_msg.message_id))
+                success += 1
+                time.sleep(0.05)  # Safe speed
+            except: 
+                failed += 1
+                
+        text = f"📢 *Bʀᴏᴀᴅᴄᴀsᴛ Cᴏᴍᴘʟᴇᴛᴇ\\!*\n✅ Sᴜᴄᴄᴇss: {success}\n❌ Fᴀɪʟᴇᴅ: {failed}\n\n_Uѕᴇ /delcast ᴛᴏ ᴜɴᴅᴏ ᴀɴᴅ ᴅᴇʟᴇᴛᴇ ᴛʜɪѕ ᴍᴇѕѕᴀɢᴇ ᴇᴠᴇʀʏᴡʜᴇʀᴇ\\._"
+        try: bot.edit_message_text(text, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="MarkdownV2")
+        except: pass
 
+    @bot.message_handler(commands=["delcast"])
+    def cmd_delcast(message):
+        if not is_owner(bot, message): return
+        
+        global LAST_BROADCAST_MSGS
+        if not LAST_BROADCAST_MSGS:
+            return safe_send(bot, message.chat.id, escape_md("⚠️ No recent broadcast found in memory to delete."), reply_to_id=message.message_id)
+        
+        status_msg = safe_send(bot, message.chat.id, escape_md(f"🗑️ Deleting {len(LAST_BROADCAST_MSGS)} messages..."), reply_to_id=message.message_id)
+        
+        success, failed = 0, 0
+        for chat_id, msg_id in LAST_BROADCAST_MSGS:
+            try:
+                bot.delete_message(chat_id, msg_id)
+                success += 1
+                time.sleep(0.05)
+            except:
+                failed += 1
+        
+        LAST_BROADCAST_MSGS.clear()  # Clear memory after deletion
+        
+        text = f"✅ *Dᴇʟᴇᴛᴇ Cᴀsᴛ Cᴏᴍᴘʟᴇᴛᴇ\\!*\n🗑️ Dᴇʟᴇᴛᴇᴅ: {success}\n❌ Fᴀɪʟᴇᴅ: {failed}"
+        try: bot.edit_message_text(text, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="MarkdownV2")
+        except: pass
+
+    # ========================================================
     @bot.message_handler(commands=["gcs", "allusers", "leave", "debug", "clearhunts"])
     def cmd_misc_admin(message):
         if not is_owner(bot, message): return
