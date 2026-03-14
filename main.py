@@ -41,7 +41,6 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
-        # Route to admin module first. If it handled it, stop processing.
         if admin.handle_admin_callback(bot, call, active_hunts): return
             
         # Route logic
@@ -63,6 +62,46 @@ def cb_handler(call):
                 except: pass
             return
 
+        # --- DID YOU MEAN ENGINE ROUTING ---
+        elif call.data.startswith("dym_dex_"):
+            parts = call.data.split("_", 3)
+            uid, name = int(parts[2]), parts[3]
+            if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
+            bot.answer_callback_query(call.id, "Loading Pokédex...")
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            
+            text = commands.get_dex_text(name, "info")
+            poke_id = commands.get_pokemon_id_sync(name)
+            img_url = commands.official_shiny_artwork_url(poke_id)
+            kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"), types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}"))
+            try: bot.send_photo(call.message.chat.id, img_url, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
+            except: pass
+
+        elif call.data.startswith("dym_ins_"):
+            parts = call.data.split("_", 3)
+            uid, name = int(parts[2]), parts[3]
+            if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
+            bot.answer_callback_query(call.id, "Inspecting...")
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            
+            poke_id = commands.get_pokemon_id_sync(name)
+            if poke_id:
+                try: bot.send_photo(call.message.chat.id, commands.official_shiny_artwork_url(poke_id), caption=f"✨ *{escape_md(name.title())}* \\(Shiny\\)", parse_mode="MarkdownV2")
+                except: pass
+
+        elif call.data.startswith("dym_rel_"):
+            parts = call.data.split("_", 3)
+            uid, name = int(parts[2]), parts[3].title()
+            if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
+            bot.answer_callback_query(call.id, f"Releasing {name}...")
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            
+            if db.delete_pokemon(uid, name): 
+                commands.safe_send(bot, call.message.chat.id, escape_md(f"👋 You released {name} back into the wild."))
+        
         # --- DYNAMIC LEADERBOARD ROUTING ---
         elif call.data.startswith("flex_"):
             parts = call.data.split("_")
@@ -92,7 +131,6 @@ def cb_handler(call):
             parts = call.data.split("_", 2)
             pid, name = int(parts[1]), parts[2]
             
-            # Safely grab and remove the hunt. If it's already gone, stop!
             hunt_data = active_hunts.pop(call.message.message_id, None)
             if not hunt_data: return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
             
@@ -158,9 +196,6 @@ def cb_handler(call):
                         except: pass
 
     except KeyError:
-        # 🛡️ ULTIMATE ANTI-CRASH SHIELD
-        # If trade.py or pvp.py tries to pop a message_id that was already deleted 
-        # by a fast double-click, it raises a KeyError. We silently ignore it!
         pass
     except Exception as e: 
         logger.error(f"Callback error: {e}")
