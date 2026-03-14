@@ -46,21 +46,15 @@ def safe_send(bot, chat_id, text, reply_to_id=None, reply_markup=None):
 # ================== DID YOU MEAN ENGINE ==================
 def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
     valid_lower_map = {n.lower(): n for n in valid_list}
-    
     matches = difflib.get_close_matches(wrong_name.lower(), valid_lower_map.keys(), n=4, cutoff=0.65)
-    
     wrong_name_smallcaps = to_small_caps(wrong_name.title())
     
     if not matches:
-        if action_prefix == "dym_dex":
-            return f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*", None
-        else:
-            return f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*", None
+        if action_prefix == "dym_dex": return f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*", None
+        else: return f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*", None
 
-    if action_prefix == "dym_dex":
-        text = f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
-    else:
-        text = f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
+    if action_prefix == "dym_dex": text = f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
+    else: text = f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     btns = []
@@ -73,14 +67,12 @@ def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
     for i in range(0, len(btns), 2):
         if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
         else: kb.add(btns[i])
-        
     return text, kb
 
 # ================== NEW INVENTORY UI GENERATOR ==================
 def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
     names = db.list_user_pokemon_names(uid)
-    if not names:
-        return escape_md("🎒 No Pokémon found."), None
+    if not names: return escape_md("🎒 No Pokémon found."), None
 
     total_poke = len(names)
     page_size = 20
@@ -92,8 +84,7 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
     if is_admin: title = f"🎒 𝗣𝗢𝗞𝗘𝗠𝗢𝗡 \\(𝗨𝗜𝗗: `{uid}`\\)"
     else: title = "🎒 𝗬𝗢𝗨𝗥 𝗣𝗢𝗞𝗘𝗠𝗢𝗡"
     
-    text = f"{title}\n━━━━━━━━━━━━━━━━\n"
-    text += f"📃 Pᴀɢᴇ【{page_idx + 1} / {len(pages)}】\n\n"
+    text = f"{title}\n━━━━━━━━━━━━━━━━\n📃 Pᴀɢᴇ【{page_idx + 1} / {len(pages)}】\n\n"
 
     for i, name in enumerate(pages[page_idx]):
         item_num = (page_idx * page_size) + i + 1
@@ -104,7 +95,6 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
                 emojis = "/ ".join([TYPE_EMOJIS.get(t, '') for t in types_list if t]).strip()
                 if emojis: type_str = f"【{emojis}】"
         except: pass
-
         text += f"`{item_num:02d}.` {escape_md(name)}{escape_md(type_str)}\n"
 
     text += f"\n📦 Tᴏᴛᴀʟ Pᴏᴋᴇ́ᴍᴏɴ — {total_poke}\n━━━━━━━━━━━━━━━━"
@@ -122,7 +112,6 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
             types.InlineKeyboardButton("x5 ⏩", callback_data=f"{action_prefix}_{uid}_{p_next5}")
         )
     else: kb = None
-
     return text, kb
 
 # ================== GAME LOGIC ==================
@@ -190,8 +179,13 @@ def process_catch(bot, call, uid, pid, name):
             try: tasks.check_and_update_catch(uid, poke_name_capped)
             except: pass
             
+            # 🟢 NEW AESTHETIC CATCH LOG!
             if LOG_GROUP_ID:
-                try: bot.send_message(LOG_GROUP_ID, f"🟢 *Catch Log:* [{escape_md(clean_name(call.from_user.first_name))}](tg://user?id={uid}) caught a ✨ Shiny {escape_md(poke_name_capped)}\\!", parse_mode="MarkdownV2")
+                try: 
+                    c_name = clean_name(call.from_user.first_name)
+                    p_name = to_small_caps(poke_name_capped)
+                    log_msg = f"🟢 【Cᴀᴛᴄʜ】 {escape_md(c_name)} ᴄᴀᴜɢʜᴛ ✨ Sʜɪɴʏ {escape_md(p_name)}"
+                    bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
                 except: pass
             
             try: bot.edit_message_caption(caption=f"✨ *Gᴏᴛᴄʜᴀ\\!* Sʜɪɴʏ *{escape_md(to_small_caps(poke_name_capped))}* ᴡᴀs ᴄᴀᴜɢʜᴛ\\!\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\.", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
@@ -254,6 +248,14 @@ def register_user_handlers(bot, active_hunts):
     @bot.message_handler(commands=["start"])
     def cmd_start(message):
         is_new = db.add_user_if_new(message.from_user.id)
+        
+        # 🌟 NEW AESTHETIC START LOG!
+        if is_new and LOG_GROUP_ID:
+            try:
+                log_msg = f"🌟 【Sᴛᴀʀᴛ】 {escape_md(clean_name(message.from_user.first_name))} ᴇɴᴛᴇʀᴇᴅ ᴛʜᴇ ᴡᴏʀʟᴅ ᴏғ Sᴇxᴀ"
+                bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
+            except: pass
+            
         if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
         kb = types.InlineKeyboardMarkup(row_width=2)
         kb.row(types.InlineKeyboardButton("Oᴡɴᴇʀ ⚡", url="https://t.me/monarch_sama"), types.InlineKeyboardButton("Mᴀɪɴ Gʀᴏᴜᴘ ⚡", url="https://t.me/sexagamechat"))
@@ -390,7 +392,6 @@ def register_user_handlers(bot, active_hunts):
             text, kb = generate_did_you_mean(poke_name_raw, user_pokemon, "dym_rel", message.from_user.id)
             return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
             
-        # 🛡️ THE NEW CONFIRMATION SHIELD!
         small_name = to_small_caps(poke_name)
         text = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
                 f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
@@ -431,7 +432,6 @@ def register_user_handlers(bot, active_hunts):
                 m_pow = m.get('power', 0)
                 m_acc = m.get('acc', 100)
                 team_text += f"  \\- {escape_md(m['name'])} \\[{m_str}\\] \\(Pow: {m_pow}, Acc: {m_acc}\\)\n"
-                
             team_text += "\n"
             
         try:
