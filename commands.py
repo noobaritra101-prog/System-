@@ -2,6 +2,7 @@
 import time
 import threading
 import random
+import difflib
 from telebot import types
 
 import database as db
@@ -11,10 +12,10 @@ import trade
 from config import LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 from api_utils import (escape_md, fetch_random_pokemon_id_and_name_sync, official_shiny_artwork_url, 
                        get_species_catch_rate_sync, get_pokemon_stats_sync, get_pokemon_id_sync, 
-                       REGION_DEX, LEGENDARY_NAMES)
+                       REGION_DEX, LEGENDARY_NAMES, pokemon_name_to_id_cache)
 
 TYPE_EMOJIS = {
-    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
+    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌱', 
     'Ice': '🧊', 'Fighting': '🥊', 'Poison': '☣️', 'Ground': '⛰️', 'Flying': '🪽', 
     'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
     'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
@@ -42,6 +43,32 @@ def safe_send(bot, chat_id, text, reply_to_id=None, reply_markup=None):
             except: pass
         return None
 
+# ================== DID YOU MEAN ENGINE ==================
+def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
+    valid_lower_map = {n.lower(): n for n in valid_list}
+    matches = difflib.get_close_matches(wrong_name.lower(), valid_lower_map.keys(), n=4, cutoff=0.4)
+    
+    wrong_name_smallcaps = to_small_caps(wrong_name.title())
+    
+    if not matches:
+        return f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*", None
+
+    text = f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    btns = []
+    for match in matches:
+        actual_name = valid_lower_map[match]
+        display_name = to_small_caps(actual_name.title())
+        text += f"• {escape_md(display_name)}\n"
+        btns.append(types.InlineKeyboardButton(actual_name.title(), callback_data=f"{action_prefix}_{uid}_{actual_name[:20]}"))
+    
+    for i in range(0, len(btns), 2):
+        if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
+        else: kb.add(btns[i])
+        
+    return text, kb
+
 # ================== NEW INVENTORY UI GENERATOR ==================
 def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
     names = db.list_user_pokemon_names(uid)
@@ -55,42 +82,30 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
     if page_idx < 0: page_idx = 0
     if page_idx >= len(pages): page_idx = len(pages) - 1
 
-    # CRITICAL FIX: Escaping the MarkdownV2 parentheses for the Admin view!
-    if is_admin:
-        title = f"🎒 𝗣𝗢𝗞𝗘𝗠𝗢𝗡 \\(𝗨𝗜𝗗: `{uid}`\\)"
-    else:
-        title = "🎒 𝗬𝗢𝗨𝗥 𝗣𝗢𝗞𝗘𝗠𝗢𝗡"
+    if is_admin: title = f"🎒 𝗣𝗢𝗞𝗘𝗠𝗢𝗡 \\(𝗨𝗜𝗗: `{uid}`\\)"
+    else: title = "🎒 𝗬𝗢𝗨𝗥 𝗣𝗢𝗞𝗘𝗠𝗢𝗡"
     
     text = f"{title}\n━━━━━━━━━━━━━━━━\n"
     text += f"📃 Pᴀɢᴇ【{page_idx + 1} / {len(pages)}】\n\n"
 
     for i, name in enumerate(pages[page_idx]):
         item_num = (page_idx * page_size) + i + 1
-        
         type_str = ""
         try:
-            # Fetch Types dynamically for the beautiful UI
             types_list, _ = get_pokemon_stats_sync(name.lower())
             if types_list:
                 emojis = "/ ".join([TYPE_EMOJIS.get(t, '') for t in types_list if t]).strip()
-                if emojis:
-                    type_str = f"【{emojis}】"
-        except:
-            pass
+                if emojis: type_str = f"【{emojis}】"
+        except: pass
 
-        # Formatting as: 01. Skorupi【☣️/ 🐛】
         text += f"`{item_num:02d}.` {escape_md(name)}{escape_md(type_str)}\n"
 
-    # Add the requested Total Pokemon footer
     text += f"\n📦 Tᴏᴛᴀʟ Pᴏᴋᴇ́ᴍᴏɴ — {total_poke}\n━━━━━━━━━━━━━━━━"
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     if len(pages) > 1:
-        p_prev1 = max(0, page_idx - 1)
-        p_next1 = min(len(pages) - 1, page_idx + 1)
-        p_prev5 = max(0, page_idx - 5)
-        p_next5 = min(len(pages) - 1, page_idx + 5)
-        
+        p_prev1, p_next1 = max(0, page_idx - 1), min(len(pages) - 1, page_idx + 1)
+        p_prev5, p_next5 = max(0, page_idx - 5), min(len(pages) - 1, page_idx + 5)
         kb.row(
             types.InlineKeyboardButton("x1 ⏪", callback_data=f"{action_prefix}_{uid}_{p_prev1}"),
             types.InlineKeyboardButton("x1 ⏩", callback_data=f"{action_prefix}_{uid}_{p_next1}")
@@ -99,8 +114,7 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
             types.InlineKeyboardButton("x5 ⏪", callback_data=f"{action_prefix}_{uid}_{p_prev5}"),
             types.InlineKeyboardButton("x5 ⏩", callback_data=f"{action_prefix}_{uid}_{p_next5}")
         )
-    else:
-        kb = None
+    else: kb = None
 
     return text, kb
 
@@ -197,7 +211,6 @@ def get_dex_text(name, page="info"):
         stats_str = "\n".join([f"🔸 *{escape_md(k)}:* {v}" for k, v in stats.items()])
         return (f"📊 *Base Stats: {escape_md(name.capitalize())}*\n━━━━━━━━━━━━━━\n{stats_str}\n━━━━━━━━━━━━━━\n📈 *Total:* {sum(stats.values())}")
 
-# ================== NEW DYNAMIC LEADERBOARD ==================
 def send_leaderboard(bot, chat_id, user_id, message_id=None, mode="catch"):
     if mode == "catch":
         top_players = db.get_top_trainers(5)
@@ -214,19 +227,13 @@ def send_leaderboard(bot, chat_id, user_id, message_id=None, mode="catch"):
     for i, (uid, count) in enumerate(top_players):
         try: name = clean_name(bot.get_chat(uid).first_name)
         except: name = "Trainer"
-        
-        # 🔧 FIX: Removed the [Name](tg://user?id=uid) hidden link!
-        # Now it just prints their name in bold text, stopping all pings.
         text += f"{i+1}\\. *{escape_md(name)}* — {count} {score_label}\n"
     
     text += f"\nYᴏᴜʀ Rᴀɴᴋ — *{user_rank}*"
     
     kb = types.InlineKeyboardMarkup(row_width=2)
-    if mode == "catch":
-        kb.add(types.InlineKeyboardButton("⚔️ Tᴏᴘ PᴠP Wɪɴɴᴇʀs", callback_data=f"flex_pvp_{user_id}"))
-    else:
-        kb.add(types.InlineKeyboardButton("🏆 Tᴏᴘ Cᴀᴛᴄʜᴇʀs", callback_data=f"flex_catch_{user_id}"))
-        
+    if mode == "catch": kb.add(types.InlineKeyboardButton("⚔️ Tᴏᴘ PᴠP Wɪɴɴᴇʀs", callback_data=f"flex_pvp_{user_id}"))
+    else: kb.add(types.InlineKeyboardButton("🏆 Tᴏᴘ Cᴀᴛᴄʜᴇʀs", callback_data=f"flex_catch_{user_id}"))
     kb.add(types.InlineKeyboardButton("REFRESH 🌀", callback_data=f"flex_{mode}_{user_id}"))
     
     if message_id:
@@ -279,7 +286,6 @@ def register_user_handlers(bot, active_hunts):
         rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
         wins, losses = db.get_battle_stats(user_id)
         
-        # Win Rate Math Calculation
         total_battles = wins + losses
         win_rate = round((wins / total_battles * 100), 1) if total_battles > 0 else 0.0
             
@@ -326,9 +332,14 @@ def register_user_handlers(bot, active_hunts):
     def cmd_pokedex(message):
         parts = message.text.split(maxsplit=1)
         if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /pokedex <pokemon_name>"), reply_to_id=message.message_id)
-        name = parts[1].strip().lower()
+        name_raw = parts[1].strip()
+        name = name_raw.lower()
+        
         poke_id = get_pokemon_id_sync(name)
-        if not poke_id: return safe_send(bot, message.chat.id, f"❌ Could not find data for *{escape_md(parts[1])}*\\.", reply_to_id=message.message_id)
+        if not poke_id: 
+            text, kb = generate_did_you_mean(name_raw, pokemon_name_to_id_cache.keys(), "dym_dex", message.from_user.id)
+            return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            
         text = get_dex_text(name, "info")
         img_url = official_shiny_artwork_url(poke_id)
         kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"), types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}"))
@@ -338,7 +349,6 @@ def register_user_handlers(bot, active_hunts):
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
         if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
-        
         text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
         safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
 
@@ -346,9 +356,15 @@ def register_user_handlers(bot, active_hunts):
     def cmd_inspect(message):
         if not db.get_user(message.from_user.id): return
         parts = message.text.split(maxsplit=1)
-        if len(parts) < 2: return
-        name = parts[1].strip().lower()
-        if name not in [n.lower() for n in db.list_user_pokemon_names(message.from_user.id)]: return safe_send(bot, message.chat.id, escape_md("❌ You don't own this Pokémon."))
+        if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /inspect <pokemon_name>"), reply_to_id=message.message_id)
+        name_raw = parts[1].strip()
+        name = name_raw.lower()
+        
+        user_pokemon = db.list_user_pokemon_names(message.from_user.id)
+        if name not in [n.lower() for n in user_pokemon]: 
+            text, kb = generate_did_you_mean(name_raw, user_pokemon, "dym_ins", message.from_user.id)
+            return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            
         poke_id = get_pokemon_id_sync(name)
         if poke_id:
             try: bot.send_photo(message.chat.id, official_shiny_artwork_url(poke_id), caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
@@ -358,10 +374,17 @@ def register_user_handlers(bot, active_hunts):
     def cmd_release(message):
         if not db.get_user(message.from_user.id): return
         parts = message.text.split(maxsplit=1)
-        if len(parts) < 2: return
-        poke_name = parts[1].strip().title()
-        if db.delete_pokemon(message.from_user.id, poke_name): safe_send(bot, message.chat.id, escape_md(f"👋 You released {poke_name} back into the wild."))
-        else: safe_send(bot, message.chat.id, escape_md(f"❌ You don't have a {poke_name}."))
+        if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /release <pokemon_name>"), reply_to_id=message.message_id)
+        poke_name_raw = parts[1].strip()
+        poke_name = poke_name_raw.title()
+        
+        user_pokemon = db.list_user_pokemon_names(message.from_user.id)
+        if poke_name.lower() not in [n.lower() for n in user_pokemon]:
+            text, kb = generate_did_you_mean(poke_name_raw, user_pokemon, "dym_rel", message.from_user.id)
+            return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            
+        if db.delete_pokemon(message.from_user.id, poke_name): 
+            safe_send(bot, message.chat.id, escape_md(f"👋 You released {poke_name} back into the wild."))
 
     @bot.message_handler(commands=["pvp"])
     def command_pvp(message): pvp.handle_pvp_command(bot, message)
