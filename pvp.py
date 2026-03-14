@@ -132,6 +132,10 @@ def safe_answer(bot, call_id, text="", show_alert=False):
     try: bot.answer_callback_query(call_id, text, show_alert=show_alert)
     except Exception: pass
 
+def clean_name(name):
+    if not name: return "Trainer"
+    return name.replace('\n', ' ').replace('\r', '').replace('*', '').replace('_', '').strip()
+
 def to_small_caps(text):
     """Converts regular lowercase letters into premium small-caps font."""
     small_caps_map = {
@@ -395,7 +399,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
             
         btns = [types.InlineKeyboardButton(f"{i+1}" if p['hp'] > 0 else f"✖️ {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
         
-        # Format as a clean 2-column grid
         for i in range(0, len(btns), 2):
             if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
             else: kb.add(btns[i])
@@ -414,10 +417,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
     except Exception as e: 
         err_msg = str(e).lower()
         if "message is not modified" in err_msg: pass 
-        elif "429" in err_msg or "too many requests" in err_msg:
-            time.sleep(1.5)
-            try: bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
-            except: pass
         else: logger.error(f"UI Update error: {e}")
 
 # --- COMMAND HANDLER ---
@@ -440,7 +439,7 @@ def handle_pvp_command(bot, message):
         return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
         
     if not db.get_user(p2_id):
-        target_name = escape_md(target.from_user.first_name)
+        target_name = escape_md(clean_name(target.from_user.first_name))
         err_msg = f"*🛰️ [{target_name}](tg://user?id={p2_id}) hasn't registered yet\\!*\n*They need to /start the bot to play❗❗*"
         
         kb = types.InlineKeyboardMarkup()
@@ -470,7 +469,7 @@ def handle_pvp_command(bot, message):
     timer = threading.Timer(60.0, challenge_timeout, args=(bot, message.chat.id, sent.message_id))
     timer.start()
     
-    chal = {"name": message.from_user.first_name, "p2_name": target.from_user.first_name,
+    chal = {"name": clean_name(message.from_user.first_name), "p2_name": clean_name(target.from_user.first_name),
             "timer": timer, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id, 
             "mode": mode, "size": size, "can_switch": can_switch}
     
@@ -526,8 +525,11 @@ def handle_pvp_callback(bot, call):
             chal_data["timer"].cancel()
             safe_answer(bot, call.id, "Preparing the arena...")
 
+            # 🟢 NEW AESTHETIC BATTLE START LOG!
             if LOG_GROUP_ID:
-                try: bot.send_message(LOG_GROUP_ID, f"⚔️ *Battle Started:* [{escape_md(chal_data['name'])}](tg://user?id={chal_data['p1_id']}) 🆚 [{escape_md(chal_data['p2_name'])}](tg://user?id={chal_data['p2_id']})", parse_mode="MarkdownV2")
+                try: 
+                    log_msg = f"⚔️ 【PᴠP】 {escape_md(chal_data['name'])} 🆚 {escape_md(chal_data['p2_name'])}"
+                    bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
                 except: pass
             
             def setup():
@@ -571,7 +573,6 @@ def handle_pvp_callback(bot, call):
                                 for m in p["moves"]:
                                     if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
                         
-                        # 🌟 FULL MEGA ROSTER INITIALIZATION 🌟
                         custom_megas = [
                             "Pyroar", "Malamar", "Dragalge", "Eelektross", "Froslass", 
                             "Clefable", "Chimecho", "Staraptor", "Heatran", "Darkrai", 
@@ -600,7 +601,6 @@ def handle_pvp_callback(bot, call):
             threading.Thread(target=setup).start()
             return
 
-        # IN-BATTLE ACTIONS
         elif action in ["move", "dosw", "mega", "swmenu", "confirmrun", "run", "back", "viewteam"]:
             battle_id = int(parts[2])
             b = pvp_battles.get(battle_id)
@@ -625,10 +625,12 @@ def handle_pvp_callback(bot, call):
                 else:
                     return safe_answer(bot, call.id, "⏳ Processing previous move...")
 
+            # 🛡️ THE 1.5-SECOND COOLDOWN SHIELD!
+            # Prevents Telegram 429 Too Many Requests errors.
             if action != "viewteam":
                 now = time.time()
-                if now - b.get("last_edit", 0) < 0.5:
-                    return safe_answer(bot, call.id, "⏳ Please don't click so fast!")
+                if now - b.get("last_edit", 0) < 1.5:
+                    return safe_answer(bot, call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=True)
                 b["last_edit"] = now
                 safe_answer(bot, call.id, "")
 
@@ -699,17 +701,19 @@ def handle_pvp_callback(bot, call):
                         dmg = max(1, atk["max_hp"] // 8); atk["hp"] = max(0, atk["hp"] - dmg)
                         b["log"] += f"☠️ {atk['name']} is hurt by poison!\n"
 
-                # 🛑 FAINT & WIN/LOSS LOGIC 🛑
                 if dfn["hp"] <= 0:
                     dfn["hp"] = 0; dfn["status"] = None
                     b["log"] += f"{dfn['name']} fainted!\n"
                     
                     if all(p["hp"] <= 0 for p in b[defender + "_team"]):
-                        win_mention = f"[{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']})"
+                        winner_name = b[actual_turn+'_name']
+                        loser_name = b[defender+'_name']
+                        win_mention = f"[{escape_md(winner_name)}](tg://user?id={b[actual_turn+'_id']})"
                         bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         
+                        # 🟢 NEW AESTHETIC RESULT LOG!
                         if LOG_GROUP_ID:
-                            try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
+                            try: bot.send_message(LOG_GROUP_ID, f"🏆 【Rᴇsᴜʟᴛ】 {escape_md(winner_name)} ᴅᴇғᴇᴀᴛᴇᴅ {escape_md(loser_name)}", parse_mode="MarkdownV2")
                             except: pass
                         
                         try: db.update_task_pvp(b[actual_turn + "_id"])
@@ -730,11 +734,14 @@ def handle_pvp_callback(bot, call):
                     b["log"] += f"{atk['name']} fainted from status effect!\n"
                     
                     if all(p["hp"] <= 0 for p in b[actual_turn + "_team"]):
-                        win_mention = f"[{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']})"
+                        winner_name = b[defender+'_name']
+                        loser_name = b[actual_turn+'_name']
+                        win_mention = f"[{escape_md(winner_name)}](tg://user?id={b[defender+'_id']})"
                         bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         
+                        # 🟢 NEW AESTHETIC RESULT LOG!
                         if LOG_GROUP_ID:
-                            try: bot.send_message(LOG_GROUP_ID, f"🏆 *Battle Ended:* [{escape_md(b[defender+'_name'])}](tg://user?id={b[defender+'_id']}) won a PvP match\\!", parse_mode="MarkdownV2")
+                            try: bot.send_message(LOG_GROUP_ID, f"🏆 【Rᴇsᴜʟᴛ】 {escape_md(winner_name)} ᴅᴇғᴇᴀᴛᴇᴅ {escape_md(loser_name)}", parse_mode="MarkdownV2")
                             except: pass
                         
                         try: db.update_task_pvp(b[defender + "_id"])
@@ -787,19 +794,13 @@ def handle_pvp_callback(bot, call):
                 old_name = p['name']
                 
                 if old_name in ["Charizard", "Mewtwo", "Raichu"] and len(parts) == 4:
-                    b["state"] = "mega_xy_choice"
-                    render_pvp_ui(bot, call.message.chat.id, battle_id)
-                    return
+                    b["state"] = "mega_xy_choice"; render_pvp_ui(bot, call.message.chat.id, battle_id); return
                 
                 if old_name == "Lucario" and len(parts) == 4:
-                    b["state"] = "mega_lucario_choice"
-                    render_pvp_ui(bot, call.message.chat.id, battle_id)
-                    return
+                    b["state"] = "mega_lucario_choice"; render_pvp_ui(bot, call.message.chat.id, battle_id); return
 
                 if old_name == "Greninja" and len(parts) == 4:
-                    b["state"] = "mega_greninja_choice"
-                    render_pvp_ui(bot, call.message.chat.id, battle_id)
-                    return
+                    b["state"] = "mega_greninja_choice"; render_pvp_ui(bot, call.message.chat.id, battle_id); return
                     
                 xy_choice = parts[4] if len(parts) == 5 and old_name in ["Charizard", "Mewtwo", "Raichu"] else ""
                 z_choice = parts[4] if len(parts) == 5 and old_name == "Lucario" else ""
@@ -855,7 +856,6 @@ def handle_pvp_callback(bot, call):
                 p["spd"] = int((2 * new_base_spd) + 31 + 21 + 5)
                 
                 p = apply_nature(p, p["nature"])
-
                 p["is_mega"] = True
                 p["name"] = new_name
                 if new_name in FORM_TYPE_CHANGES: p["types"] = FORM_TYPE_CHANGES[new_name]
@@ -869,12 +869,9 @@ def handle_pvp_callback(bot, call):
                         poke_id = get_pokemon_id_sync(search_name)
                         if poke_id:
                             img_url = official_shiny_artwork_url(poke_id)
-                            
                             cap_text = f"{icon} {to_small_caps(old_name)}... {to_small_caps(action_verb)} ɪɴᴛᴏ {to_small_caps(new_name)}!"
                             caption = f"*{escape_md(cap_text)}*"
-                            
-                            try: 
-                                bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2", reply_to_message_id=battle_id)
+                            try: bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2", reply_to_message_id=battle_id)
                             except Exception as e:
                                 if "429" in str(e) or "Too Many Requests" in str(e):
                                     time.sleep(3)
@@ -898,6 +895,7 @@ def handle_pvp_callback(bot, call):
                 win_mention = f"[{escape_md(winner_name)}](tg://user?id={winner_id})"
                 
                 bot.edit_message_text(f"🏃 *{runner_mention} ғʟᴇᴅ\\!*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                
                 if LOG_GROUP_ID:
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
                     except: pass
