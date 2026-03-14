@@ -15,7 +15,7 @@ from api_utils import (escape_md, fetch_random_pokemon_id_and_name_sync, officia
                        REGION_DEX, LEGENDARY_NAMES, pokemon_name_to_id_cache)
 
 TYPE_EMOJIS = {
-    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌱', 
+    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
     'Ice': '🧊', 'Fighting': '🥊', 'Poison': '☣️', 'Ground': '⛰️', 'Flying': '🪽', 
     'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
     'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
@@ -46,14 +46,23 @@ def safe_send(bot, chat_id, text, reply_to_id=None, reply_markup=None):
 # ================== DID YOU MEAN ENGINE ==================
 def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
     valid_lower_map = {n.lower(): n for n in valid_list}
-    matches = difflib.get_close_matches(wrong_name.lower(), valid_lower_map.keys(), n=4, cutoff=0.4)
+    
+    # 🔧 FIX: Increased cutoff to 0.65 so it only catches actual typos!
+    matches = difflib.get_close_matches(wrong_name.lower(), valid_lower_map.keys(), n=4, cutoff=0.65)
     
     wrong_name_smallcaps = to_small_caps(wrong_name.title())
     
     if not matches:
-        return f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*", None
+        if action_prefix == "dym_dex":
+            return f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*", None
+        else:
+            # 🔧 FIX: Now directly tells you if you don't own it!
+            return f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*", None
 
-    text = f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
+    if action_prefix == "dym_dex":
+        text = f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
+    else:
+        text = f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     btns = []
