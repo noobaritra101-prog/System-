@@ -45,16 +45,65 @@ def is_owner(bot, obj):
         return False
     return True
 
+# ================== NEW GROUP INFO UI ==================
+def generate_gcs_ui(bot, page_idx):
+    groups = db.get_all_groups()
+    if not groups:
+        return escape_md("🏢 The bot is not currently in any tracked groups."), None
+        
+    if page_idx < 0: page_idx = len(groups) - 1
+    if page_idx >= len(groups): page_idx = 0
+    
+    chat_id = groups[page_idx]
+    
+    try:
+        chat = bot.get_chat(chat_id)
+        name = chat.title or "Unknown Group"
+        count = bot.get_chat_member_count(chat_id)
+        
+        bot_member = bot.get_chat_member(chat_id, bot.get_me().id)
+        perm = "Admin" if bot_member.status == "administrator" else "Member"
+        
+        link = chat.invite_link
+        if not link and perm == "Admin":
+            try: link = bot.export_chat_invite_link(chat_id)
+            except: link = "Unavailable"
+        link_str = link if link else "Unavailable"
+        
+    except Exception:
+        name = "Dead / Inaccessible Group"
+        count = "N/A"
+        perm = "N/A"
+        link_str = "N/A"
+        
+    text = (
+        f"🏢 *Gʀᴏᴜᴘ Iɴғᴏ* \\({page_idx + 1}/{len(groups)}\\)\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"📛 *Gʀᴏᴜᴘ Nᴀᴍᴇ*\n{escape_md(name)}\n"
+        f"👥 *Mᴇᴍʙᴇʀ Cᴏᴜɴᴛ*\n{escape_md(str(count))}\n"
+        f"🆔 *Cʜᴀᴛ ID*\n`{chat_id}`\n"
+        f"🔗 *Iɴᴠɪᴛᴇ Lɪɴᴋ*\n{escape_md(link_str)}\n"
+        f"⚡ *Bᴏᴛ Pᴇʀᴍɪssɪᴏɴ*\n{escape_md(perm)}\n"
+        f"🎮 *Bᴀᴛᴛʟᴇs Sᴛᴀʀᴛᴇᴅ*\nN/A \\(Nᴏᴛ Tʀᴀᴄᴋᴇᴅ ʏᴇᴛ\\)\n"
+        f"━━━━━━━━━━━━━━"
+    )
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("⏪ Pʀᴇᴠ", callback_data=f"gcs_page_{page_idx - 1}"),
+        types.InlineKeyboardButton("Nᴇxᴛ ⏩", callback_data=f"gcs_page_{page_idx + 1}")
+    )
+    kb.row(types.InlineKeyboardButton("🔄 Sʏɴᴄ Dᴀᴛᴀ", callback_data="gcs_sync"))
+    
+    return text, kb
+
 # ================== NEW DEBUG ENGINE ==================
 def generate_debug_ui(active_hunts):
     start_q = time.time()
     u_c, p_c, g_c, pvp_total, regions_active, db_size_mb = db.get_debug_stats()
     query_time = time.time() - start_q
     
-    # Calculate Latency pseudo-ping
     avg_response = round(max(0.11, query_time + 0.15), 2)
-
-    # Calculate Uptime
     uptime_seconds = int(time.time() - BOT_START_TIME)
     days = uptime_seconds // 86400
     hours = (uptime_seconds % 86400) // 3600
@@ -64,7 +113,6 @@ def generate_debug_ui(active_hunts):
     elif hours > 0: uptime_str = f"{hours}ʜ {mins}ᴍ"
     else: uptime_str = f"{mins}ᴍ"
 
-    # Escape dots for MarkdownV2
     db_mb_escaped = str(db_size_mb).replace('.', '\\.')
     resp_escaped = str(avg_response).replace('.', '\\.')
 
@@ -116,12 +164,14 @@ def handle_admin_callback(bot, call, active_hunts=None):
         bot.answer_callback_query(call.id, "Refreshing logs...")
         send_logs(bot, call.message.chat.id, call.message.message_id)
         return True
+        
     elif call.data == "log_delete":
         if not is_owner(bot, call): return True
         open("bot.log", "w").close()
         bot.answer_callback_query(call.id, "Logs Deleted!", show_alert=True)
         send_logs(bot, call.message.chat.id, call.message.message_id)
         return True
+        
     elif call.data == "debug_refresh":
         if not is_owner(bot, call): return True
         bot.answer_callback_query(call.id, "Refreshing Server Stats...")
@@ -130,12 +180,46 @@ def handle_admin_callback(bot, call, active_hunts=None):
             try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
             except: pass
         return True
+        
     elif call.data == "debug_delete":
         if not is_owner(bot, call): return True
         bot.answer_callback_query(call.id, "Menu Closed.")
         try: bot.delete_message(call.message.chat.id, call.message.message_id)
         except: pass
         return True
+        
+    # --- NEW GCS ROUTING ---
+    elif call.data.startswith("gcs_page_"):
+        if not is_owner(bot, call): return True
+        page_idx = int(call.data.split("_")[2])
+        text, kb = generate_gcs_ui(bot, page_idx)
+        try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+        except: pass
+        return True
+        
+    elif call.data == "gcs_sync":
+        if not is_owner(bot, call): return True
+        bot.answer_callback_query(call.id, "🔄 Syncing groups... Please wait.")
+        try: bot.edit_message_text(escape_md("⏳ Syncing database with Telegram servers..."), call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+        except: pass
+        
+        groups = db.get_all_groups()
+        removed = 0
+        for gid in groups:
+            try:
+                bot.get_chat(gid)
+            except Exception: 
+                db.remove_group(gid) # Kicked or Chat deleted
+                removed += 1
+                
+        text, kb = generate_gcs_ui(bot, 0)
+        if text: text = f"✅ *Sʏɴᴄ Cᴏᴍᴘʟᴇᴛᴇ\\!* {removed} ᴅᴇᴀᴅ ɢʀᴏᴜᴘs ʀᴇᴍᴏᴠᴇᴅ\\.\n\n" + text
+        else: text = escape_md(f"✅ Sync Complete! {removed} dead groups removed. No active groups left.")
+            
+        try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+        except: pass
+        return True
+        
     elif call.data.startswith("getfile_"):
         if not is_owner(bot, call): return True
         table_name = call.data.split("_", 1)[1]
@@ -148,6 +232,7 @@ def handle_admin_callback(bot, call, active_hunts=None):
         else:
             bot.send_message(call.message.chat.id, escape_md("❌ Extraction Failed."))
         return True
+        
     return False
 
 EXECUTE_MODULES = {
@@ -400,7 +485,7 @@ def register_admin_handlers(bot, active_hunts):
         if not message.reply_to_message: return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to a message to forward it."), reply_to_id=message.message_id)
         
         global LAST_BROADCAST_MSGS
-        LAST_BROADCAST_MSGS.clear()  # Reset the memory for the new broadcast
+        LAST_BROADCAST_MSGS.clear() 
         
         targets = db.get_all_groups() if message.text.startswith("/gcast") else db.get_all_users()
         success, failed = 0, 0
@@ -412,7 +497,7 @@ def register_admin_handlers(bot, active_hunts):
                 sent_msg = bot.forward_message(target_id, message.chat.id, message.reply_to_message.message_id)
                 LAST_BROADCAST_MSGS.append((target_id, sent_msg.message_id))
                 success += 1
-                time.sleep(0.05)  # Safe speed
+                time.sleep(0.05) 
             except: 
                 failed += 1
                 
@@ -439,7 +524,7 @@ def register_admin_handlers(bot, active_hunts):
             except:
                 failed += 1
         
-        LAST_BROADCAST_MSGS.clear()  # Clear memory after deletion
+        LAST_BROADCAST_MSGS.clear() 
         
         text = f"✅ *Dᴇʟᴇᴛᴇ Cᴀsᴛ Cᴏᴍᴘʟᴇᴛᴇ\\!*\n🗑️ Dᴇʟᴇᴛᴇᴅ: {success}\n❌ Fᴀɪʟᴇᴅ: {failed}"
         try: bot.edit_message_text(text, chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="MarkdownV2")
@@ -451,8 +536,8 @@ def register_admin_handlers(bot, active_hunts):
         if not is_owner(bot, message): return
         cmd = message.text.split()[0].lower()
         if cmd == "/gcs":
-            groups = db.get_all_groups()
-            safe_send(bot, message.chat.id, f"🏢 *Groups \\({len(groups)}\\):*\n\n" + "\n".join(f"\\- `{gid}`" for gid in groups) if groups else escape_md("The bot is not in any groups."), reply_to_id=message.message_id)
+            text, kb = generate_gcs_ui(bot, 0)
+            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
         elif cmd == "/allusers":
             users = db.get_all_users()
             text = f"👥 *Users \\({len(users)}\\):*\n\n" + "\n".join(f"\\- `{uid}`" for uid in users[:50]) + (f"\n\n_\\.\\.\\.and {len(users)-50} more\\._" if len(users)>50 else "")
