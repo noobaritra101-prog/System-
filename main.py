@@ -41,6 +41,7 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
+        # Route to admin module first. If it handled it, stop processing.
         if admin.handle_admin_callback(bot, call, active_hunts): return
             
         # Route logic
@@ -90,16 +91,22 @@ def cb_handler(call):
         elif call.data.startswith("gcatch_"):
             parts = call.data.split("_", 2)
             pid, name = int(parts[1]), parts[2]
-            if call.message.message_id not in active_hunts: return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
+            
+            # Safely grab and remove the hunt. If it's already gone, stop!
+            hunt_data = active_hunts.pop(call.message.message_id, None)
+            if not hunt_data: return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
+            
             try: bot.answer_callback_query(call.id, "")
             except: pass
-            hunt_data = active_hunts.pop(call.message.message_id, None)
-            if hunt_data and "timer" in hunt_data: hunt_data["timer"].cancel()
+            
+            if "timer" in hunt_data: hunt_data["timer"].cancel()
+            
             catcher_id = call.from_user.id
             db.add_user_if_new(catcher_id)
             db.add_caught_pokemon(catcher_id, name.title(), "Event")
             try: tasks.check_and_update_catch(catcher_id, name.title())
             except: pass
+            
             try: bot.edit_message_caption(caption=f"🎉 *{escape_md(commands.clean_name(call.from_user.first_name))}* was the fastest and caught the ✨ *{escape_md(name.title())}*\\!", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             except: pass
 
@@ -107,19 +114,28 @@ def cb_handler(call):
             parts = call.data.split("_", 3)
             uid, pid, name = int(parts[1]), int(parts[2]), parts[3]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Hands off! This scout is not yours.")
-            if call.message.message_id not in active_hunts: return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
+            
+            hunt_data = active_hunts.pop(call.message.message_id, None)
+            if not hunt_data: return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
+            
             try: bot.answer_callback_query(call.id, "")
             except: pass
-            active_hunts.pop(call.message.message_id)["timer"].cancel()
+            
+            if "timer" in hunt_data: hunt_data["timer"].cancel()
             threading.Thread(target=commands.process_catch, args=(bot, call, uid, pid, name)).start()
 
         elif call.data.startswith("run_"):
-            uid, name = int(call.data.split("_")[1]), call.data.split("_")[2]
+            parts = call.data.split("_", 2)
+            uid, name = int(parts[1]), parts[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "This scout is not yours.")
-            if call.message.message_id not in active_hunts: return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
+            
+            hunt_data = active_hunts.pop(call.message.message_id, None)
+            if not hunt_data: return bot.answer_callback_query(call.id, "💨 The Pokémon already fled!", show_alert=True)
+            
             try: bot.answer_callback_query(call.id, "")
             except: pass
-            active_hunts.pop(call.message.message_id)["timer"].cancel()
+            
+            if "timer" in hunt_data: hunt_data["timer"].cancel()
             try: bot.edit_message_caption(caption=f"💨 Tʜᴇ Wɪʟᴅ ✨ {escape_md(commands.to_small_caps(name.title()))} Fʟᴇᴅ\\!", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="MarkdownV2")
             except: pass
 
@@ -141,7 +157,13 @@ def cb_handler(call):
                         try: bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
                         except: pass
 
-    except Exception as e: logger.error(f"Callback error: {e}")
+    except KeyError:
+        # 🛡️ ULTIMATE ANTI-CRASH SHIELD
+        # If trade.py or pvp.py tries to pop a message_id that was already deleted 
+        # by a fast double-click, it raises a KeyError. We silently ignore it!
+        pass
+    except Exception as e: 
+        logger.error(f"Callback error: {e}")
 
 # ================== RUN ==================
 if __name__ == "__main__":
