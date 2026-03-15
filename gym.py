@@ -459,5 +459,36 @@ def handle_gym_callback(bot, call):
     
     now = time.time()
     if now - b.get("last_edit", 0) < 1.5:
-        return safe_send(bot, call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=True)
-    b["last_
+        return bot.answer_callback_query(call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=True)
+    
+    b["last_edit"] = now
+    bot.answer_callback_query(call.id, "")
+
+    if action == "move":
+        move_idx = int(parts[3])
+        resolve_turn(bot, call.message.chat.id, battle_id, "move", move_idx)
+        
+    elif action == "swmenu":
+        b["state"] = "switch_menu"
+        render_gym_ui(bot, call.message.chat.id, battle_id)
+        
+    elif action == "dosw":
+        poke_idx = int(parts[3])
+        if b["player_team"][poke_idx]["hp"] <= 0: return bot.answer_callback_query(call.id, "Pokemon is fainted!", show_alert=True)
+        if poke_idx == b["player_idx"]: return bot.answer_callback_query(call.id, "Already in battle!", show_alert=True)
+        
+        if b["state"] == "force_switch":
+            b["player_idx"] = poke_idx
+            b["state"] = "menu"
+            b["log"] = f"You sent out {b['player_team'][poke_idx]['name']}!"
+            render_gym_ui(bot, call.message.chat.id, battle_id)
+        else:
+            resolve_turn(bot, call.message.chat.id, battle_id, "switch", poke_idx)
+            
+    elif action == "back":
+        b["state"] = "menu"
+        render_gym_ui(bot, call.message.chat.id, battle_id)
+        
+    elif action == "run":
+        b["state"] = "ended"
+        bot.edit_message_text("🏃 *You fled from the Gym Battle\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
