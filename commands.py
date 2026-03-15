@@ -179,7 +179,6 @@ def process_catch(bot, call, uid, pid, name):
             try: tasks.check_and_update_catch(uid, poke_name_capped)
             except: pass
             
-            # 🟢 UPDATED LOG: Now includes clickable profile links!
             if LOG_GROUP_ID:
                 try: 
                     c_name = clean_name(call.from_user.first_name)
@@ -249,7 +248,6 @@ def register_user_handlers(bot, active_hunts):
     def cmd_start(message):
         is_new = db.add_user_if_new(message.from_user.id)
         
-        # 🌟 UPDATED LOG: Now includes clickable profile links!
         if is_new and LOG_GROUP_ID:
             try:
                 u_name = clean_name(message.from_user.first_name)
@@ -297,6 +295,9 @@ def register_user_handlers(bot, active_hunts):
         rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
         wins, losses = db.get_battle_stats(user_id)
         
+        badges = db.get_user_badges(user_id)
+        badge_str = " ".join(badges) if badges else "Nᴏɴᴇ Yᴇᴛ"
+        
         total_battles = wins + losses
         win_rate = round((wins / total_battles * 100), 1) if total_battles > 0 else 0.0
             
@@ -311,6 +312,10 @@ def register_user_handlers(bot, active_hunts):
             f"*👤 Nᴀᴍᴇ — {u_name}*\n"
             f"*🆔 Uɪᴅ — `{user_id}`*\n"
             f"*🌍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ — {region_str}*\n\n"
+            f"*✦━━━━━━━━━━━━━━━━✦*\n"
+            f"         *Gʏᴍ Bᴀᴅɢᴇs*\n"
+            f"*✦━━━━━━━━━━━━━━━━✦*\n"
+            f"   {badge_str}\n\n"
             f"*✦━━━━━━━━━━━━━━━━✦*\n"
             f"         *Aᴅᴠᴇɴᴛᴜʀᴇ Sᴛᴀᴛs*\n"
             f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
@@ -414,6 +419,11 @@ def register_user_handlers(bot, active_hunts):
     def command_trade(message): 
         db.add_user_if_new(message.from_user.id)
         trade.handle_trade_command(bot, message)
+
+    @bot.message_handler(commands=["gym", "gyms"])
+    def command_gym(message): 
+        import gym
+        gym.handle_gym_command(bot, message)
 
     @bot.message_handler(commands=["myteam"])
     def cmd_myteam(message):
