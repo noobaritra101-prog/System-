@@ -16,7 +16,7 @@ def init_db():
     global db_pool
     try:
         db_pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
-        if db_pool: 
+        if db_pool:
             logger.info("✅ Connection pool created successfully")
             
         with get_conn() as conn:
@@ -50,6 +50,17 @@ def init_db():
                         can_switch BOOLEAN DEFAULT TRUE
                     )
                 """)
+                
+                cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='size'")
+                if not cur.fetchone():
+                    cur.execute("ALTER TABLE pvp_settings ADD COLUMN size INTEGER DEFAULT 6")
+                    logger.info("🔧 Migrated: Added 'size' column to pvp_settings")
+                    
+                cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='can_switch'")
+                if not cur.fetchone():
+                    cur.execute("ALTER TABLE pvp_settings ADD COLUMN can_switch BOOLEAN DEFAULT TRUE")
+                    logger.info("🔧 Migrated: Added 'can_switch' column to pvp_settings")
+
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS battle_stats (
                         user_id BIGINT PRIMARY KEY,
@@ -74,42 +85,40 @@ def init_db():
                         file_id TEXT
                     )
                 """)
-                
+
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS tasks (
-                        user_id BIGINT, 
-                        task_type TEXT, 
-                        target TEXT, 
-                        progress INTEGER DEFAULT 0, 
-                        goal INTEGER, 
-                        reward_type TEXT, 
-                        reward_amount INTEGER, 
-                        completed BOOLEAN DEFAULT FALSE, 
-                        last_reset DATE, 
+                        user_id BIGINT,
+                        task_type TEXT,
+                        target TEXT,
+                        progress INTEGER DEFAULT 0,
+                        goal INTEGER,
+                        reward_type TEXT,
+                        reward_amount INTEGER,
+                        completed BOOLEAN DEFAULT FALSE,
+                        last_reset DATE,
                         PRIMARY KEY (user_id, task_type)
                     )
                 """)
-                
-                cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='size'")
-                if not cur.fetchone(): 
-                    cur.execute("ALTER TABLE pvp_settings ADD COLUMN size INTEGER DEFAULT 6")
-                    
-                cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='can_switch'")
-                if not cur.fetchone(): 
-                    cur.execute("ALTER TABLE pvp_settings ADD COLUMN can_switch BOOLEAN DEFAULT TRUE")
+                conn.commit()
+
+                try:
+                    cur.execute("ALTER TABLE tasks DROP CONSTRAINT tasks_pkey")
+                    cur.execute("ALTER TABLE tasks ADD PRIMARY KEY (user_id, task_type)")
+                    conn.commit()
+                except Exception:
+                    conn.rollback() 
                 
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_pokemons_user_id ON pokemons(user_id)")
                 conn.commit()
-    except Exception as e: 
+    except Exception as e:
         logger.error(f"❌ Database initialization error: {e}")
 
 @contextmanager
 def get_conn():
     conn = db_pool.getconn()
-    try: 
-        yield conn
-    finally: 
-        db_pool.putconn(conn)
+    try: yield conn
+    finally: db_pool.putconn(conn)
 
 # ================== USER MANAGEMENT ==================
 def add_user_if_new(user_id):
@@ -140,13 +149,15 @@ def update_user_tries(user_id):
             tries, region, last_reset = row
             today = datetime.date.today()
             
-            if last_reset is None or last_reset < today: 
-                tries, last_reset = 2500, today
-                
+            if last_reset is None or last_reset < today:
+                tries = 2500
+                last_reset = today
+            
             if tries > 0:
-                cur.execute("UPDATE users SET tries_left = %s, last_reset = %s WHERE user_id = %s", (tries - 1, last_reset, user_id))
+                tries -= 1
+                cur.execute("UPDATE users SET tries_left = %s, last_reset = %s WHERE user_id = %s", (tries, last_reset, user_id))
                 conn.commit()
-                return tries - 1, region
+                return tries, region
             return 0, region
 
 def update_user_region(user_id, region):
@@ -156,9 +167,10 @@ def update_user_region(user_id, region):
             conn.commit()
 
 def reset_user(user_id):
+    today = datetime.date.today()
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET tries_left = %s, last_reset = %s WHERE user_id = %s", (2500, datetime.date.today(), user_id))
+            cur.execute("UPDATE users SET tries_left = %s, last_reset = %s WHERE user_id = %s", (2500, today, user_id))
             conn.commit()
 
 def get_all_users():
@@ -183,51 +195,86 @@ def list_user_pokemon_names(user_id):
 def delete_pokemon(user_id, name):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM pokemons WHERE id = (SELECT id FROM pokemons WHERE user_id = %s AND name ILIKE %s LIMIT 1) RETURNING id", (user_id, name))
+            cur.execute("""
+                DELETE FROM pokemons 
+                WHERE id = (
+                    SELECT id FROM pokemons 
+                    WHERE user_id = %s AND name ILIKE %s 
+                    LIMIT 1
+                ) RETURNING id
+            """, (user_id, name))
             deleted = cur.fetchone()
             conn.commit()
             return bool(deleted)
 
-# ================== LEADERBOARD & PVP STATS ==================
+# ================== LEADERBOARD ==================
 def get_top_trainers(limit=5):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT user_id, COUNT(*) as c FROM pokemons GROUP BY user_id ORDER BY c DESC LIMIT %s", (limit,))
+            cur.execute("""
+                SELECT user_id, COUNT(*) as c 
+                FROM pokemons 
+                GROUP BY user_id 
+                ORDER BY c DESC 
+                LIMIT %s
+            """, (limit,))
             return cur.fetchall()
 
 def get_user_rank(user_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT rank FROM (SELECT user_id, RANK() OVER (ORDER BY COUNT(*) DESC) as rank FROM pokemons GROUP BY user_id) sub WHERE user_id = %s", (user_id,))
+            cur.execute("""
+                SELECT rank FROM (
+                    SELECT user_id, RANK() OVER (ORDER BY COUNT(*) DESC) as rank 
+                    FROM pokemons 
+                    GROUP BY user_id
+                ) sub 
+                WHERE user_id = %s
+            """, (user_id,))
             row = cur.fetchone()
             return row[0] if row else "Unranked"
 
 def get_top_pvp_players(limit=5):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT user_id, wins FROM battle_stats WHERE wins > 0 ORDER BY wins DESC LIMIT %s", (limit,))
+            cur.execute("""
+                SELECT user_id, wins 
+                FROM battle_stats 
+                WHERE wins > 0 
+                ORDER BY wins DESC 
+                LIMIT %s
+            """, (limit,))
             return cur.fetchall()
 
 def get_user_pvp_rank(user_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT rank FROM (SELECT user_id, RANK() OVER (ORDER BY wins DESC) as rank FROM battle_stats WHERE wins > 0) sub WHERE user_id = %s", (user_id,))
+            cur.execute("""
+                SELECT rank FROM (
+                    SELECT user_id, RANK() OVER (ORDER BY wins DESC) as rank 
+                    FROM battle_stats 
+                    WHERE wins > 0
+                ) sub 
+                WHERE user_id = %s
+            """, (user_id,))
             row = cur.fetchone()
             return row[0] if row else "Unranked"
 
+# ================== PVP & STATS ==================
 def get_pvp_settings(user_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT mode, size, can_switch FROM pvp_settings WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
-            return row if row else ("Mix", 6, True)
+            if row: return row[0], row[1], row[2]
+            return "Mix", 6, True
 
 def update_pvp_settings(user_id, mode, size, can_switch):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO pvp_settings (user_id, mode, size, can_switch) 
-                VALUES (%s, %s, %s, %s) 
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE 
                 SET mode = EXCLUDED.mode, size = EXCLUDED.size, can_switch = EXCLUDED.can_switch
             """, (user_id, mode, size, can_switch))
@@ -238,15 +285,17 @@ def get_battle_stats(user_id):
         with conn.cursor() as cur:
             cur.execute("SELECT wins, losses FROM battle_stats WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
-            return row if row else (0, 0)
+            if row: return row[0], row[1]
+            return 0, 0
 
 def update_battle_stats(user_id, is_win=True):
-    win_inc, loss_inc = (1, 0) if is_win else (0, 1)
+    win_inc = 1 if is_win else 0
+    loss_inc = 0 if is_win else 1
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO battle_stats (user_id, wins, losses) 
-                VALUES (%s, %s, %s) 
+                VALUES (%s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE 
                 SET wins = battle_stats.wins + EXCLUDED.wins, 
                     losses = battle_stats.losses + EXCLUDED.losses
@@ -279,6 +328,13 @@ def get_gym_image(leader_name):
             row = cur.fetchone()
             return row[0] if row else None
 
+def reset_all_badges():
+    """Wipes all gym badges from the database (Admin only)"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM user_badges")
+            conn.commit()
+
 # ================== TASKS MODULE ==================
 def get_daily_tasks(user_id):
     today = datetime.date.today()
@@ -286,33 +342,40 @@ def get_daily_tasks(user_id):
         with conn.cursor() as cur:
             cur.execute("SELECT task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset FROM tasks WHERE user_id = %s", (user_id,))
             tasks = cur.fetchall()
+            
             if not tasks or tasks[0][7] is None or tasks[0][7] < today:
                 cur.execute("DELETE FROM tasks WHERE user_id = %s", (user_id,))
                 
-                specific_target = random.choice(["Pikachu", "Eevee", "Charmander", "Squirtle", "Bulbasaur", "Snorlax", "Gengar", "Lucario", "Ralts", "Bagon", "Magikarp", "Gible", "Beldum", "Dratini"])
+                targets = ["Pikachu", "Eevee", "Charmander", "Squirtle", "Bulbasaur", "Snorlax", "Gengar", "Lucario", "Ralts", "Bagon", "Magikarp", "Gible", "Beldum", "Dratini"]
+                specific_target = random.choice(targets)
+                
                 new_tasks = [
-                    (user_id, 'catch', 'Any', 0, 10, 'shiny', 1, False, today), 
-                    (user_id, 'pvp', 'Any', 0, 3, 'shiny', 1, False, today), 
+                    (user_id, 'catch', 'Any', 0, 10, 'shiny', 1, False, today),
+                    (user_id, 'pvp', 'Any', 0, 3, 'shiny', 1, False, today),
                     (user_id, 'catch_specific', specific_target, 0, 1, 'jackpot', 1, False, today)
                 ]
                 
                 psycopg2.extras.execute_batch(cur, """
-                    INSERT INTO tasks (user_id, task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset) 
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) 
+                    INSERT INTO tasks (user_id, task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (user_id, task_type) DO NOTHING
                 """, new_tasks)
                 conn.commit()
                 
                 cur.execute("SELECT task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset FROM tasks WHERE user_id = %s", (user_id,))
                 tasks = cur.fetchall()
-            return [{"task_type": t[0], "target": t[1], "progress": t[2], "goal": t[3], "reward_type": t[4], "reward_amount": t[5], "completed": t[6]} for t in tasks]
+                
+            return [
+                {"task_type": t[0], "target": t[1], "progress": t[2], "goal": t[3], "reward_type": t[4], "reward_amount": t[5], "completed": t[6]} 
+                for t in tasks
+            ]
 
 def claim_task_reward(user_id, task_type):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE tasks SET completed = TRUE 
-                WHERE user_id = %s AND task_type = %s AND progress >= goal AND completed = FALSE 
+                WHERE user_id = %s AND task_type = %s AND progress >= goal AND completed = FALSE
                 RETURNING reward_type, reward_amount
             """, (user_id, task_type))
             reward = cur.fetchone()
@@ -322,7 +385,7 @@ def claim_task_reward(user_id, task_type):
 def update_task_pvp(user_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            try: 
+            try:
                 cur.execute("UPDATE tasks SET progress = progress + 1 WHERE user_id = %s AND task_type = 'pvp' AND completed = FALSE", (user_id,))
                 conn.commit()
             except: conn.rollback()
@@ -330,7 +393,7 @@ def update_task_pvp(user_id):
 def update_task_catch(user_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            try: 
+            try:
                 cur.execute("UPDATE tasks SET progress = progress + 1 WHERE user_id = %s AND task_type = 'catch' AND completed = FALSE", (user_id,))
                 conn.commit()
             except: conn.rollback()
@@ -338,7 +401,7 @@ def update_task_catch(user_id):
 def update_task_specific_catch(user_id, pokemon_name):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            try: 
+            try:
                 cur.execute("UPDATE tasks SET progress = progress + 1 WHERE user_id = %s AND task_type = 'catch_specific' AND target ILIKE %s AND completed = FALSE", (user_id, pokemon_name))
                 conn.commit()
             except: conn.rollback()
@@ -383,20 +446,34 @@ def export_all_data():
 def restore_sqlite_data(users_data, pokemons_data, groups_data):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            psycopg2.extras.execute_batch(cur, "INSERT INTO users (user_id, tries_left, region, last_reset) VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) DO NOTHING", users_data)
-            psycopg2.extras.execute_batch(cur, "INSERT INTO pokemons (user_id, name, region) VALUES (%s, %s, %s)", pokemons_data)
-            psycopg2.extras.execute_batch(cur, "INSERT INTO groups (group_id) VALUES (%s) ON CONFLICT (group_id) DO NOTHING", [(g[0],) for g in groups_data])
+            psycopg2.extras.execute_batch(cur, """
+                INSERT INTO users (user_id, tries_left, region, last_reset) 
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id) DO NOTHING
+            """, users_data)
+            
+            psycopg2.extras.execute_batch(cur, """
+                INSERT INTO pokemons (user_id, name, region) 
+                VALUES (%s, %s, %s)
+            """, pokemons_data)
+            
+            psycopg2.extras.execute_batch(cur, """
+                INSERT INTO groups (group_id) 
+                VALUES (%s)
+                ON CONFLICT (group_id) DO NOTHING
+            """, [(g[0],) for g in groups_data])
         conn.commit()
 
 def export_table_csv(table_name):
     allowed_tables = ['users', 'pokemons', 'groups', 'battle_stats']
     if table_name not in allowed_tables: return None
+        
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(f"SELECT * FROM {table_name}")
             colnames = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
-            
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(colnames)
@@ -404,6 +481,7 @@ def export_table_csv(table_name):
     return output.getvalue()
 
 def get_debug_stats():
+    """Calculates all backend data for the /debug panel"""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM users")
@@ -426,7 +504,7 @@ def get_debug_stats():
                 cur.execute("SELECT pg_database_size(current_database())")
                 db_bytes = cur.fetchone()[0]
                 db_size_mb = round(db_bytes / (1024 * 1024), 2) if db_bytes else 0.0
-            except: 
+            except:
                 db_size_mb = 0.0
                 
             return u_c, p_c, g_c, pvp_total, regions_active, db_size_mb
