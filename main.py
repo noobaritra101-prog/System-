@@ -13,6 +13,7 @@ import tasks
 import trade 
 import commands 
 import admin 
+import gym  # 🏅 NEW: Import the Gym module!
 
 from api_utils import escape_md
 
@@ -24,7 +25,7 @@ logger.addHandler(file_handler)
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode="MarkdownV2")
 active_hunts = {}  
 
-# Initialize Handlers from both modules
+# Initialize Handlers from modules
 commands.register_user_handlers(bot, active_hunts)
 admin.register_admin_handlers(bot, active_hunts)
 
@@ -41,6 +42,7 @@ def handle_chat_member_update(update):
 @bot.callback_query_handler(func=lambda c: True)
 def cb_handler(call):
     try:
+        # Route to admin module first. If it handled it, stop processing.
         if admin.handle_admin_callback(bot, call, active_hunts): return
             
         # Route logic
@@ -48,6 +50,7 @@ def cb_handler(call):
         elif call.data == "ignore": return bot.answer_callback_query(call.id)
         elif call.data.startswith("pvp_"): return pvp.handle_pvp_callback(bot, call)
         elif call.data.startswith("task"): return tasks.handle_task_callback(bot, call)
+        elif call.data.startswith("gym_"): return gym.handle_gym_callback(bot, call) # 🏅 NEW: Route Gym clicks!
         
         elif call.data.startswith("dex_"):
             parts = call.data.split("_", 2)
@@ -122,7 +125,6 @@ def cb_handler(call):
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
             bot.answer_callback_query(call.id, "")
             
-            # Send them to the confirmation menu instead of instantly deleting!
             small_name = commands.to_small_caps(name)
             text = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
                     f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
@@ -232,6 +234,7 @@ def cb_handler(call):
                         except: pass
 
     except KeyError:
+        # 🛡️ ULTIMATE ANTI-CRASH SHIELD
         pass
     except Exception as e: 
         logger.error(f"Callback error: {e}")
