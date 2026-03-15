@@ -250,7 +250,10 @@ EXECUTE_MODULES = {
     },
     "admin": {
         "description": "Advanced game moderation.",
-        "actions": {"givemany": {"args": "<poke1, poke2...>", "desc": "Give multiple Pokémon at once."}}
+        "actions": {
+            "givemany": {"args": "<poke1, poke2...>", "desc": "Give multiple Pokémon at once."},
+            "upload": {"args": "<LeaderName>", "desc": "Upload a Gym Leader's image by replying to it."}
+        }
     },
     "server": {
         "description": "Core bot system commands.",
@@ -260,6 +263,41 @@ EXECUTE_MODULES = {
 
 def register_admin_handlers(bot, active_hunts):
     
+    # ================== 🏅 GYM ADMIN TOOLS ==================
+    @bot.message_handler(commands=["upload", "setimage"])
+    def cmd_upload_gym_image(message):
+        if not is_owner(bot, message): return
+        
+        if not message.reply_to_message or not message.reply_to_message.photo:
+            return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to an image with /upload <LeaderName>"), reply_to_id=message.message_id)
+        
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            return safe_send(bot, message.chat.id, escape_md("⚠️ Format: /upload Brock"), reply_to_id=message.message_id)
+            
+        leader_name = args[1].strip().title()
+        
+        # Get the highest resolution version of the photo Telegram generated
+        file_id = message.reply_to_message.photo[-1].file_id 
+        
+        db.set_gym_image(leader_name, file_id)
+        safe_send(bot, message.chat.id, escape_md(f"✅ Successfully saved the image to the database for Gym Leader {leader_name}!"), reply_to_id=message.message_id)
+
+    @bot.message_handler(commands=["lock_gym"])
+    def cmd_lock_gym(message):
+        if not is_owner(bot, message): return
+        import gym
+        gym.GYM_LOCKED = not gym.GYM_LOCKED
+        status = "🔒 Lᴏᴄᴋᴇᴅ (Players blocked)" if gym.GYM_LOCKED else "🔓 Uɴʟᴏᴄᴋᴇᴅ (Players can play)"
+        safe_send(bot, message.chat.id, escape_md(f"✅ The Pokémon League Gyms are now {status}!\n\n*(Note: As the Owner, you can still bypass this lock and battle freely!)*"), reply_to_id=message.message_id)
+
+    @bot.message_handler(commands=["reset_badges"])
+    def cmd_reset_badges(message):
+        if not is_owner(bot, message): return
+        db.reset_all_badges()
+        safe_send(bot, message.chat.id, escape_md("🚨 SYSTEM OVERRIDE: All Gym Badges have been wiped from every user in the database!"), reply_to_id=message.message_id)
+    # ========================================================
+
     @bot.message_handler(commands=["update"])
     def cmd_update(message):
         if not is_owner(bot, message): return
@@ -375,6 +413,15 @@ def register_admin_handlers(bot, active_hunts):
             db.add_user_if_new(target_id)
             for p in poke_list: db.add_caught_pokemon(target_id, p, "Admin Gift")
             safe_send(bot, message.chat.id, f"🎁 Successfully gave {len(poke_list)} Pokémon to [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={target_id})\\!\n\n_{escape_md(', '.join(poke_list))}_", reply_to_id=message.message_id)
+            
+        elif module == "admin" and action == "upload":
+            if not message.reply_to_message or not message.reply_to_message.photo:
+                return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to an image with /execute admin upload <LeaderName>"), reply_to_id=message.message_id)
+            leader_name = arguments.strip().title()
+            if not leader_name: return safe_send(bot, message.chat.id, escape_md("⚠️ Format: /execute admin upload Brock"), reply_to_id=message.message_id)
+            file_id = message.reply_to_message.photo[-1].file_id 
+            db.set_gym_image(leader_name, file_id)
+            safe_send(bot, message.chat.id, escape_md(f"✅ Successfully saved the image to the database for Gym Leader {leader_name}!"), reply_to_id=message.message_id)
 
         elif module == "server" and action == "status":
             msg = safe_send(bot, message.chat.id, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", reply_to_id=message.message_id)
