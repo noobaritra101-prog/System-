@@ -10,6 +10,7 @@ from api_utils import escape_md
 from commands import clean_name, to_small_caps, safe_send
 from pvp import TYPE_CHART, TYPE_EMOJIS, get_hp_bar, format_types, get_type_multiplier, apply_nature, STATUS_EMOJIS
 
+GYM_LOCKED = False  # The Global Admin Lock
 gym_battles = {}
 
 GYM_LEADERS = {
@@ -32,7 +33,6 @@ def clean_api_name(name):
     return name.lower().replace(". ", "-").replace(" ", "-").replace("'", "")
 
 def fetch_api_moves(pokemon_name):
-    """Fetches random damaging moves from PokeAPI (Power > 80 ONLY)."""
     api_name = clean_api_name(pokemon_name)
     try:
         resp = requests.get(f"https://pokeapi.co/api/v2/pokemon/{api_name}", timeout=5)
@@ -44,10 +44,8 @@ def fetch_api_moves(pokemon_name):
         final_moves = []
         for m in all_moves:
             if len(final_moves) >= 4: break
-            
             url = m["move"]["url"]
             
-            # Check Cache First
             if url in MOVE_CACHE:
                 if MOVE_CACHE[url].get("power", 0) > 80:
                     final_moves.append(MOVE_CACHE[url])
@@ -58,8 +56,6 @@ def fetch_api_moves(pokemon_name):
             m_data = m_resp.json()
             
             power = m_data.get("power")
-            
-            # 🛡️ STRICT RULE: Power > 80 ONLY
             if not power or power <= 80:
                 MOVE_CACHE[url] = {"power": power or 0} 
                 continue
@@ -74,7 +70,7 @@ def fetch_api_moves(pokemon_name):
             
         return final_moves
     except Exception as e:
-        logger.error(f"API Move Fetch Error for {pokemon_name}: {e}")
+        logger.error(f"API Fetch Error: {e}")
         return []
 
 def build_mock_pokemon(name):
@@ -101,9 +97,7 @@ def build_mock_pokemon(name):
     elif name == "Dugtrio": p["types"] = "Ground"
     else: p["types"] = "Normal"
 
-    # API FETCH (Only >80 Power Moves)
     p["moves"] = fetch_api_moves(name)
-        
     return p
 
 # --- SMART AI LOGIC ---
@@ -113,7 +107,6 @@ def get_ai_action(b):
     ai_poke = ai_team[ai_idx]
     player_poke = b["player_team"][b["player_idx"]]
     
-    # AUTO-SWITCH LOGIC
     player_primary_type = player_poke["types"].split("/")[0]
     current_weakness = get_type_multiplier(player_primary_type, ai_poke["types"])
     
@@ -123,7 +116,6 @@ def get_ai_action(b):
                 bench_weakness = get_type_multiplier(player_primary_type, bench_poke["types"])
                 if bench_weakness < 1.0: return "switch", i  
                     
-    # AUTO-EFFECTIVE MOVE LOGIC
     best_move_idx = 0
     highest_dmg = -1
     for i, mv in enumerate(ai_poke["moves"]):
@@ -138,7 +130,7 @@ def get_ai_action(b):
     return "move", best_move_idx
 
 # --- MENU UIs ---
-def render_main_menu(bot, chat_id, message_id=None):
+def render_main_menu(bot, chat_id, uid, message_id=None):
     text = (
         f"✦━━━━━━━━━━━━━━━━✦\n"
         f"🏟 𝙿𝙾𝙺𝙴𝙼𝙾𝙽 𝙻𝙴𝙰𝙶𝚄𝙴 𝙶𝚈𝙼𝚂\n"
@@ -149,15 +141,15 @@ def render_main_menu(bot, chat_id, message_id=None):
     )
     
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("Kᴀɴᴛᴏ", callback_data="gym_region_Kanto"),
-           types.InlineKeyboardButton("Jᴏʜᴛᴏ", callback_data="gym_region_Johto"))
-    kb.row(types.InlineKeyboardButton("Hᴏᴇɴɴ", callback_data="gym_region_Hoenn"),
-           types.InlineKeyboardButton("Sɪɴɴᴏʜ", callback_data="gym_region_Sinnoh"))
-    kb.row(types.InlineKeyboardButton("Uɴᴏᴠᴀ", callback_data="gym_region_Unova"),
-           types.InlineKeyboardButton("Kᴀʟᴏs", callback_data="gym_region_Kalos"))
-    kb.row(types.InlineKeyboardButton("Aʟᴏʟᴀ", callback_data="gym_region_Alola"),
-           types.InlineKeyboardButton("Gᴀʟᴀʀ", callback_data="gym_region_Galar"))
-    kb.row(types.InlineKeyboardButton("⬅️ Bᴀᴄᴋ", callback_data="gym_close"))
+    kb.row(types.InlineKeyboardButton("Kᴀɴᴛᴏ", callback_data=f"gym_region_{uid}_Kanto"),
+           types.InlineKeyboardButton("Jᴏʜᴛᴏ", callback_data=f"gym_region_{uid}_Johto"))
+    kb.row(types.InlineKeyboardButton("Hᴏᴇɴɴ", callback_data=f"gym_region_{uid}_Hoenn"),
+           types.InlineKeyboardButton("Sɪɴɴᴏʜ", callback_data=f"gym_region_{uid}_Sinnoh"))
+    kb.row(types.InlineKeyboardButton("Uɴᴏᴠᴀ", callback_data=f"gym_region_{uid}_Unova"),
+           types.InlineKeyboardButton("Kᴀʟᴏs", callback_data=f"gym_region_{uid}_Kalos"))
+    kb.row(types.InlineKeyboardButton("Aʟᴏʟᴀ", callback_data=f"gym_region_{uid}_Alola"),
+           types.InlineKeyboardButton("Gᴀʟᴀʀ", callback_data=f"gym_region_{uid}_Galar"))
+    kb.row(types.InlineKeyboardButton("⬅️ Bᴀᴄᴋ", callback_data=f"gym_close_{uid}"))
     
     if message_id:
         try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -168,7 +160,7 @@ def render_main_menu(bot, chat_id, message_id=None):
     else:
         bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
 
-def render_region_menu(bot, chat_id, message_id, region):
+def render_region_menu(bot, chat_id, message_id, uid, region):
     if region != "Kanto":
         bot.answer_callback_query(message_id, "🚧 This region is currently under construction!", show_alert=True)
         return
@@ -190,15 +182,15 @@ def render_region_menu(bot, chat_id, message_id, region):
     )
     
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("Bʀᴏᴄᴋ", callback_data="gym_info_Brock"),
-           types.InlineKeyboardButton("Mɪsᴛʏ", callback_data="gym_info_Misty"))
-    kb.row(types.InlineKeyboardButton("Lᴛ\\. Sᴜʀɢᴇ", callback_data="gym_info_Surge"),
-           types.InlineKeyboardButton("Eʀɪᴋᴀ", callback_data="gym_info_Erika"))
-    kb.row(types.InlineKeyboardButton("Kᴏɢᴀ", callback_data="gym_info_Koga"),
-           types.InlineKeyboardButton("Sᴀʙʀɪɴᴀ", callback_data="gym_info_Sabrina"))
-    kb.row(types.InlineKeyboardButton("Bʟᴀɪɴᴇ", callback_data="gym_info_Blaine"),
-           types.InlineKeyboardButton("Gɪᴏᴠᴀɴɴɪ", callback_data="gym_info_Giovanni"))
-    kb.row(types.InlineKeyboardButton("⬅ Bᴀᴄᴋ", callback_data="gym_main"))
+    kb.row(types.InlineKeyboardButton("Bʀᴏᴄᴋ", callback_data=f"gym_info_{uid}_Brock"),
+           types.InlineKeyboardButton("Mɪsᴛʏ", callback_data=f"gym_info_{uid}_Misty"))
+    kb.row(types.InlineKeyboardButton("Lᴛ\\. Sᴜʀɢᴇ", callback_data=f"gym_info_{uid}_Surge"),
+           types.InlineKeyboardButton("Eʀɪᴋᴀ", callback_data=f"gym_info_{uid}_Erika"))
+    kb.row(types.InlineKeyboardButton("Kᴏɢᴀ", callback_data=f"gym_info_{uid}_Koga"),
+           types.InlineKeyboardButton("Sᴀʙʀɪɴᴀ", callback_data=f"gym_info_{uid}_Sabrina"))
+    kb.row(types.InlineKeyboardButton("Bʟᴀɪɴᴇ", callback_data=f"gym_info_{uid}_Blaine"),
+           types.InlineKeyboardButton("Gɪᴏᴠᴀɴɴɪ", callback_data=f"gym_info_{uid}_Giovanni"))
+    kb.row(types.InlineKeyboardButton("⬅ Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
     
     try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
     except: 
@@ -206,7 +198,7 @@ def render_region_menu(bot, chat_id, message_id, region):
         except: pass
         bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
 
-def render_gym_info(bot, chat_id, message_id, leader_key):
+def render_gym_info(bot, chat_id, message_id, uid, leader_key):
     leader = GYM_LEADERS[leader_key]
     team_str = "\n".join([f"• {escape_md(to_small_caps(p))}" for p in leader["team"]])
     
@@ -225,48 +217,39 @@ def render_gym_info(bot, chat_id, message_id, leader_key):
     )
     
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("✅ Cʜᴀʟʟᴇɴɢᴇ", callback_data=f"gym_start_{leader_key}"),
-           types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data="gym_region_Kanto"))
+    kb.row(types.InlineKeyboardButton("✅ Cʜᴀʟʟᴇɴɢᴇ", callback_data=f"gym_start_{uid}_{leader_key}"),
+           types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"gym_region_{uid}_Kanto"))
            
-    # 🖼️ DB Image Fetch
     file_id = db.get_gym_image(leader_key)
-    
     try: bot.delete_message(chat_id, message_id)
     except: pass
     
     if file_id:
         try: bot.send_photo(chat_id, file_id, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
-        except Exception:
-            bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
-    else:
-        bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
+        except Exception: bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
+    else: bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
 
 def render_gym_ui(bot, chat_id, battle_id):
     if battle_id not in gym_battles: return
     b = gym_battles[battle_id]
-    
     if b["state"] == "ended": return
 
     player_poke = b["player_team"][b["player_idx"]]
     ai_poke = b["ai_team"][b["ai_idx"]]
-    
     leader = GYM_LEADERS[b["leader"]]
     player_mention = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
     
     log_content = f"*{escape_md(b['log'].strip())}*" if b['log'] else "*Tʜᴇ Gʏᴍ Bᴀᴛᴛʟᴇ Bᴇɢɪɴs\\!*"
-    
-    act_status = f" \\[{STATUS_EMOJIS.get(player_poke['status'], '')}\\]" if player_poke.get('status') else ""
-    def_status = f" \\[{STATUS_EMOJIS.get(ai_poke['status'], '')}\\]" if ai_poke.get('status') else ""
 
     ui_text = (
         f"{log_content}\n\n"
         f"*{leader['icon']} Gʏᴍ Lᴇᴀᴅᴇʀ {leader['name']}'s {escape_md(ai_poke['name'])}*\n"
         f" *\\[{escape_md(format_types(ai_poke['types']))}\\] Lv\\. 100  •  HP {int(ai_poke['hp'])}/{int(ai_poke['max_hp'])}*\n"
-        f"`{get_hp_bar(ai_poke['hp'], ai_poke['max_hp'])}`{escape_md(def_status)}\n\n"
+        f"`{get_hp_bar(ai_poke['hp'], ai_poke['max_hp'])}`\n\n"
         f"Current turn: {player_mention} \\(Asʜ's Tᴇᴀᴍ\\)\n"
         f"*{player_mention}'s {escape_md(player_poke['name'])} \\[{escape_md(format_types(player_poke['types']))}\\]*\n"
         f"*Lv\\. 100  •  HP {int(player_poke['hp'])}/{int(player_poke['max_hp'])}*\n"
-        f"`{get_hp_bar(player_poke['hp'], player_poke['max_hp'])}`{escape_md(act_status)}\n\n"
+        f"`{get_hp_bar(player_poke['hp'], player_poke['max_hp'])}`\n\n"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -323,8 +306,13 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
 
     moves_to_execute = []
     if player_action == "move" and ai_action == "move":
-        if player_poke["spd"] >= ai_poke["spd"]: moves_to_execute = [("player", player_val), ("ai", ai_val)]
-        else: moves_to_execute = [("ai", ai_val), ("player", player_val)]
+        # ⚡ SPEED ADVANTAGE LOGIC
+        if player_poke["spd"] >= ai_poke["spd"]: 
+            b["log"] += f"⚡ {player_poke['name']}'s speed allows it to strike first!\n"
+            moves_to_execute = [("player", player_val), ("ai", ai_val)]
+        else: 
+            b["log"] += f"⚡ Gym Leader's {ai_poke['name']} is faster and strikes first!\n"
+            moves_to_execute = [("ai", ai_val), ("player", player_val)]
     elif player_action == "move": moves_to_execute = [("player", player_val)]
     elif ai_action == "move": moves_to_execute = [("ai", ai_val)]
 
@@ -347,6 +335,8 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
                 crit = 1.5 if random.random() < 0.06 else 1.0
                 dmg = max(1, int(((42 * pow * (atk["atk"] / max(1, dfn["def"]))) / 50 + 2) * mult * stab * crit * random.uniform(0.85, 1.0)))
                 dfn["hp"] = max(0, dfn["hp"] - dmg)
+                
+                # 💥 DYNAMIC ATTACK LOG WITH EMOJIS
                 b["log"] += f"💥 {atk['name']} used {mv['name']}! ({dmg} DMG)\n"
                 if mult > 1: b["log"] += "It's super effective!\n"
                 elif mult < 1: b["log"] += "It's not very effective...\n"
@@ -358,13 +348,17 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
             b["log"] += f"💀 {dfn['name']} fainted!\n"
             break
 
+    # 🏆 VICTORY ROUTING
     if ai_poke["hp"] <= 0:
         if all(p["hp"] <= 0 for p in b["ai_team"]):
             leader = GYM_LEADERS[b["leader"]]
-            b["log"] += f"\n🏆 You defeated Gym Leader {leader['name']}!\n🏅 You earned the {leader['icon']} {leader['badge']}!"
             db.add_badge(b["player_id"], f"{leader['icon']} {leader['badge']}")
             b["state"] = "ended"
-            bot.edit_message_text(f"*{escape_md(b['log'])}*", chat_id, battle_id, parse_mode="MarkdownV2")
+            
+            player_mention = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
+            
+            win_text = f"*{escape_md(b['log'].strip())}*\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n🏅 *You earned the {leader['icon']} {escape_md(leader['badge'])}*\\!"
+            bot.edit_message_text(win_text, chat_id, battle_id, parse_mode="MarkdownV2")
             return
         else:
             for i, p in enumerate(b["ai_team"]):
@@ -373,11 +367,12 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
                     b["log"] += f"\nGym Leader sent out {p['name']}!"
                     break
 
+    # ❌ DEFEAT ROUTING
     if player_poke["hp"] <= 0:
         if all(p["hp"] <= 0 for p in b["player_team"]):
-            b["log"] += f"\n❌ All your Pokémon fainted. You whited out!"
             b["state"] = "ended"
-            bot.edit_message_text(f"*{escape_md(b['log'])}*", chat_id, battle_id, parse_mode="MarkdownV2")
+            loss_text = f"*{escape_md(b['log'].strip())}*\n\n❌ *All your Pokémon fainted\\. You whited out\\!*"
+            bot.edit_message_text(loss_text, chat_id, battle_id, parse_mode="MarkdownV2")
             return
         else:
             b["state"] = "force_switch"
@@ -406,61 +401,73 @@ def setup_gym_battle(bot, call, leader_key, user_id, chat_id, battle_id):
         except: pass
 
 def handle_gym_command(bot, message):
+    if GYM_LOCKED:
+        return safe_send(bot, message.chat.id, escape_md("🔒 The Pokemon League Gyms are currently locked by the Admins!"))
+        
     user_id = message.from_user.id
     if not db.get_user(user_id): return bot.reply_to(message, "⚠️ Please /start the bot first!")
-    render_main_menu(bot, message.chat.id)
+    render_main_menu(bot, message.chat.id, user_id)
 
 def handle_gym_callback(bot, call):
     parts = call.data.split("_")
     action = parts[1]
     
-    if action == "close":
-        bot.answer_callback_query(call.id, "Menu closed.")
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
-        return
-        
-    elif action == "main":
-        bot.answer_callback_query(call.id, "")
-        render_main_menu(bot, call.message.chat.id, call.message.message_id)
-        return
-        
-    elif action == "region":
-        bot.answer_callback_query(call.id, "")
-        render_region_menu(bot, call.message.chat.id, call.message.message_id, parts[2])
-        return
-
-    elif action == "info":
-        leader_key = parts[2]
-        bot.answer_callback_query(call.id, f"Viewing {leader_key}...")
-        render_gym_info(bot, call.message.chat.id, call.message.message_id, leader_key)
-        return
+    # Entrance Security
+    if GYM_LOCKED and action in ["main", "region", "info", "start"]:
+        return bot.answer_callback_query(call.id, "🔒 The Gyms are currently locked by the Admins!", show_alert=True)
     
-    if action == "start":
-        leader_key = parts[2]
-        user_id = call.from_user.id
-        leader = GYM_LEADERS[leader_key]
-        
-        bot.answer_callback_query(call.id, f"Challenging {leader['name']}...")
-        
-        try: bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
-        
-        sent_msg = bot.send_message(call.message.chat.id, "🔄 *Dʀᴀғᴛɪɴɢ Oғғɪᴄɪᴀʟ Tᴇᴀᴍs\\.\\.\\.*", parse_mode="MarkdownV2")
-        battle_id = sent_msg.message_id
-        
-        threading.Thread(target=setup_gym_battle, args=(bot, call, leader_key, user_id, call.message.chat.id, battle_id)).start()
-        return
+    # Verify User ID for Menus
+    if action in ["main", "close"]:
+        uid = int(parts[2])
+        if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
+            
+        if action == "close":
+            bot.answer_callback_query(call.id, "Menu closed.")
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            return
+            
+        elif action == "main":
+            bot.answer_callback_query(call.id, "")
+            render_main_menu(bot, call.message.chat.id, uid, call.message.message_id)
+            return
+            
+    elif action in ["region", "info", "start"]:
+        uid = int(parts[2])
+        param = parts[3]
+        if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
+            
+        if action == "region":
+            bot.answer_callback_query(call.id, "")
+            render_region_menu(bot, call.message.chat.id, call.message.message_id, uid, param)
+            return
 
+        elif action == "info":
+            bot.answer_callback_query(call.id, f"Viewing {param}...")
+            render_gym_info(bot, call.message.chat.id, call.message.message_id, uid, param)
+            return
+        
+        elif action == "start":
+            leader = GYM_LEADERS[param]
+            bot.answer_callback_query(call.id, f"Challenging {leader['name']}...")
+            
+            try: bot.delete_message(call.message.chat.id, call.message.message_id)
+            except: pass
+            
+            sent_msg = bot.send_message(call.message.chat.id, "🔄 *Dʀᴀғᴛɪɴɢ Oғғɪᴄɪᴀʟ Tᴇᴀᴍs\\.\\.\\.*", parse_mode="MarkdownV2")
+            battle_id = sent_msg.message_id
+            
+            threading.Thread(target=setup_gym_battle, args=(bot, call, param, uid, call.message.chat.id, battle_id)).start()
+            return
+
+    # In-Battle Actions Security
     battle_id = int(parts[2])
     b = gym_battles.get(battle_id)
     if not b: return bot.answer_callback_query(call.id, "Battle expired.")
-    if call.from_user.id != b["player_id"]: return bot.answer_callback_query(call.id, "Not your battle!", show_alert=True)
+    if call.from_user.id != b["player_id"]: return bot.answer_callback_query(call.id, "❌ Not your battle!", show_alert=True)
     
     now = time.time()
-    if now - b.get("last_edit", 0) < 1.5:
-        return bot.answer_callback_query(call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=True)
-    
+    if now - b.get("last_edit", 0) < 1.5: return safe_send(bot, call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=True)
     b["last_edit"] = now
     bot.answer_callback_query(call.id, "")
 
