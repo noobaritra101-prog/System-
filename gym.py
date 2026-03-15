@@ -5,7 +5,7 @@ import threading
 import requests
 from telebot import types
 import database as db
-from config import logger
+from config import logger, OWNER_ID
 from api_utils import escape_md
 from commands import clean_name, to_small_caps, safe_send
 from pvp import TYPE_CHART, TYPE_EMOJIS, get_hp_bar, format_types, get_type_multiplier, apply_nature, STATUS_EMOJIS
@@ -295,23 +295,22 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
     if player_action == "switch":
         old_name = b["player_team"][b["player_idx"]]["name"]
         b["player_idx"] = player_val
-        b["log"] += f"🔄 You withdrew {old_name} and sent out {b['player_team'][player_val]['name']}!\n"
+        b["log"] += f"You withdrew {old_name} and sent out {b['player_team'][player_val]['name']}!\n"
     if ai_action == "switch":
         old_name = b["ai_team"][b["ai_idx"]]["name"]
         b["ai_idx"] = ai_val
-        b["log"] += f"🔄 Gym Leader withdrew {old_name} and sent out {b['ai_team'][ai_val]['name']}!\n"
+        b["log"] += f"Gym Leader withdrew {old_name} and sent out {b['ai_team'][ai_val]['name']}!\n"
 
     player_poke = b["player_team"][b["player_idx"]]
     ai_poke = b["ai_team"][b["ai_idx"]]
 
     moves_to_execute = []
     if player_action == "move" and ai_action == "move":
-        # ⚡ SPEED ADVANTAGE LOGIC
         if player_poke["spd"] >= ai_poke["spd"]: 
-            b["log"] += f"⚡ {player_poke['name']}'s speed allows it to strike first!\n"
+            b["log"] += f"{player_poke['name']}'s speed allows it to strike first!\n"
             moves_to_execute = [("player", player_val), ("ai", ai_val)]
         else: 
-            b["log"] += f"⚡ Gym Leader's {ai_poke['name']} is faster and strikes first!\n"
+            b["log"] += f"Gym Leader's {ai_poke['name']} is faster and strikes first!\n"
             moves_to_execute = [("ai", ai_val), ("player", player_val)]
     elif player_action == "move": moves_to_execute = [("player", player_val)]
     elif ai_action == "move": moves_to_execute = [("ai", ai_val)]
@@ -336,16 +335,15 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
                 dmg = max(1, int(((42 * pow * (atk["atk"] / max(1, dfn["def"]))) / 50 + 2) * mult * stab * crit * random.uniform(0.85, 1.0)))
                 dfn["hp"] = max(0, dfn["hp"] - dmg)
                 
-                # 💥 DYNAMIC ATTACK LOG WITH EMOJIS
-                b["log"] += f"💥 {atk['name']} used {mv['name']}! ({dmg} DMG)\n"
+                b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
                 if mult > 1: b["log"] += "It's super effective!\n"
                 elif mult < 1: b["log"] += "It's not very effective...\n"
                 if crit > 1: b["log"] += "A critical hit!\n"
             else:
-                b["log"] += f"⚡ {atk['name']} used {mv['name']}!\n"
+                b["log"] += f"{atk['name']} used {mv['name']}!\n"
 
         if dfn["hp"] <= 0:
-            b["log"] += f"💀 {dfn['name']} fainted!\n"
+            b["log"] += f"{dfn['name']} fainted!\n"
             break
 
     # 🏆 VICTORY ROUTING
@@ -356,7 +354,6 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
             b["state"] = "ended"
             
             player_mention = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
-            
             win_text = f"*{escape_md(b['log'].strip())}*\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n🏅 *You earned the {leader['icon']} {escape_md(leader['badge'])}*\\!"
             bot.edit_message_text(win_text, chat_id, battle_id, parse_mode="MarkdownV2")
             return
@@ -401,10 +398,12 @@ def setup_gym_battle(bot, call, leader_key, user_id, chat_id, battle_id):
         except: pass
 
 def handle_gym_command(bot, message):
-    if GYM_LOCKED:
+    user_id = message.from_user.id
+    
+    # 🔒 Lock Check (Owner Bypass)
+    if GYM_LOCKED and user_id != OWNER_ID:
         return safe_send(bot, message.chat.id, escape_md("🔒 The Pokemon League Gyms are currently locked by the Admins!"))
         
-    user_id = message.from_user.id
     if not db.get_user(user_id): return bot.reply_to(message, "⚠️ Please /start the bot first!")
     render_main_menu(bot, message.chat.id, user_id)
 
@@ -412,8 +411,8 @@ def handle_gym_callback(bot, call):
     parts = call.data.split("_")
     action = parts[1]
     
-    # Entrance Security
-    if GYM_LOCKED and action in ["main", "region", "info", "start"]:
+    # 🔒 Entrance Security Lock (Owner Bypass)
+    if GYM_LOCKED and action in ["main", "region", "info", "start"] and call.from_user.id != OWNER_ID:
         return bot.answer_callback_query(call.id, "🔒 The Gyms are currently locked by the Admins!", show_alert=True)
     
     # Verify User ID for Menus
@@ -467,7 +466,8 @@ def handle_gym_callback(bot, call):
     if call.from_user.id != b["player_id"]: return bot.answer_callback_query(call.id, "❌ Not your battle!", show_alert=True)
     
     now = time.time()
-    if now - b.get("last_edit", 0) < 1.5: return safe_send(bot, call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=True)
+    if now - b.get("last_edit", 0) < 1.5:
+        return safe_send(bot, call.message.chat.id, "⏳ Whoa, slow down Trainer! Wait a second.")
     b["last_edit"] = now
     bot.answer_callback_query(call.id, "")
 
@@ -498,4 +498,4 @@ def handle_gym_callback(bot, call):
         
     elif action == "run":
         b["state"] = "ended"
-        bot.edit_message_text("🏃 *You fled from the Gym Battle\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+        bot.edit_message_text("*You fled from the Gym Battle\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
