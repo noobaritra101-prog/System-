@@ -200,6 +200,11 @@ def render_gym_info(bot, chat_id, message_id, uid, leader_key):
         except Exception: bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
     else: bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
 
+def get_type_display(type_str):
+    parts = type_str.split('/')
+    emojis = "".join([TYPE_EMOJIS.get(t, '') for t in parts])
+    return f"{type_str} {emojis}".strip()
+
 def render_gym_ui(bot, chat_id, battle_id):
     if battle_id not in gym_battles: return
     b = gym_battles[battle_id]
@@ -208,20 +213,28 @@ def render_gym_ui(bot, chat_id, battle_id):
     player_poke = b["player_team"][b["player_idx"]]
     ai_poke = b["ai_team"][b["ai_idx"]]
     leader = GYM_LEADERS[b["leader"]]
-    player_mention = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
+    player_mention_link = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
+    player_name_clean = escape_md(b['player_name'])
+
+    log_text = escape_md(b['log'].strip()) if b['log'] else escape_md("Tʜᴇ Gʏᴍ Bᴀᴛᴛʟᴇ Bᴇɢɪɴs!")
     
-    log_content = f"*{escape_md(b['log'].strip())}*" if b['log'] else "*Tʜᴇ Gʏᴍ Bᴀᴛᴛʟᴇ Bᴇɢɪɴs\\!*"
+    ai_type_display = escape_md(get_type_display(ai_poke['types']))
+    player_type_display = escape_md(get_type_display(player_poke['types']))
 
     ui_text = (
-        f"{log_content}\n\n"
-        f"*{leader['icon']} Gʏᴍ Lᴇᴀᴅᴇʀ {leader['name']}'s {escape_md(ai_poke['name'])}*\n"
-        f" *\\[{escape_md(format_types(ai_poke['types']))}\\] Lv\\. 100  •  HP {int(ai_poke['hp'])}/{int(ai_poke['max_hp'])}*\n"
+        f"{log_text}\n\n"
+        f"{leader['icon']} Gʏᴍ Lᴇᴀᴅᴇʀ {escape_md(leader['name'])}'s {escape_md(ai_poke['name'])}\n"
+        f" \\[{ai_type_display}\\] Lv\\. 100  •  HP {int(ai_poke['hp'])}/{int(ai_poke['max_hp'])}\n"
         f"`{get_hp_bar(ai_poke['hp'], ai_poke['max_hp'])}`\n\n"
-        f"Current turn: {player_mention} \\(Asʜ's Tᴇᴀᴍ\\)\n"
-        f"*{player_mention}'s {escape_md(player_poke['name'])} \\[{escape_md(format_types(player_poke['types']))}\\]*\n"
-        f"*Lv\\. 100  •  HP {int(player_poke['hp'])}/{int(player_poke['max_hp'])}*\n"
-        f"`{get_hp_bar(player_poke['hp'], player_poke['max_hp'])}`\n\n"
+        f"Current turn: {player_mention_link} \\(Asʜ's Tᴇᴀᴍ\\)\n"
+        f"*{player_name_clean}'s {escape_md(player_poke['name'])} \\[{player_type_display}\\]*\n"
+        f"Lv\\. 100  •  HP {int(player_poke['hp'])}/{int(player_poke['max_hp'])}\n"
+        f"`{get_hp_bar(player_poke['hp'], player_poke['max_hp'])}`\n"
     )
+
+    if b["state"] == "waiting":
+        leader_small = escape_md(to_small_caps(leader['name']))
+        ui_text += f"\n_Gʏᴍ Lᴇᴀᴅᴇʀ {leader_small} ɪs ᴀᴛᴛᴀᴄᴋɪɴɢ\\.\\.\\.\\.\\._"
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     
@@ -230,7 +243,7 @@ def render_gym_ui(bot, chat_id, battle_id):
         move_buttons = []
         for i, m in enumerate(player_poke["moves"]):
             m_type_display = escape_md(f"{m['type']} {TYPE_EMOJIS.get(m['type'], '')}".strip())
-            moves_block += f" *{escape_md(m['name'])} \\[{m_type_display}\\]*\n *Power: {m.get('power', 0)}, Accuracy: {m.get('acc', 100)}*\n"
+            moves_block += f"\n *{escape_md(m['name'])} \\[{m_type_display}\\]*\n *Power: {m.get('power', 0)}, Accuracy: {m.get('acc', 100)}*\n"
             move_buttons.append(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"gym_move_{battle_id}_{i}"))
             
         ui_text += moves_block
@@ -244,8 +257,8 @@ def render_gym_ui(bot, chat_id, battle_id):
                types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"gym_run_{battle_id}"))
                
     elif b["state"] in ["switch_menu", "force_switch"]:
-        if b["state"] == "switch_menu": ui_text += f"\n🔄 *Wʜɪᴄʜ Pᴏᴋᴇ́ᴍᴏɴ Wɪʟʟ Yᴏᴜ Sᴡɪᴛᴄʜ Tᴏ?*\n"
-        else: ui_text += f"\n💀 *Cʜᴏᴏsᴇ A Pᴏᴋᴇ́ᴍᴏɴ Tᴏ Sᴇɴᴅ Oᴜᴛ\\!*\n"
+        if b["state"] == "switch_menu": ui_text += f"\n\n🔄 *Wʜɪᴄʜ Pᴏᴋᴇ́ᴍᴏɴ Wɪʟʟ Yᴏᴜ Sᴡɪᴛᴄʜ Tᴏ?*\n"
+        else: ui_text += f"\n\n💀 *Cʜᴏᴏsᴇ A Pᴏᴋᴇ́ᴍᴏɴ Tᴏ Sᴇɴᴅ Oᴜᴛ\\!*\n"
             
         btns = [types.InlineKeyboardButton(f"{p['name']}" if p['hp'] > 0 else f"✖️ {p['name']}", callback_data=f"gym_dosw_{battle_id}_{i}") for i, p in enumerate(b["player_team"])]
         for i in range(0, len(btns), 2):
@@ -267,17 +280,17 @@ def resolve_action(b, actor, val):
 
     if actor == "switch_player":
         b["player_idx"] = val
-        b["log"] += f"You sent out {b['player_team'][val]['name']}!\n"
+        b["log"] += f"🔄 You sent out {b['player_team'][val]['name']}!\n"
         return
     if actor == "switch_ai":
         b["ai_idx"] = val
-        b["log"] += f"Gym Leader sent out {b['ai_team'][val]['name']}!\n"
+        b["log"] += f"🔄 Gym Leader sent out {b['ai_team'][val]['name']}!\n"
         return
 
     mv = atk["moves"][val]
     mult = get_type_multiplier(mv["type"], dfn["types"])
     if mult == 0: 
-        b["log"] += f"{atk['name']} used {mv['name']} (No effect)\n"
+        b["log"] += f"🛡️ {atk['name']} used {mv['name']} (0 DMG)\n"
     else:
         pow = mv.get("power", 0)
         if pow > 0:
@@ -285,14 +298,9 @@ def resolve_action(b, actor, val):
             crit = 1.5 if random.random() < 0.06 else 1.0
             dmg = max(1, int(((42 * pow * (atk["atk"] / max(1, dfn["def"]))) / 50 + 2) * mult * stab * crit * random.uniform(0.85, 1.0)))
             dfn["hp"] = max(0, dfn["hp"] - dmg)
-            
-            # Clean strict 2-line log style without emojis
-            b["log"] += f"{atk['name']} used {mv['name']} ({dmg} DMG)\n"
+            b["log"] += f"⚔️ {atk['name']} used {mv['name']} ({dmg} DMG)\n"
         else:
-            b["log"] += f"{atk['name']} used {mv['name']}\n"
-
-    if dfn["hp"] <= 0:
-        b["log"] += f"{dfn['name']} fainted!\n"
+            b["log"] += f"💨 {atk['name']} used {mv['name']}\n"
 
 def check_faint_state(bot, chat_id, battle_id):
     b = gym_battles[battle_id]
@@ -305,7 +313,7 @@ def check_faint_state(bot, chat_id, battle_id):
             db.add_badge(b["player_id"], f"{leader['icon']} {leader['badge']}")
             b["state"] = "ended"
             player_mention = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
-            win_text = f"*{escape_md(b['log'].strip())}*\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n🏅 *You earned the {leader['icon']} {escape_md(leader['badge'])}*\\!"
+            win_text = f"{escape_md(b['log'].strip())}\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n🏅 *You earned the {leader['icon']} {escape_md(leader['badge'])}*\\!"
             try: bot.edit_message_text(win_text, chat_id, battle_id, parse_mode="MarkdownV2")
             except: pass
             return True
@@ -319,7 +327,7 @@ def check_faint_state(bot, chat_id, battle_id):
     if player_poke["hp"] <= 0:
         if all(p["hp"] <= 0 for p in b["player_team"]):
             b["state"] = "ended"
-            loss_text = f"*{escape_md(b['log'].strip())}*\n\n❌ *All your Pokémon fainted\\. You whited out\\!*"
+            loss_text = f"{escape_md(b['log'].strip())}\n\n❌ *All your Pokémon fainted\\. You whited out\\!*"
             try: bot.edit_message_text(loss_text, chat_id, battle_id, parse_mode="MarkdownV2")
             except: pass
             return True
@@ -336,29 +344,18 @@ def execute_first_turn(bot, chat_id, battle_id, player_action, player_val):
 
     ai_action, ai_val = get_ai_action(b)
 
-    p_speed = b["player_team"][b["player_idx"]]["spd"]
-    a_speed = b["ai_team"][b["ai_idx"]]["spd"]
-
-    p_act_tuple = ("switch_player", player_val) if player_action == "switch" else ("player", player_val)
-    a_act_tuple = ("switch_ai", ai_val) if ai_action == "switch" else ("ai", ai_val)
-
+    # In this authentic engine, the player clicks the button, so the player always strikes first in this UI phase.
     if player_action == "switch":
-        order = [p_act_tuple, a_act_tuple]
-    elif ai_action == "switch":
-        order = [a_act_tuple, p_act_tuple]
-    elif p_speed >= a_speed:
-        order = [p_act_tuple, a_act_tuple]
+        resolve_action(b, "switch_player", player_val)
     else:
-        order = [a_act_tuple, p_act_tuple]
-
-    b["turn_order"] = order
-
-    # Execute #1 Action
-    resolve_action(b, order[0][0], order[0][1])
+        resolve_action(b, "player", player_val)
 
     if check_faint_state(bot, chat_id, battle_id): return 
 
-    # Set waiting state - player must wait for AI
+    # Save AI move for the second phase
+    b["ai_queued_action"] = ("switch_ai", ai_val) if ai_action == "switch" else ("ai", ai_val)
+
+    # Set waiting state - Koga is thinking!
     b["state"] = "waiting"
     render_gym_ui(bot, chat_id, battle_id)
 
@@ -369,8 +366,8 @@ def execute_second_turn(bot, chat_id, battle_id):
     b = gym_battles.get(battle_id)
     if not b or b["state"] == "ended": return
     
-    # Execute #2 Action
-    resolve_action(b, b["turn_order"][1][0], b["turn_order"][1][1])
+    action_type, action_val = b.pop("ai_queued_action")
+    resolve_action(b, action_type, action_val)
 
     if check_faint_state(bot, chat_id, battle_id): return
 
@@ -385,8 +382,6 @@ def setup_gym_battle(bot, call, leader_key, user_id, chat_id, battle_id):
         
         player_team = [build_mock_pokemon(n) for n in player_roster]
         ai_team = [build_mock_pokemon(n) for n in leader["team"]]
-        
-        # Fair and balanced authentic scaling without arbitrary 2x multipliers
         
         gym_battles[battle_id] = {
             "player_id": user_id, "player_name": clean_name(call.from_user.first_name),
@@ -465,11 +460,11 @@ def handle_gym_callback(bot, call):
     if not b: return bot.answer_callback_query(call.id, "Battle expired.")
     if call.from_user.id != b["player_id"]: return bot.answer_callback_query(call.id, "❌ Not your battle!", show_alert=True)
     
-    if b["state"] == "waiting": return bot.answer_callback_query(call.id, "⏳ Waiting for Gym Leader...", show_alert=True)
+    if b["state"] == "waiting": return bot.answer_callback_query(call.id, "⏳ Waiting for Gym Leader...", show_alert=False)
 
     now = time.time()
     if now - b.get("last_edit", 0) < 1.0:
-        return bot.answer_callback_query(call.id, "⏳ Too fast!", show_alert=True)
+        return bot.answer_callback_query(call.id, "⏳ Too fast!", show_alert=False)
     b["last_edit"] = now
     bot.answer_callback_query(call.id, "")
 
@@ -489,7 +484,7 @@ def handle_gym_callback(bot, call):
         if b["state"] == "force_switch":
             b["player_idx"] = poke_idx
             b["state"] = "menu"
-            b["log"] = f"You sent out {b['player_team'][poke_idx]['name']}!"
+            b["log"] = f"🔄 You sent out {b['player_team'][poke_idx]['name']}!\n"
             render_gym_ui(bot, call.message.chat.id, battle_id)
         else:
             execute_first_turn(bot, call.message.chat.id, battle_id, "switch", poke_idx)
