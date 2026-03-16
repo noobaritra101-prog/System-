@@ -139,7 +139,7 @@ def generate_debug_ui(active_hunts):
     )
     return text, kb
 
-def send_logs(bot, chat_id, edit_msg_id=None, reply_to_id=None):
+def send_logs(bot, message, edit_msg_id=None):
     try:
         with open("bot.log", "r") as f:
             lines = f.readlines()
@@ -155,23 +155,23 @@ def send_logs(bot, chat_id, edit_msg_id=None, reply_to_id=None):
     )
     
     if edit_msg_id:
-        try: bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=kb, parse_mode="MarkdownV2")
+        try: bot.edit_message_text(text, message.chat.id, edit_msg_id, reply_markup=kb, parse_mode="MarkdownV2")
         except: pass
     else: 
-        safe_send(bot, chat_id, text, reply_markup=kb, reply_to_id=reply_to_id)
+        bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
 
 def handle_admin_callback(bot, call, active_hunts=None):
     if call.data == "log_refresh":
         if not is_owner(bot, call): return True
         bot.answer_callback_query(call.id, "Refreshing logs...")
-        send_logs(bot, call.message.chat.id, edit_msg_id=call.message.message_id)
+        send_logs(bot, call.message, edit_msg_id=call.message.message_id)
         return True
         
     elif call.data == "log_delete":
         if not is_owner(bot, call): return True
         open("bot.log", "w").close()
         bot.answer_callback_query(call.id, "Logs Deleted!", show_alert=True)
-        send_logs(bot, call.message.chat.id, edit_msg_id=call.message.message_id)
+        send_logs(bot, call.message, edit_msg_id=call.message.message_id)
         return True
         
     elif call.data == "debug_refresh":
@@ -270,73 +270,76 @@ def register_admin_handlers(bot, active_hunts):
         if not is_owner(bot, message): return
         
         if not message.reply_to_message or not message.reply_to_message.photo:
-            return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to an image with /upload <LeaderName>"), reply_to_id=message.message_id)
+            return bot.reply_to(message, escape_md("⚠️ Please reply to an image with /upload <LeaderName>"), parse_mode="MarkdownV2")
         
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            return safe_send(bot, message.chat.id, escape_md("⚠️ Format: /upload Brock"), reply_to_id=message.message_id)
+            return bot.reply_to(message, escape_md("⚠️ Format: /upload Brock"), parse_mode="MarkdownV2")
             
         leader_name = args[1].strip().title()
         
         file_id = message.reply_to_message.photo[-1].file_id 
         
         db.set_gym_image(leader_name, file_id)
-        safe_send(bot, message.chat.id, escape_md(f"✅ Successfully saved the image to the database for Gym Leader {leader_name}!"), reply_to_id=message.message_id)
+        bot.reply_to(message, escape_md(f"✅ Successfully saved the image to the database for Gym Leader {leader_name}!"), parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["delimage", "delupload"])
     def cmd_delimage(message):
         if not is_owner(bot, message): return
         args = message.text.split(maxsplit=1)
         if len(args) < 2:
-            return safe_send(bot, message.chat.id, escape_md("⚠️ Format: /delimage <Name>"), reply_to_id=message.message_id)
+            return bot.reply_to(message, escape_md("⚠️ Format: /delimage <Name>"), parse_mode="MarkdownV2")
         
         target = args[1].strip()
         db.delete_gym_image(target)
-        safe_send(bot, message.chat.id, escape_md(f"🗑️ Successfully deleted '{target}' from the Gym images database!"), reply_to_id=message.message_id)
+        bot.reply_to(message, escape_md(f"🗑️ Successfully deleted '{target}' from the Gym images database!"), parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["upload_s", "uploads"])
     def cmd_upload_s(message):
         if not is_owner(bot, message): return
         
-        with db.get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT leader_name FROM gym_images")
-                rows = cur.fetchall()
+        try:
+            with db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT leader_name FROM gym_images")
+                    rows = cur.fetchall()
+                    
+            if not rows:
+                return bot.reply_to(message, escape_md("⚠️ No Gym Leader images have been uploaded to the database yet."), parse_mode="MarkdownV2")
                 
-        if not rows:
-            return safe_send(bot, message.chat.id, escape_md("⚠️ No Gym Leader images have been uploaded to the database yet."), reply_to_id=message.message_id)
-            
-        text = "🖼 *Uᴘʟᴏᴀᴅᴇᴅ Gʏᴍ Iᴍᴀɢᴇs*\n━━━━━━━━━━━━━━\n"
-        for r in rows:
-            text += f"✅ {escape_md(r[0])}\n"
-            
-        safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
+            text = "🖼 *Uᴘʟᴏᴀᴅᴇᴅ Gʏᴍ Iᴍᴀɢᴇs*\n━━━━━━━━━━━━━━\n"
+            for r in rows:
+                text += f"\\- {escape_md(r[0])}\n"
+                
+            bot.reply_to(message, text, parse_mode="MarkdownV2")
+        except Exception as e:
+            bot.reply_to(message, f"Database Error: {e}")
 
     @bot.message_handler(commands=["lock_gym"])
     def cmd_lock_gym(message):
         if not is_owner(bot, message): return
         import gym
         gym.GYM_LOCKED = True
-        safe_send(bot, message.chat.id, escape_md("🔒 The Pokémon League Gyms are now LOCKED! (Players blocked)\n\n*(Note: As the Owner, you can still bypass this lock and battle freely!)*"), reply_to_id=message.message_id)
+        bot.reply_to(message, escape_md("🔒 The Pokémon League Gyms are now LOCKED! (Players blocked)\n\n*(Note: As the Owner, you can still bypass this lock and battle freely!)*"), parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["unlock_gym"])
     def cmd_unlock_gym(message):
         if not is_owner(bot, message): return
         import gym
         gym.GYM_LOCKED = False
-        safe_send(bot, message.chat.id, escape_md("🔓 The Pokémon League Gyms are now UNLOCKED! (Players can play)"), reply_to_id=message.message_id)
+        bot.reply_to(message, escape_md("🔓 The Pokémon League Gyms are now UNLOCKED! (Players can play)"), parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["reset_badges"])
     def cmd_reset_badges(message):
         if not is_owner(bot, message): return
         db.reset_all_badges()
-        safe_send(bot, message.chat.id, escape_md("🚨 SYSTEM OVERRIDE: All Gym Badges have been wiped from every user in the database!"), reply_to_id=message.message_id)
+        bot.reply_to(message, escape_md("🚨 SYSTEM OVERRIDE: All Gym Badges have been wiped from every user in the database!"), parse_mode="MarkdownV2")
     # ========================================================
 
     @bot.message_handler(commands=["update"])
     def cmd_update(message):
         if not is_owner(bot, message): return
-        msg = safe_send(bot, message.chat.id, "🔄 *Pᴜʟʟɪɴɢ Lᴀᴛᴇsᴛ Gɪᴛ Uᴘᴅᴀᴛᴇs\\.\\.\\.*", reply_to_id=message.message_id)
+        msg = bot.reply_to(message, "🔄 *Pᴜʟʟɪɴɢ Lᴀᴛᴇsᴛ Gɪᴛ Uᴘᴅᴀᴛᴇs\\.\\.\\.*", parse_mode="MarkdownV2")
         try:
             result = subprocess.run(["git", "pull"], capture_output=True, text=True)
             output = escape_md(result.stdout[-1000:])
@@ -349,7 +352,7 @@ def register_admin_handlers(bot, active_hunts):
     @bot.message_handler(commands=["log", "logs"])
     def command_log(message):
         if not is_owner(bot, message): return
-        send_logs(bot, message.chat.id, reply_to_id=message.message_id)
+        send_logs(bot, message)
 
     @bot.message_handler(commands=["files"])
     def cmd_files(message):
@@ -361,7 +364,7 @@ def register_admin_handlers(bot, active_hunts):
             types.InlineKeyboardButton("⚔️ Sᴛᴀᴛs DB", callback_data="getfile_battle_stats"),
             types.InlineKeyboardButton("🏢 Gʀᴏᴜᴘs DB", callback_data="getfile_groups")
         )
-        safe_send(bot, message.chat.id, "📁 *Dᴀᴛᴀʙᴀsᴇ Exᴘᴏʀᴛ Mᴇɴᴜ*\nSᴇʟᴇᴄᴛ ᴀ ᴛᴀʙʟᴇ ᴛᴏ ᴅᴏᴡɴʟᴏᴀᴅ ᴀs CSV:", reply_to_id=message.message_id, reply_markup=kb)
+        bot.reply_to(message, "📁 *Dᴀᴛᴀʙᴀsᴇ Exᴘᴏʀᴛ Mᴇɴᴜ*\nSᴇʟᴇᴄᴛ ᴀ ᴛᴀʙʟᴇ ᴛᴏ ᴅᴏᴡɴʟᴏᴀᴅ ᴀs CSV:", reply_markup=kb, parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["modules", "execute", "exec"])
     def cmd_execute(message):
@@ -372,15 +375,15 @@ def register_admin_handlers(bot, active_hunts):
                 text += f"📦 *Mᴏᴅᴜʟᴇ:* `{mod}`\n_{escape_md(mdata['description'])}_\n"
                 for act, adata in mdata["actions"].items(): text += f"  \\- `/execute {mod} {act}{escape_md(' '+adata['args'] if adata['args'] else '')}`\n"
                 text += "\n"
-            return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
+            return bot.reply_to(message, text, parse_mode="MarkdownV2")
 
         parts = message.text.split(maxsplit=3)
-        if len(parts) < 3: return safe_send(bot, message.chat.id, escape_md("⚠️ Format: /execute <module> <action>"), reply_to_id=message.message_id)
+        if len(parts) < 3: return bot.reply_to(message, escape_md("⚠️ Format: /execute <module> <action>"), parse_mode="MarkdownV2")
         module, action = parts[1].lower(), parts[2].lower()
         arguments = parts[3] if len(parts) > 3 else ""
 
         if module == "world" and action == "stats":
-            msg = safe_send(bot, message.chat.id, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", reply_to_id=message.message_id)
+            msg = bot.reply_to(message, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", parse_mode="MarkdownV2")
             play_loading_animation(bot, message.chat.id, msg.message_id)
             try:
                 users = db.get_all_users()
@@ -394,7 +397,7 @@ def register_admin_handlers(bot, active_hunts):
             except Exception as e: bot.edit_message_text(escape_md(f"❌ Error: {e}"), message.chat.id, msg.message_id, parse_mode="MarkdownV2")
 
         elif module == "world" and action == "find":
-            msg = safe_send(bot, message.chat.id, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", reply_to_id=message.message_id)
+            msg = bot.reply_to(message, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", parse_mode="MarkdownV2")
             play_loading_animation(bot, message.chat.id, msg.message_id)
             try:
                 users = db.get_all_users()
@@ -419,7 +422,7 @@ def register_admin_handlers(bot, active_hunts):
         elif module == "world" and action == "spawn":
             poke_name = arguments.strip().lower()
             poke_id = get_pokemon_id_sync(poke_name)
-            if not poke_id: return safe_send(bot, message.chat.id, f"❌ Could not find data for *{escape_md(poke_name.title())}*\\.", reply_to_id=message.message_id)
+            if not poke_id: return bot.reply_to(message, f"❌ Could not find data for *{escape_md(poke_name.title())}*\\.", parse_mode="MarkdownV2")
             img_url = official_shiny_artwork_url(poke_id)
             cap = f"🚨 *A WILD EVENT APPEARED\\!* 🚨\n\nA wild ✨ *{escape_md(poke_name.title())}* has spawned in the area\\!\n\n_First person to click catch claims it\\!_"
             kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔴 Catch", callback_data=f"gcatch_{poke_id}_{poke_name.title()[:16]}"))
@@ -428,47 +431,47 @@ def register_admin_handlers(bot, active_hunts):
                 timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(bot, sent.message_id, message.chat.id, poke_name, active_hunts))
                 timer.start()
                 active_hunts[sent.message_id] = {"user_id": "ANY", "chat_id": message.chat.id, "start_time": time.time(), "timer": timer, "name": poke_name}
-            except: safe_send(bot, message.chat.id, escape_md("❌ Failed to spawn the event Pokémon."), reply_to_id=message.message_id)
+            except: bot.reply_to(message, escape_md("❌ Failed to spawn the event Pokémon."), parse_mode="MarkdownV2")
 
         elif module == "user" and action == "stats":
             target_id = message.reply_to_message.from_user.id if message.reply_to_message else (int(arguments) if arguments.isdigit() else None)
             target_name = clean_name(message.reply_to_message.from_user.first_name) if message.reply_to_message else "Trainer"
-            if not target_id: return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to a user or provide their User ID."), reply_to_id=message.message_id)
+            if not target_id: return bot.reply_to(message, escape_md("⚠️ Please reply to a user or provide their User ID."), parse_mode="MarkdownV2")
             user_data = db.get_user(target_id)
-            if not user_data: return safe_send(bot, message.chat.id, escape_md("❌ This user is not registered in the database."), reply_to_id=message.message_id)
+            if not user_data: return bot.reply_to(message, escape_md("❌ This user is not registered in the database."), parse_mode="MarkdownV2")
             tries, region = user_data[1], user_data[2]
             text = f"👤 *Trainer Database Record*\n━━━━━━━━━━━━━━\n🆔 *ID:* `{target_id}`\n👤 *Name:* [{escape_md(target_name)}](tg://user?id={target_id})\n🌍 *Region:* {escape_md(region)}\n🔋 *Scouts Left:* {tries}/2500\n🎒 *Total Pokémon:* {len(db.list_user_pokemon_names(target_id))}\n"
-            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
+            bot.reply_to(message, text, parse_mode="MarkdownV2")
 
         elif module == "admin" and action == "givemany":
-            if not message.reply_to_message: return safe_send(bot, message.chat.id, escape_md("⚠️ You must reply to a user's message to give them Pokémon!"), reply_to_id=message.message_id)
+            if not message.reply_to_message: return bot.reply_to(message, escape_md("⚠️ You must reply to a user's message to give them Pokémon!"), parse_mode="MarkdownV2")
             poke_list = [p.strip().title() for p in arguments.split(",") if p.strip()]
-            if not poke_list: return safe_send(bot, message.chat.id, escape_md("⚠️ Please provide a comma-separated list of Pokémon."), reply_to_id=message.message_id)
+            if not poke_list: return bot.reply_to(message, escape_md("⚠️ Please provide a comma-separated list of Pokémon."), parse_mode="MarkdownV2")
             target_id = message.reply_to_message.from_user.id
             db.add_user_if_new(target_id)
             for p in poke_list: db.add_caught_pokemon(target_id, p, "Admin Gift")
-            safe_send(bot, message.chat.id, f"🎁 Successfully gave {len(poke_list)} Pokémon to [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={target_id})\\!\n\n_{escape_md(', '.join(poke_list))}_", reply_to_id=message.message_id)
+            bot.reply_to(message, f"🎁 Successfully gave {len(poke_list)} Pokémon to [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={target_id})\\!\n\n_{escape_md(', '.join(poke_list))}_", parse_mode="MarkdownV2")
             
         elif module == "admin" and action == "upload":
             if not message.reply_to_message or not message.reply_to_message.photo:
-                return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to an image with /execute admin upload <LeaderName>"), reply_to_id=message.message_id)
+                return bot.reply_to(message, escape_md("⚠️ Please reply to an image with /execute admin upload <LeaderName>"), parse_mode="MarkdownV2")
             
             leader_name = arguments.strip().title()
-            if not leader_name: return safe_send(bot, message.chat.id, escape_md("⚠️ Format: /execute admin upload Brock"), reply_to_id=message.message_id)
+            if not leader_name: return bot.reply_to(message, escape_md("⚠️ Format: /execute admin upload Brock"), parse_mode="MarkdownV2")
             
             file_id = message.reply_to_message.photo[-1].file_id 
             db.set_gym_image(leader_name, file_id)
-            safe_send(bot, message.chat.id, escape_md(f"✅ Successfully saved the image to the database for Gym Leader {leader_name}!"), reply_to_id=message.message_id)
+            bot.reply_to(message, escape_md(f"✅ Successfully saved the image to the database for Gym Leader {leader_name}!"), parse_mode="MarkdownV2")
 
         elif module == "server" and action == "status":
-            msg = safe_send(bot, message.chat.id, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", reply_to_id=message.message_id)
+            msg = bot.reply_to(message, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", parse_mode="MarkdownV2")
             play_loading_animation(bot, message.chat.id, msg.message_id)
             bot.edit_message_text("🟢 *Sᴇʀᴠᴇʀ Oɴʟɪɴᴇ\\!*\n_Sᴜᴘᴀʙᴀsᴇ DB Cᴏɴɴᴇᴄᴛᴇᴅ_ ✅", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["restore"])
     def cmd_restore(message):
         if not is_owner(bot, message): return
-        safe_send(bot, message.chat.id, escape_md("📥 Send me the old SQLite (.db) file to migrate it into the cloud PostgreSQL database. Max size: 20MB."), reply_to_id=message.message_id)
+        bot.reply_to(message, escape_md("📥 Send me the old SQLite (.db) file to migrate it into the cloud PostgreSQL database. Max size: 20MB."), parse_mode="MarkdownV2")
 
     @bot.message_handler(content_types=["document"])
     def handle_restore_file(message):
@@ -508,7 +511,7 @@ def register_admin_handlers(bot, active_hunts):
     @bot.message_handler(commands=["backup"])
     def cmd_backup(message):
         if not is_owner(bot, message): return
-        safe_send(bot, message.chat.id, escape_md("☁️ You are on a cloud database now! Backups are handled automatically via Supabase."), reply_to_id=message.message_id)
+        bot.reply_to(message, escape_md("☁️ You are on a cloud database now! Backups are handled automatically via Supabase."), parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["export"])
     def cmd_export(message):
@@ -527,46 +530,46 @@ def register_admin_handlers(bot, active_hunts):
     @bot.message_handler(commands=["give"])
     def cmd_give(message):
         if not is_owner(bot, message): return
-        if not message.reply_to_message: return safe_send(bot, message.chat.id, "⚠️ *Please reply to a user's message to give them a Pokémon\\!*", reply_to_id=message.message_id)
+        if not message.reply_to_message: return bot.reply_to(message, "⚠️ *Please reply to a user's message to give them a Pokémon\\!*", parse_mode="MarkdownV2")
         args = message.text.split(maxsplit=1)
-        if len(args) < 2: return safe_send(bot, message.chat.id, "⚠️ *Format:* `/give <pokemon_name>`", reply_to_id=message.message_id)
+        if len(args) < 2: return bot.reply_to(message, "⚠️ *Format:* `/give <pokemon_name>`", parse_mode="MarkdownV2")
         pokemon_name = args[1].strip().title()
         db.add_caught_pokemon(message.reply_to_message.from_user.id, pokemon_name, "Gift")
-        safe_send(bot, message.chat.id, f"🎁 Successfully gave *{escape_md(pokemon_name)}* to [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
+        bot.reply_to(message, f"🎁 Successfully gave *{escape_md(pokemon_name)}* to [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["take"])
     def cmd_take(message):
         if not is_owner(bot, message): return
-        if not message.reply_to_message: return safe_send(bot, message.chat.id, "⚠️ *Please reply to a user's message to take their Pokémon\\!*", reply_to_id=message.message_id)
+        if not message.reply_to_message: return bot.reply_to(message, "⚠️ *Please reply to a user's message to take their Pokémon\\!*", parse_mode="MarkdownV2")
         args = message.text.split(maxsplit=1)
-        if len(args) < 2: return safe_send(bot, message.chat.id, "⚠️ *Format:* `/take <pokemon_name>`", reply_to_id=message.message_id)
+        if len(args) < 2: return bot.reply_to(message, "⚠️ *Format:* `/take <pokemon_name>`", parse_mode="MarkdownV2")
         pokemon_name = args[1].strip().title()
-        if db.delete_pokemon(message.reply_to_message.from_user.id, pokemon_name): safe_send(bot, message.chat.id, f"🗑️ Successfully took *{escape_md(pokemon_name)}* from [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
-        else: safe_send(bot, message.chat.id, f"❌ [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id}) doesn't own a *{escape_md(pokemon_name)}*\\.", reply_to_id=message.message_id)
+        if db.delete_pokemon(message.reply_to_message.from_user.id, pokemon_name): bot.reply_to(message, f"🗑️ Successfully took *{escape_md(pokemon_name)}* from [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", parse_mode="MarkdownV2")
+        else: bot.reply_to(message, f"❌ [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id}) doesn't own a *{escape_md(pokemon_name)}*\\.", parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["reset"])
     def cmd_reset(message):
         if not is_owner(bot, message): return
-        if not message.reply_to_message: return safe_send(bot, message.chat.id, "⚠️ *Please reply to a user's message to reset their tries\\!*", reply_to_id=message.message_id)
+        if not message.reply_to_message: return bot.reply_to(message, "⚠️ *Please reply to a user's message to reset their tries\\!*", parse_mode="MarkdownV2")
         db.reset_user(message.reply_to_message.from_user.id)
-        safe_send(bot, message.chat.id, f"🔄 Successfully reset scouts for [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", reply_to_id=message.message_id)
+        bot.reply_to(message, f"🔄 Successfully reset scouts for [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["plist"])
     def cmd_plist(message):
         if not is_owner(bot, message): return
         parts = message.text.split(maxsplit=1)
-        if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /plist <user_id>"), reply_to_id=message.message_id)
+        if len(parts) < 2: return bot.reply_to(message, escape_md("📝 Usage: /plist <user_id>"), parse_mode="MarkdownV2")
         try:
             uid = int(parts[1])
             text, kb = generate_pokemon_list_ui(uid, 0, action_prefix="plist", is_admin=True)
-            safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
-        except Exception as e: safe_send(bot, message.chat.id, escape_md(f"Error: {str(e)}"), reply_to_id=message.message_id)
+            bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
+        except Exception as e: bot.reply_to(message, escape_md(f"Error: {str(e)}"), parse_mode="MarkdownV2")
 
     # ================== BROADCAST & DELETE ==================
     @bot.message_handler(commands=["bcast", "gcast"])
     def cmd_broadcasts(message):
         if not is_owner(bot, message): return
-        if not message.reply_to_message: return safe_send(bot, message.chat.id, escape_md("⚠️ Please reply to a message to forward it."), reply_to_id=message.message_id)
+        if not message.reply_to_message: return bot.reply_to(message, escape_md("⚠️ Please reply to a message to forward it."), parse_mode="MarkdownV2")
         
         global LAST_BROADCAST_MSGS
         LAST_BROADCAST_MSGS.clear() 
@@ -574,7 +577,7 @@ def register_admin_handlers(bot, active_hunts):
         targets = db.get_all_groups() if message.text.startswith("/gcast") else db.get_all_users()
         success, failed = 0, 0
         
-        status_msg = safe_send(bot, message.chat.id, escape_md("⏳ Broadcasting message..."), reply_to_id=message.message_id)
+        status_msg = bot.reply_to(message, escape_md("⏳ Broadcasting message..."), parse_mode="MarkdownV2")
         
         for target_id in targets:
             try:
@@ -595,9 +598,9 @@ def register_admin_handlers(bot, active_hunts):
         
         global LAST_BROADCAST_MSGS
         if not LAST_BROADCAST_MSGS:
-            return safe_send(bot, message.chat.id, escape_md("⚠️ No recent broadcast found in memory to delete."), reply_to_id=message.message_id)
+            return bot.reply_to(message, escape_md("⚠️ No recent broadcast found in memory to delete."), parse_mode="MarkdownV2")
         
-        status_msg = safe_send(bot, message.chat.id, escape_md(f"🗑️ Deleting {len(LAST_BROADCAST_MSGS)} messages..."), reply_to_id=message.message_id)
+        status_msg = bot.reply_to(message, escape_md(f"🗑️ Deleting {len(LAST_BROADCAST_MSGS)} messages..."), parse_mode="MarkdownV2")
         
         success, failed = 0, 0
         for chat_id, msg_id in LAST_BROADCAST_MSGS:
@@ -621,25 +624,23 @@ def register_admin_handlers(bot, active_hunts):
         cmd = message.text.split()[0].lower()
         if cmd == "/gcs":
             text, kb = generate_gcs_ui(bot, 0)
-            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
         elif cmd == "/allusers":
             users = db.get_all_users()
             text = f"👥 *Users \\({len(users)}\\):*\n\n" + "\n".join(f"\\- `{uid}`" for uid in users[:50]) + (f"\n\n_\\.\\.\\.and {len(users)-50} more\\._" if len(users)>50 else "")
-            safe_send(bot, message.chat.id, text if users else escape_md("No registered trainers."), reply_to_id=message.message_id)
+            bot.reply_to(message, text if users else escape_md("No registered trainers."), parse_mode="MarkdownV2")
         elif cmd == "/leave":
             try:
                 bot.leave_chat(int(message.text.split()[1]))
                 db.remove_group(int(message.text.split()[1]))
-                safe_send(bot, message.chat.id, escape_md("✅ Left group."), reply_to_id=message.message_id)
-            except: safe_send(bot, message.chat.id, escape_md("📝 Usage: /leave <group_id>"), reply_to_id=message.message_id)
+                bot.reply_to(message, escape_md("✅ Left group."), parse_mode="MarkdownV2")
+            except: bot.reply_to(message, escape_md("📝 Usage: /leave <group_id>"), parse_mode="MarkdownV2")
         elif cmd == "/debug":
             text, kb = generate_debug_ui(active_hunts)
-            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
         elif cmd == "/clearhunts":
             for hunt in active_hunts.values(): hunt["timer"].cancel()
             active_hunts.clear()
             try: pvp.pvp_battles.clear()
             except: pass
-            try: trade.active_trades.clear()
-            except: pass
-            safe_send(bot, message.chat.id, escape_md("🧹 All active hunts cleared."), reply_to_id=message.message_id)
+            bot.reply_to(message, escape_md("🧹 All active hunts cleared."), parse_mode="MarkdownV2")
