@@ -117,7 +117,6 @@ def get_conn():
     conn = None
     try:
         conn = db_pool.getconn()
-        # Ping the DB to see if the connection went stale
         with conn.cursor() as cur:
             cur.execute("SELECT 1")
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
@@ -345,6 +344,13 @@ def get_gym_image(leader_name):
             cur.execute("SELECT file_id FROM gym_images WHERE leader_name = %s", (leader_name,))
             row = cur.fetchone()
             return row[0] if row else None
+
+def delete_gym_image(leader_name):
+    """Deletes a faulty image entry using ILIKE to ignore case"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM gym_images WHERE leader_name ILIKE %s", (leader_name,))
+            conn.commit()
 
 def reset_all_badges():
     with get_conn() as conn:
