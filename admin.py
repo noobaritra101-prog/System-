@@ -139,7 +139,6 @@ def generate_debug_ui(active_hunts):
     )
     return text, kb
 
-# 🛠️ FIXED: send_logs now accepts edit_msg_id OR reply_to_id properly
 def send_logs(bot, chat_id, edit_msg_id=None, reply_to_id=None):
     try:
         with open("bot.log", "r") as f:
@@ -284,6 +283,17 @@ def register_admin_handlers(bot, active_hunts):
         db.set_gym_image(leader_name, file_id)
         safe_send(bot, message.chat.id, escape_md(f"✅ Successfully saved the image to the database for Gym Leader {leader_name}!"), reply_to_id=message.message_id)
 
+    @bot.message_handler(commands=["delimage", "delupload"])
+    def cmd_delimage(message):
+        if not is_owner(bot, message): return
+        args = message.text.split(maxsplit=1)
+        if len(args) < 2:
+            return safe_send(bot, message.chat.id, escape_md("⚠️ Format: /delimage <Name>"), reply_to_id=message.message_id)
+        
+        target = args[1].strip()
+        db.delete_gym_image(target)
+        safe_send(bot, message.chat.id, escape_md(f"🗑️ Successfully deleted '{target}' from the Gym images database!"), reply_to_id=message.message_id)
+
     @bot.message_handler(commands=["upload_s", "uploads"])
     def cmd_upload_s(message):
         if not is_owner(bot, message): return
@@ -339,7 +349,6 @@ def register_admin_handlers(bot, active_hunts):
     @bot.message_handler(commands=["log", "logs"])
     def command_log(message):
         if not is_owner(bot, message): return
-        # 🛠️ FIXED: Calls send_logs cleanly with reply_to_id
         send_logs(bot, message.chat.id, reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["files"])
