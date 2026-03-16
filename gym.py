@@ -8,7 +8,6 @@ import database as db
 from config import logger, OWNER_ID
 from api_utils import escape_md
 from commands import clean_name, to_small_caps, safe_send
-from pvp import TYPE_CHART, TYPE_EMOJIS, get_hp_bar, format_types, get_type_multiplier, apply_nature, STATUS_EMOJIS
 from gym_data import GYM_LEADERS, ASH_ROSTER, AUTHENTIC_STATS, AUTHENTIC_MOVES
 
 GYM_LOCKED = False  
@@ -71,6 +70,45 @@ def build_mock_pokemon(name):
     p["moves"] = AUTHENTIC_MOVES.get(name, [{"name": "Tackle", "type": "Normal", "power": 40, "acc": 100}])
     return p
 
+# --- TYPE CHART UTILS ---
+TYPE_CHART = {
+    "Normal": {"weak": ["Fighting"], "resist": [], "immune": ["Ghost"]},
+    "Fire": {"weak": ["Water", "Ground", "Rock"], "resist": ["Fire", "Grass", "Ice", "Bug", "Steel", "Fairy"], "immune": []},
+    "Water": {"weak": ["Electric", "Grass"], "resist": ["Fire", "Water", "Ice", "Steel"], "immune": []},
+    "Grass": {"weak": ["Fire", "Ice", "Poison", "Flying", "Bug"], "resist": ["Water", "Grass", "Electric", "Ground"], "immune": []},
+    "Electric": {"weak": ["Ground"], "resist": ["Electric", "Flying", "Steel"], "immune": []},
+    "Ice": {"weak": ["Fire", "Fighting", "Rock", "Steel"], "resist": ["Ice"], "immune": []},
+    "Fighting": {"weak": ["Flying", "Psychic", "Fairy"], "resist": ["Bug", "Rock", "Dark"], "immune": []},
+    "Poison": {"weak": ["Ground", "Psychic"], "resist": ["Grass", "Fighting", "Poison", "Bug", "Fairy"], "immune": []},
+    "Ground": {"weak": ["Water", "Grass", "Ice"], "resist": ["Poison", "Rock"], "immune": ["Electric"]},
+    "Flying": {"weak": ["Electric", "Ice", "Rock"], "resist": ["Grass", "Fighting", "Bug"], "immune": ["Ground"]},
+    "Psychic": {"weak": ["Bug", "Ghost", "Dark"], "resist": ["Fighting", "Psychic"], "immune": []},
+    "Bug": {"weak": ["Fire", "Flying", "Rock"], "resist": ["Grass", "Fighting", "Ground"], "immune": []},
+    "Rock": {"weak": ["Water", "Grass", "Fighting", "Ground", "Steel"], "resist": ["Normal", "Fire", "Poison", "Flying"], "immune": []},
+    "Ghost": {"weak": ["Ghost", "Dark"], "resist": ["Poison", "Bug"], "immune": ["Normal", "Fighting"]},
+    "Dragon": {"weak": ["Ice", "Dragon", "Fairy"], "resist": ["Fire", "Water", "Grass", "Electric"], "immune": []},
+    "Dark": {"weak": ["Fighting", "Bug", "Fairy"], "resist": ["Ghost", "Dark"], "immune": ["Psychic"]},
+    "Steel": {"weak": ["Fire", "Fighting", "Ground"], "resist": ["Normal", "Grass", "Ice", "Flying", "Psychic", "Bug", "Rock", "Dragon", "Steel", "Fairy"], "immune": ["Poison"]},
+    "Fairy": {"weak": ["Poison", "Steel"], "resist": ["Fighting", "Bug", "Dark"], "immune": ["Dragon"]}
+}
+
+def get_type_multiplier(attack_type, defend_types_str):
+    mult = 1.0
+    for def_type in defend_types_str.split('/'):
+        dt = TYPE_CHART.get(def_type, {})
+        if attack_type in dt.get("immune", []): return 0.0
+        if attack_type in dt.get("weak", []): mult *= 2.0
+        if attack_type in dt.get("resist", []): mult *= 0.5
+    return mult
+
+def get_hp_bar(hp, max_hp):
+    if max_hp <= 0: return "░" * 14
+    bars = int((hp / max_hp) * 14)
+    return ("█" * bars) + ("░" * (14 - bars))
+
+def get_type_display(type_str):
+    return type_str # Stripped out emojis perfectly
+
 # --- SMART AI LOGIC ---
 def get_ai_action(b):
     ai_team = b["ai_team"]
@@ -120,7 +158,7 @@ def render_main_menu(bot, chat_id, uid, message_id=None, reply_to_id=None):
            types.InlineKeyboardButton("Kᴀʟᴏs", callback_data=f"gym_region_{uid}_Kalos"))
     kb.row(types.InlineKeyboardButton("Aʟᴏʟᴀ", callback_data=f"gym_region_{uid}_Alola"),
            types.InlineKeyboardButton("Gᴀʟᴀʀ", callback_data=f"gym_region_{uid}_Galar"))
-    kb.row(types.InlineKeyboardButton("⬅️ Bᴀᴄᴋ", callback_data=f"gym_close_{uid}"))
+    kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_close_{uid}"))
     
     if message_id:
         try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -133,23 +171,23 @@ def render_main_menu(bot, chat_id, uid, message_id=None, reply_to_id=None):
 
 def render_region_menu(bot, chat_id, message_id, uid, region):
     if region != "Kanto":
-        bot.answer_callback_query(message_id, "🚧 This region is currently under construction!", show_alert=True)
+        bot.answer_callback_query(message_id, "This region is currently under construction!", show_alert=True)
         return
 
     text = (
         f"✦━━━━━━━━━━━━━━━━✦\n"
         f"🏟 Kᴀɴᴛᴏ Gʏᴍ Cʜᴀʟʟᴇɴɢᴇ\n"
         f"✦━━━━━━━━━━━━━━━━✦\n\n"
-        f"🪨 Bᴏᴜʟᴅᴇʀ Bᴀᴅɢᴇ\n"
-        f"🌊 Cᴀsᴄᴀᴅᴇ Bᴀᴅɢᴇ\n"
-        f"⚡ Tʜᴜɴᴅᴇʀ Bᴀᴅɢᴇ\n"
-        f"🌈 Rᴀɪɴʙᴏᴡ Bᴀᴅɢᴇ\n"
-        f"☠️ Sᴏᴜʟ Bᴀᴅɢᴇ\n"
-        f"🔮 Mᴀʀsʜ Bᴀᴅɢᴇ\n"
-        f"🔥 Vᴏʟᴄᴀɴᴏ Bᴀᴅɢᴇ\n"
-        f"🌍 Eᴀʀᴛʜ Bᴀᴅɢᴇ\n\n"
+        f"Bᴏᴜʟᴅᴇʀ Bᴀᴅɢᴇ\n"
+        f"Cᴀsᴄᴀᴅᴇ Bᴀᴅɢᴇ\n"
+        f"Tʜᴜɴᴅᴇʀ Bᴀᴅɢᴇ\n"
+        f"Rᴀɪɴʙᴏᴡ Bᴀᴅɢᴇ\n"
+        f"Sᴏᴜʟ Bᴀᴅɢᴇ\n"
+        f"Mᴀʀsʜ Bᴀᴅɢᴇ\n"
+        f"Vᴏʟᴄᴀɴᴏ Bᴀᴅɢᴇ\n"
+        f"Eᴀʀᴛʜ Bᴀᴅɢᴇ\n\n"
         f"━━━━━━━━━━━━\n"
-        f"⚔️ Sᴇʟᴇᴄᴛ ᴀ Gʏᴍ Lᴇᴀᴅᴇʀ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ\\."
+        f"Sᴇʟᴇᴄᴛ ᴀ Gʏᴍ Lᴇᴀᴅᴇʀ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ\\."
     )
     
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -161,7 +199,7 @@ def render_region_menu(bot, chat_id, message_id, uid, region):
            types.InlineKeyboardButton("Sᴀʙʀɪɴᴀ", callback_data=f"gym_info_{uid}_Sabrina"))
     kb.row(types.InlineKeyboardButton("Bʟᴀɪɴᴇ", callback_data=f"gym_info_{uid}_Blaine"),
            types.InlineKeyboardButton("Gɪᴏᴠᴀɴɴɪ", callback_data=f"gym_info_{uid}_Giovanni"))
-    kb.row(types.InlineKeyboardButton("⬅ Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
+    kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
     
     try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
     except: 
@@ -178,18 +216,18 @@ def render_gym_info(bot, chat_id, message_id, uid, leader_key):
         f"🏟 *{escape_md(to_small_caps(leader['gym_name']))}*\n"
         f"✦━━━━━━━━━━━━━━━━✦\n\n"
         f"👤 Lᴇᴀᴅᴇʀ : {escape_md(to_small_caps(leader['name']))}\n"
-        f"🏅 Bᴀᴅɢᴇ  : {leader['icon']} {escape_md(to_small_caps(leader['badge']))}\n"
-        f"🧬 Tʏᴘᴇ   : {leader['icon']} {escape_md(to_small_caps(leader['type']))}\n\n"
+        f"🏅 Bᴀᴅɢᴇ  : {escape_md(to_small_caps(leader['badge']))}\n"
+        f"🧬 Tʏᴘᴇ   : {escape_md(to_small_caps(leader['type']))}\n\n"
         f"━━━━━━━━━━━━\n\n"
         f"🎮 Pᴏᴋᴇ́ᴍᴏɴ Tᴇᴀᴍ\n"
         f"{team_str}\n\n"
         f"━━━━━━━━━━━━\n"
-        f"⚔️ Dᴏ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ ᴛʜɪs ɢʏᴍ?"
+        f"Dᴏ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ ᴛʜɪs ɢʏᴍ?"
     )
     
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("✅ Cʜᴀʟʟᴇɴɢᴇ", callback_data=f"gym_start_{uid}_{leader_key}"),
-           types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"gym_region_{uid}_Kanto"))
+    kb.row(types.InlineKeyboardButton("Cʜᴀʟʟᴇɴɢᴇ", callback_data=f"gym_start_{uid}_{leader_key}"),
+           types.InlineKeyboardButton("Cᴀɴᴄᴇʟ", callback_data=f"gym_region_{uid}_Kanto"))
            
     file_id = db.get_gym_image(leader_key)
     try: bot.delete_message(chat_id, message_id)
@@ -199,11 +237,6 @@ def render_gym_info(bot, chat_id, message_id, uid, leader_key):
         try: bot.send_photo(chat_id, file_id, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
         except Exception: bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
     else: bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
-
-def get_type_display(type_str):
-    parts = type_str.split('/')
-    emojis = "".join([TYPE_EMOJIS.get(t, '') for t in parts])
-    return f"{type_str} {emojis}".strip()
 
 def render_gym_ui(bot, chat_id, battle_id):
     if battle_id not in gym_battles: return
@@ -223,7 +256,7 @@ def render_gym_ui(bot, chat_id, battle_id):
 
     ui_text = (
         f"{log_text}\n\n"
-        f"{leader['icon']} Gʏᴍ Lᴇᴀᴅᴇʀ {escape_md(leader['name'])}'s {escape_md(ai_poke['name'])}\n"
+        f"Gʏᴍ Lᴇᴀᴅᴇʀ {escape_md(leader['name'])}'s {escape_md(ai_poke['name'])}\n"
         f" \\[{ai_type_display}\\] Lv\\. 100  •  HP {int(ai_poke['hp'])}/{int(ai_poke['max_hp'])}\n"
         f"`{get_hp_bar(ai_poke['hp'], ai_poke['max_hp'])}`\n\n"
         f"Current turn: {player_mention_link} \\(Asʜ's Tᴇᴀᴍ\\)\n"
@@ -242,8 +275,8 @@ def render_gym_ui(bot, chat_id, battle_id):
         moves_block = ""
         move_buttons = []
         for i, m in enumerate(player_poke["moves"]):
-            m_type_display = escape_md(f"{m['type']} {TYPE_EMOJIS.get(m['type'], '')}".strip())
-            moves_block += f"\n *{escape_md(m['name'])} \\[{m_type_display}\\]*\n *Power: {m.get('power', 0)}, Accuracy: {m.get('acc', 100)}*\n"
+            m_type_display = escape_md(get_type_display(m['type']))
+            moves_block += f"\n {escape_md(m['name'])} \\[{m_type_display}\\]\n Power: {m.get('power', 0)}, Accuracy: {m.get('acc', 100)}\n"
             move_buttons.append(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"gym_move_{battle_id}_{i}"))
             
         ui_text += moves_block
@@ -253,19 +286,19 @@ def render_gym_ui(bot, chat_id, battle_id):
         else:
             for btn in move_buttons: kb.add(btn)
             
-        kb.row(types.InlineKeyboardButton("🔄 Sᴡɪᴛᴄʜ", callback_data=f"gym_swmenu_{battle_id}"),
-               types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"gym_run_{battle_id}"))
+        kb.row(types.InlineKeyboardButton("Sᴡɪᴛᴄʜ", callback_data=f"gym_swmenu_{battle_id}"),
+               types.InlineKeyboardButton("Rᴜɴ", callback_data=f"gym_run_{battle_id}"))
                
     elif b["state"] in ["switch_menu", "force_switch"]:
-        if b["state"] == "switch_menu": ui_text += f"\n\n🔄 *Wʜɪᴄʜ Pᴏᴋᴇ́ᴍᴏɴ Wɪʟʟ Yᴏᴜ Sᴡɪᴛᴄʜ Tᴏ?*\n"
-        else: ui_text += f"\n\n💀 *Cʜᴏᴏsᴇ A Pᴏᴋᴇ́ᴍᴏɴ Tᴏ Sᴇɴᴅ Oᴜᴛ\\!*\n"
+        if b["state"] == "switch_menu": ui_text += f"\n\n*Wʜɪᴄʜ Pᴏᴋᴇ́ᴍᴏɴ Wɪʟʟ Yᴏᴜ Sᴡɪᴛᴄʜ Tᴏ?*\n"
+        else: ui_text += f"\n\n*Cʜᴏᴏsᴇ A Pᴏᴋᴇ́ᴍᴏɴ Tᴏ Sᴇɴᴅ Oᴜᴛ\\!*\n"
             
-        btns = [types.InlineKeyboardButton(f"{p['name']}" if p['hp'] > 0 else f"✖️ {p['name']}", callback_data=f"gym_dosw_{battle_id}_{i}") for i, p in enumerate(b["player_team"])]
+        btns = [types.InlineKeyboardButton(f"{p['name']}" if p['hp'] > 0 else f"X {p['name']}", callback_data=f"gym_dosw_{battle_id}_{i}") for i, p in enumerate(b["player_team"])]
         for i in range(0, len(btns), 2):
             if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
             else: kb.add(btns[i])
             
-        if b["state"] == "switch_menu": kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"gym_back_{battle_id}"))
+        if b["state"] == "switch_menu": kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_back_{battle_id}"))
 
     elif b["state"] == "waiting":
         pass # Renders NO buttons so player must wait!
@@ -280,17 +313,17 @@ def resolve_action(b, actor, val):
 
     if actor == "switch_player":
         b["player_idx"] = val
-        b["log"] += f"🔄 You sent out {b['player_team'][val]['name']}!\n"
+        b["log"] += f"You sent out {b['player_team'][val]['name']}!\n"
         return
     if actor == "switch_ai":
         b["ai_idx"] = val
-        b["log"] += f"🔄 Gym Leader sent out {b['ai_team'][val]['name']}!\n"
+        b["log"] += f"Gym Leader sent out {b['ai_team'][val]['name']}!\n"
         return
 
     mv = atk["moves"][val]
     mult = get_type_multiplier(mv["type"], dfn["types"])
     if mult == 0: 
-        b["log"] += f"🛡️ {atk['name']} used {mv['name']} (0 DMG)\n"
+        b["log"] += f"{atk['name']} used {mv['name']} (0 DMG)\n"
     else:
         pow = mv.get("power", 0)
         if pow > 0:
@@ -298,9 +331,9 @@ def resolve_action(b, actor, val):
             crit = 1.5 if random.random() < 0.06 else 1.0
             dmg = max(1, int(((42 * pow * (atk["atk"] / max(1, dfn["def"]))) / 50 + 2) * mult * stab * crit * random.uniform(0.85, 1.0)))
             dfn["hp"] = max(0, dfn["hp"] - dmg)
-            b["log"] += f"⚔️ {atk['name']} used {mv['name']} ({dmg} DMG)\n"
+            b["log"] += f"{atk['name']} used {mv['name']} ({dmg} DMG)\n"
         else:
-            b["log"] += f"💨 {atk['name']} used {mv['name']}\n"
+            b["log"] += f"{atk['name']} used {mv['name']}\n"
 
 def check_faint_state(bot, chat_id, battle_id):
     b = gym_battles[battle_id]
@@ -310,10 +343,10 @@ def check_faint_state(bot, chat_id, battle_id):
     if ai_poke["hp"] <= 0:
         if all(p["hp"] <= 0 for p in b["ai_team"]):
             leader = GYM_LEADERS[b["leader"]]
-            db.add_badge(b["player_id"], f"{leader['icon']} {leader['badge']}")
+            db.add_badge(b["player_id"], f"{leader['badge']}")
             b["state"] = "ended"
             player_mention = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
-            win_text = f"{escape_md(b['log'].strip())}\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n🏅 *You earned the {leader['icon']} {escape_md(leader['badge'])}*\\!"
+            win_text = f"{escape_md(b['log'].strip())}\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n*You earned the {escape_md(leader['badge'])}*\\!"
             try: bot.edit_message_text(win_text, chat_id, battle_id, parse_mode="MarkdownV2")
             except: pass
             return True
@@ -327,7 +360,7 @@ def check_faint_state(bot, chat_id, battle_id):
     if player_poke["hp"] <= 0:
         if all(p["hp"] <= 0 for p in b["player_team"]):
             b["state"] = "ended"
-            loss_text = f"{escape_md(b['log'].strip())}\n\n❌ *All your Pokémon fainted\\. You whited out\\!*"
+            loss_text = f"{escape_md(b['log'].strip())}\n\n*All your Pokémon fainted\\. You whited out\\!*"
             try: bot.edit_message_text(loss_text, chat_id, battle_id, parse_mode="MarkdownV2")
             except: pass
             return True
@@ -344,7 +377,6 @@ def execute_first_turn(bot, chat_id, battle_id, player_action, player_val):
 
     ai_action, ai_val = get_ai_action(b)
 
-    # In this authentic engine, the player clicks the button, so the player always strikes first in this UI phase.
     if player_action == "switch":
         resolve_action(b, "switch_player", player_val)
     else:
@@ -352,14 +384,10 @@ def execute_first_turn(bot, chat_id, battle_id, player_action, player_val):
 
     if check_faint_state(bot, chat_id, battle_id): return 
 
-    # Save AI move for the second phase
     b["ai_queued_action"] = ("switch_ai", ai_val) if ai_action == "switch" else ("ai", ai_val)
-
-    # Set waiting state - Koga is thinking!
     b["state"] = "waiting"
     render_gym_ui(bot, chat_id, battle_id)
 
-    # ⏱️ SUSPENSE TIMER
     threading.Timer(2.0, execute_second_turn, args=(bot, chat_id, battle_id)).start()
 
 def execute_second_turn(bot, chat_id, battle_id):
@@ -392,16 +420,14 @@ def setup_gym_battle(bot, call, leader_key, user_id, chat_id, battle_id):
         render_gym_ui(bot, chat_id, battle_id)
     except Exception as e:
         logger.error(f"Gym Setup Error: {e}")
-        try: bot.edit_message_text("❌ Failed to load Gym Battle.", chat_id, battle_id)
-        except: pass
 
 def handle_gym_command(bot, message):
     user_id = message.from_user.id
     
     if GYM_LOCKED and user_id != OWNER_ID:
-        return safe_send(bot, message.chat.id, escape_md("🔒 The Pokemon League Gyms are currently locked by the Admins!"))
+        return safe_send(bot, message.chat.id, escape_md("The Pokemon League Gyms are currently locked by the Admins!"))
         
-    if not db.get_user(user_id): return bot.reply_to(message, "⚠️ Please /start the bot first!")
+    if not db.get_user(user_id): return bot.reply_to(message, "Please /start the bot first!")
     
     render_main_menu(bot, message.chat.id, user_id, reply_to_id=message.message_id)
 
@@ -410,11 +436,11 @@ def handle_gym_callback(bot, call):
     action = parts[1]
     
     if GYM_LOCKED and action in ["main", "region", "info", "start"] and call.from_user.id != OWNER_ID:
-        return bot.answer_callback_query(call.id, "🔒 The Gyms are currently locked by the Admins!", show_alert=True)
+        return bot.answer_callback_query(call.id, "The Gyms are currently locked by the Admins!", show_alert=True)
     
     if action in ["main", "close"]:
         uid = int(parts[2])
-        if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
+        if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu!", show_alert=True)
             
         if action == "close":
             bot.answer_callback_query(call.id, "Menu closed.")
@@ -430,7 +456,7 @@ def handle_gym_callback(bot, call):
     elif action in ["region", "info", "start"]:
         uid = int(parts[2])
         param = parts[3]
-        if call.from_user.id != uid: return bot.answer_callback_query(call.id, "❌ Not your menu!", show_alert=True)
+        if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu!", show_alert=True)
             
         if action == "region":
             bot.answer_callback_query(call.id, "")
@@ -449,7 +475,7 @@ def handle_gym_callback(bot, call):
             try: bot.delete_message(call.message.chat.id, call.message.message_id)
             except: pass
             
-            sent_msg = bot.send_message(call.message.chat.id, "🔄 *Dʀᴀғᴛɪɴɢ Oғғɪᴄɪᴀʟ Tᴇᴀᴍs\\.\\.\\.*", parse_mode="MarkdownV2")
+            sent_msg = bot.send_message(call.message.chat.id, "*Dʀᴀғᴛɪɴɢ Oғғɪᴄɪᴀʟ Tᴇᴀᴍs\\.\\.\\.*", parse_mode="MarkdownV2")
             battle_id = sent_msg.message_id
             
             threading.Thread(target=setup_gym_battle, args=(bot, call, param, uid, call.message.chat.id, battle_id)).start()
@@ -458,13 +484,13 @@ def handle_gym_callback(bot, call):
     battle_id = int(parts[2])
     b = gym_battles.get(battle_id)
     if not b: return bot.answer_callback_query(call.id, "Battle expired.")
-    if call.from_user.id != b["player_id"]: return bot.answer_callback_query(call.id, "❌ Not your battle!", show_alert=True)
+    if call.from_user.id != b["player_id"]: return bot.answer_callback_query(call.id, "Not your battle!", show_alert=True)
     
-    if b["state"] == "waiting": return bot.answer_callback_query(call.id, "⏳ Waiting for Gym Leader...", show_alert=False)
+    if b["state"] == "waiting": return bot.answer_callback_query(call.id, "Waiting for Gym Leader...", show_alert=False)
 
     now = time.time()
     if now - b.get("last_edit", 0) < 1.0:
-        return bot.answer_callback_query(call.id, "⏳ Too fast!", show_alert=False)
+        return bot.answer_callback_query(call.id, "Too fast!", show_alert=False)
     b["last_edit"] = now
     bot.answer_callback_query(call.id, "")
 
@@ -484,7 +510,7 @@ def handle_gym_callback(bot, call):
         if b["state"] == "force_switch":
             b["player_idx"] = poke_idx
             b["state"] = "menu"
-            b["log"] = f"🔄 You sent out {b['player_team'][poke_idx]['name']}!\n"
+            b["log"] = f"You sent out {b['player_team'][poke_idx]['name']}!\n"
             render_gym_ui(bot, call.message.chat.id, battle_id)
         else:
             execute_first_turn(bot, call.message.chat.id, battle_id, "switch", poke_idx)
@@ -495,4 +521,4 @@ def handle_gym_callback(bot, call):
         
     elif action == "run":
         b["state"] = "ended"
-        bot.edit_message_text("🏃 *You fled from the Gym Battle\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+        bot.edit_message_text("*You fled from the Gym Battle\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
