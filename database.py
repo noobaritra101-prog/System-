@@ -54,12 +54,10 @@ def init_db():
                 cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='size'")
                 if not cur.fetchone():
                     cur.execute("ALTER TABLE pvp_settings ADD COLUMN size INTEGER DEFAULT 6")
-                    logger.info("🔧 Migrated: Added 'size' column to pvp_settings")
                     
                 cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='can_switch'")
                 if not cur.fetchone():
                     cur.execute("ALTER TABLE pvp_settings ADD COLUMN can_switch BOOLEAN DEFAULT TRUE")
-                    logger.info("🔧 Migrated: Added 'can_switch' column to pvp_settings")
 
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS battle_stats (
@@ -69,7 +67,6 @@ def init_db():
                     )
                 """)
                 
-                # 🏅 Badge Tracking Table
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_badges (
                         user_id BIGINT, 
@@ -78,7 +75,6 @@ def init_db():
                     )
                 """)
                 
-                # 🖼️ Gym Images Table
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS gym_images (
                         leader_name TEXT PRIMARY KEY, 
@@ -114,11 +110,33 @@ def init_db():
     except Exception as e:
         logger.error(f"❌ Database initialization error: {e}")
 
+# 🛡️ THE SUPABASE AUTO-RECONNECT SHIELD
 @contextmanager
 def get_conn():
-    conn = db_pool.getconn()
-    try: yield conn
-    finally: db_pool.putconn(conn)
+    global db_pool
+    conn = None
+    try:
+        conn = db_pool.getconn()
+        # Ping the DB to see if the connection went stale
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+    except (psycopg2.OperationalError, psycopg2.InterfaceError):
+        logger.warning("♻️ Supabase connection dropped. Recycling pool connection...")
+        if conn:
+            db_pool.putconn(conn, close=True)
+        conn = db_pool.getconn()
+        
+    try: 
+        yield conn
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally: 
+        if conn:
+            try:
+                db_pool.putconn(conn)
+            except Exception:
+                pass
 
 # ================== USER MANAGEMENT ==================
 def add_user_if_new(user_id):
@@ -329,7 +347,6 @@ def get_gym_image(leader_name):
             return row[0] if row else None
 
 def reset_all_badges():
-    """Wipes all gym badges from the database (Admin only)"""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM user_badges")
@@ -345,30 +362,23 @@ def get_daily_tasks(user_id):
             
             if not tasks or tasks[0][7] is None or tasks[0][7] < today:
                 cur.execute("DELETE FROM tasks WHERE user_id = %s", (user_id,))
-                
                 targets = ["Pikachu", "Eevee", "Charmander", "Squirtle", "Bulbasaur", "Snorlax", "Gengar", "Lucario", "Ralts", "Bagon", "Magikarp", "Gible", "Beldum", "Dratini"]
                 specific_target = random.choice(targets)
-                
                 new_tasks = [
                     (user_id, 'catch', 'Any', 0, 10, 'shiny', 1, False, today),
                     (user_id, 'pvp', 'Any', 0, 3, 'shiny', 1, False, today),
                     (user_id, 'catch_specific', specific_target, 0, 1, 'jackpot', 1, False, today)
                 ]
-                
                 psycopg2.extras.execute_batch(cur, """
                     INSERT INTO tasks (user_id, task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (user_id, task_type) DO NOTHING
                 """, new_tasks)
                 conn.commit()
-                
                 cur.execute("SELECT task_type, target, progress, goal, reward_type, reward_amount, completed, last_reset FROM tasks WHERE user_id = %s", (user_id,))
                 tasks = cur.fetchall()
                 
-            return [
-                {"task_type": t[0], "target": t[1], "progress": t[2], "goal": t[3], "reward_type": t[4], "reward_amount": t[5], "completed": t[6]} 
-                for t in tasks
-            ]
+            return [{"task_type": t[0], "target": t[1], "progress": t[2], "goal": t[3], "reward_type": t[4], "reward_amount": t[5], "completed": t[6]} for t in tasks]
 
 def claim_task_reward(user_id, task_type):
     with get_conn() as conn:
@@ -481,7 +491,6 @@ def export_table_csv(table_name):
     return output.getvalue()
 
 def get_debug_stats():
-    """Calculates all backend data for the /debug panel"""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT COUNT(*) FROM users")
