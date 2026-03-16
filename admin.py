@@ -139,7 +139,8 @@ def generate_debug_ui(active_hunts):
     )
     return text, kb
 
-def send_logs(bot, chat_id, message_id=None):
+# 🛠️ FIXED: send_logs now accepts edit_msg_id OR reply_to_id properly
+def send_logs(bot, chat_id, edit_msg_id=None, reply_to_id=None):
     try:
         with open("bot.log", "r") as f:
             lines = f.readlines()
@@ -153,23 +154,25 @@ def send_logs(bot, chat_id, message_id=None):
         types.InlineKeyboardButton("🌀 Rᴇғʀᴇsʜ", callback_data="log_refresh"),
         types.InlineKeyboardButton("🗑️ Dᴇʟᴇᴛᴇ Lᴏɢs", callback_data="log_delete")
     )
-    if message_id:
-        try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
+    
+    if edit_msg_id:
+        try: bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=kb, parse_mode="MarkdownV2")
         except: pass
-    else: safe_send(bot, chat_id, text, reply_markup=kb)
+    else: 
+        safe_send(bot, chat_id, text, reply_markup=kb, reply_to_id=reply_to_id)
 
 def handle_admin_callback(bot, call, active_hunts=None):
     if call.data == "log_refresh":
         if not is_owner(bot, call): return True
         bot.answer_callback_query(call.id, "Refreshing logs...")
-        send_logs(bot, call.message.chat.id, call.message.message_id)
+        send_logs(bot, call.message.chat.id, edit_msg_id=call.message.message_id)
         return True
         
     elif call.data == "log_delete":
         if not is_owner(bot, call): return True
         open("bot.log", "w").close()
         bot.answer_callback_query(call.id, "Logs Deleted!", show_alert=True)
-        send_logs(bot, call.message.chat.id, call.message.message_id)
+        send_logs(bot, call.message.chat.id, edit_msg_id=call.message.message_id)
         return True
         
     elif call.data == "debug_refresh":
@@ -188,7 +191,6 @@ def handle_admin_callback(bot, call, active_hunts=None):
         except: pass
         return True
         
-    # --- NEW GCS ROUTING ---
     elif call.data.startswith("gcs_page_"):
         if not is_owner(bot, call): return True
         page_idx = int(call.data.split("_")[2])
@@ -209,7 +211,7 @@ def handle_admin_callback(bot, call, active_hunts=None):
             try:
                 bot.get_chat(gid)
             except Exception: 
-                db.remove_group(gid) # Kicked or Chat deleted
+                db.remove_group(gid) 
                 removed += 1
                 
         text, kb = generate_gcs_ui(bot, 0)
@@ -275,7 +277,6 @@ def register_admin_handlers(bot, active_hunts):
         if len(args) < 2:
             return safe_send(bot, message.chat.id, escape_md("⚠️ Format: /upload Brock"), reply_to_id=message.message_id)
             
-        # The simple version just as you asked!
         leader_name = args[1].strip().title()
         
         file_id = message.reply_to_message.photo[-1].file_id 
@@ -338,6 +339,7 @@ def register_admin_handlers(bot, active_hunts):
     @bot.message_handler(commands=["log", "logs"])
     def command_log(message):
         if not is_owner(bot, message): return
+        # 🛠️ FIXED: Calls send_logs cleanly with reply_to_id
         send_logs(bot, message.chat.id, reply_to_id=message.message_id)
 
     @bot.message_handler(commands=["files"])
