@@ -277,7 +277,7 @@ def resolve_action(b, actor, val):
     mv = atk["moves"][val]
     mult = get_type_multiplier(mv["type"], dfn["types"])
     if mult == 0: 
-        b["log"] += f"{atk['name']} used {mv['name']}... It had no effect!\n"
+        b["log"] += f"{atk['name']} used {mv['name']} (No effect)\n"
     else:
         pow = mv.get("power", 0)
         if pow > 0:
@@ -286,12 +286,10 @@ def resolve_action(b, actor, val):
             dmg = max(1, int(((42 * pow * (atk["atk"] / max(1, dfn["def"]))) / 50 + 2) * mult * stab * crit * random.uniform(0.85, 1.0)))
             dfn["hp"] = max(0, dfn["hp"] - dmg)
             
-            b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
-            if mult > 1: b["log"] += "It's super effective!\n"
-            elif mult < 1: b["log"] += "It's not very effective...\n"
-            if crit > 1: b["log"] += "A critical hit!\n"
+            # Clean strict 2-line log style without emojis
+            b["log"] += f"{atk['name']} used {mv['name']} ({dmg} DMG)\n"
         else:
-            b["log"] += f"{atk['name']} used {mv['name']}!\n"
+            b["log"] += f"{atk['name']} used {mv['name']}\n"
 
     if dfn["hp"] <= 0:
         b["log"] += f"{dfn['name']} fainted!\n"
@@ -350,10 +348,8 @@ def execute_first_turn(bot, chat_id, battle_id, player_action, player_val):
         order = [a_act_tuple, p_act_tuple]
     elif p_speed >= a_speed:
         order = [p_act_tuple, a_act_tuple]
-        b["log"] += f"{b['player_team'][b['player_idx']]['name']}'s speed allows it to strike first!\n\n"
     else:
         order = [a_act_tuple, p_act_tuple]
-        b["log"] += f"Gym Leader's {b['ai_team'][b['ai_idx']]['name']} is faster and strikes first!\n\n"
 
     b["turn_order"] = order
 
@@ -364,7 +360,6 @@ def execute_first_turn(bot, chat_id, battle_id, player_action, player_val):
 
     # Set waiting state - player must wait for AI
     b["state"] = "waiting"
-    b["log"] += "\n⏳ _Waiting for Gym Leader..._"
     render_gym_ui(bot, chat_id, battle_id)
 
     # ⏱️ SUSPENSE TIMER
@@ -373,8 +368,6 @@ def execute_first_turn(bot, chat_id, battle_id, player_action, player_val):
 def execute_second_turn(bot, chat_id, battle_id):
     b = gym_battles.get(battle_id)
     if not b or b["state"] == "ended": return
-
-    b["log"] = b["log"].replace("\n⏳ _Waiting for Gym Leader..._", "\n")
     
     # Execute #2 Action
     resolve_action(b, b["turn_order"][1][0], b["turn_order"][1][1])
@@ -392,6 +385,8 @@ def setup_gym_battle(bot, call, leader_key, user_id, chat_id, battle_id):
         
         player_team = [build_mock_pokemon(n) for n in player_roster]
         ai_team = [build_mock_pokemon(n) for n in leader["team"]]
+        
+        # Fair and balanced authentic scaling without arbitrary 2x multipliers
         
         gym_battles[battle_id] = {
             "player_id": user_id, "player_name": clean_name(call.from_user.first_name),
