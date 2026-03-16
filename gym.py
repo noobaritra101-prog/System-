@@ -130,7 +130,7 @@ def get_ai_action(b):
     return "move", best_move_idx
 
 # --- MENU UIs ---
-def render_main_menu(bot, chat_id, uid, message_id=None):
+def render_main_menu(bot, chat_id, uid, message_id=None, reply_to_id=None):
     text = (
         f"✦━━━━━━━━━━━━━━━━✦\n"
         f"🏟 𝙿𝙾𝙺𝙴𝙼𝙾𝙽 𝙻𝙴𝙰𝙶𝚄𝙴 𝙶𝚈𝙼𝚂\n"
@@ -158,7 +158,7 @@ def render_main_menu(bot, chat_id, uid, message_id=None):
             except: pass
             bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
     else:
-        bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
+        bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2", reply_to_message_id=reply_to_id)
 
 def render_region_menu(bot, chat_id, message_id, uid, region):
     if region != "Kanto":
@@ -306,12 +306,8 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
 
     moves_to_execute = []
     if player_action == "move" and ai_action == "move":
-        if player_poke["spd"] >= ai_poke["spd"]: 
-            b["log"] += f"{player_poke['name']}'s speed allows it to strike first!\n"
-            moves_to_execute = [("player", player_val), ("ai", ai_val)]
-        else: 
-            b["log"] += f"Gym Leader's {ai_poke['name']} is faster and strikes first!\n"
-            moves_to_execute = [("ai", ai_val), ("player", player_val)]
+        # ⚡ SEQUENTIAL TURN BASED LOGIC - Player always strikes first!
+        moves_to_execute = [("player", player_val), ("ai", ai_val)]
     elif player_action == "move": moves_to_execute = [("player", player_val)]
     elif ai_action == "move": moves_to_execute = [("ai", ai_val)]
 
@@ -335,6 +331,7 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
                 dmg = max(1, int(((42 * pow * (atk["atk"] / max(1, dfn["def"]))) / 50 + 2) * mult * stab * crit * random.uniform(0.85, 1.0)))
                 dfn["hp"] = max(0, dfn["hp"] - dmg)
                 
+                # Clean, emoji-free battle logs
                 b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
                 if mult > 1: b["log"] += "It's super effective!\n"
                 elif mult < 1: b["log"] += "It's not very effective...\n"
@@ -344,7 +341,7 @@ def resolve_turn(bot, chat_id, battle_id, player_action, player_val):
 
         if dfn["hp"] <= 0:
             b["log"] += f"{dfn['name']} fainted!\n"
-            break
+            break # 🛡️ This break prevents the AI from attacking if they just fainted!
 
     # 🏆 VICTORY ROUTING
     if ai_poke["hp"] <= 0:
@@ -405,7 +402,9 @@ def handle_gym_command(bot, message):
         return safe_send(bot, message.chat.id, escape_md("🔒 The Pokemon League Gyms are currently locked by the Admins!"))
         
     if not db.get_user(user_id): return bot.reply_to(message, "⚠️ Please /start the bot first!")
-    render_main_menu(bot, message.chat.id, user_id)
+    
+    # Send as a direct reply!
+    render_main_menu(bot, message.chat.id, user_id, reply_to_id=message.message_id)
 
 def handle_gym_callback(bot, call):
     parts = call.data.split("_")
