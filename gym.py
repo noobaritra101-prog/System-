@@ -337,7 +337,6 @@ def resolve_action(b, actor, val):
             crit = 1.5 if random.random() < 0.06 else 1.0
             dmg = max(1, int(((42 * pow * (atk["atk"] / max(1, dfn["def"]))) / 50 + 2) * mult * stab * crit * random.uniform(0.85, 1.0)))
             dfn["hp"] = max(0, dfn["hp"] - dmg)
-            
             b["log"] += f"{atk['name']} used {mv['name']} ({dmg} DMG)\n"
         else:
             b["log"] += f"{atk['name']} used {mv['name']}\n"
@@ -353,10 +352,10 @@ def check_faint_state(bot, chat_id, battle_id):
     if ai_poke["hp"] <= 0:
         if all(p["hp"] <= 0 for p in b["ai_team"]):
             leader = GYM_LEADERS[b["leader"]]
-            db.add_badge(b["player_id"], f"{leader['badge']}")
+            db.add_badge(b["player_id"], f"{leader['icon']} {leader['badge']}")
             b["state"] = "ended"
             player_mention = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
-            win_text = f"{escape_md(b['log'].strip())}\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n*You earned the {escape_md(leader['badge'])}*\\!"
+            win_text = f"{escape_md(b['log'].strip())}\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n🏅 *You earned the {leader['icon']} {escape_md(leader['badge'])}*\\!"
             try: bot.edit_message_text(win_text, chat_id, battle_id, parse_mode="MarkdownV2")
             except: pass
             return True
