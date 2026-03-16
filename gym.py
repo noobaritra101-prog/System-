@@ -8,6 +8,7 @@ import database as db
 from config import logger, OWNER_ID
 from api_utils import escape_md
 from commands import clean_name, to_small_caps, safe_send
+from pvp import TYPE_CHART, TYPE_EMOJIS, get_hp_bar, format_types, get_type_multiplier, apply_nature, STATUS_EMOJIS
 from gym_data import GYM_LEADERS, ASH_ROSTER, AUTHENTIC_STATS, AUTHENTIC_MOVES
 
 GYM_LOCKED = False  
@@ -107,7 +108,12 @@ def get_hp_bar(hp, max_hp):
     return ("█" * bars) + ("░" * (14 - bars))
 
 def get_type_display(type_str):
-    return type_str # Stripped out emojis perfectly
+    parts = type_str.split('/')
+    formatted_parts = []
+    for t in parts:
+        emoji = TYPE_EMOJIS.get(t, '')
+        formatted_parts.append(f"{t} {emoji}".strip())
+    return "/".join(formatted_parts)
 
 # --- SMART AI LOGIC ---
 def get_ai_action(b):
@@ -158,7 +164,7 @@ def render_main_menu(bot, chat_id, uid, message_id=None, reply_to_id=None):
            types.InlineKeyboardButton("Kᴀʟᴏs", callback_data=f"gym_region_{uid}_Kalos"))
     kb.row(types.InlineKeyboardButton("Aʟᴏʟᴀ", callback_data=f"gym_region_{uid}_Alola"),
            types.InlineKeyboardButton("Gᴀʟᴀʀ", callback_data=f"gym_region_{uid}_Galar"))
-    kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_close_{uid}"))
+    kb.row(types.InlineKeyboardButton("⬅️ Bᴀᴄᴋ", callback_data=f"gym_close_{uid}"))
     
     if message_id:
         try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -171,23 +177,23 @@ def render_main_menu(bot, chat_id, uid, message_id=None, reply_to_id=None):
 
 def render_region_menu(bot, chat_id, message_id, uid, region):
     if region != "Kanto":
-        bot.answer_callback_query(message_id, "This region is currently under construction!", show_alert=True)
+        bot.answer_callback_query(message_id, "🚧 This region is currently under construction!", show_alert=True)
         return
 
     text = (
         f"✦━━━━━━━━━━━━━━━━✦\n"
         f"🏟 Kᴀɴᴛᴏ Gʏᴍ Cʜᴀʟʟᴇɴɢᴇ\n"
         f"✦━━━━━━━━━━━━━━━━✦\n\n"
-        f"Bᴏᴜʟᴅᴇʀ Bᴀᴅɢᴇ\n"
-        f"Cᴀsᴄᴀᴅᴇ Bᴀᴅɢᴇ\n"
-        f"Tʜᴜɴᴅᴇʀ Bᴀᴅɢᴇ\n"
-        f"Rᴀɪɴʙᴏᴡ Bᴀᴅɢᴇ\n"
-        f"Sᴏᴜʟ Bᴀᴅɢᴇ\n"
-        f"Mᴀʀsʜ Bᴀᴅɢᴇ\n"
-        f"Vᴏʟᴄᴀɴᴏ Bᴀᴅɢᴇ\n"
-        f"Eᴀʀᴛʜ Bᴀᴅɢᴇ\n\n"
+        f"🪨 Bᴏᴜʟᴅᴇʀ Bᴀᴅɢᴇ\n"
+        f"🌊 Cᴀsᴄᴀᴅᴇ Bᴀᴅɢᴇ\n"
+        f"⚡ Tʜᴜɴᴅᴇʀ Bᴀᴅɢᴇ\n"
+        f"🌈 Rᴀɪɴʙᴏᴡ Bᴀᴅɢᴇ\n"
+        f"☠️ Sᴏᴜʟ Bᴀᴅɢᴇ\n"
+        f"🔮 Mᴀʀsʜ Bᴀᴅɢᴇ\n"
+        f"🔥 Vᴏʟᴄᴀɴᴏ Bᴀᴅɢᴇ\n"
+        f"🌍 Eᴀʀᴛʜ Bᴀᴅɢᴇ\n\n"
         f"━━━━━━━━━━━━\n"
-        f"Sᴇʟᴇᴄᴛ ᴀ Gʏᴍ Lᴇᴀᴅᴇʀ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ\\."
+        f"⚔️ Sᴇʟᴇᴄᴛ ᴀ Gʏᴍ Lᴇᴀᴅᴇʀ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ\\."
     )
     
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -199,7 +205,7 @@ def render_region_menu(bot, chat_id, message_id, uid, region):
            types.InlineKeyboardButton("Sᴀʙʀɪɴᴀ", callback_data=f"gym_info_{uid}_Sabrina"))
     kb.row(types.InlineKeyboardButton("Bʟᴀɪɴᴇ", callback_data=f"gym_info_{uid}_Blaine"),
            types.InlineKeyboardButton("Gɪᴏᴠᴀɴɴɪ", callback_data=f"gym_info_{uid}_Giovanni"))
-    kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
+    kb.row(types.InlineKeyboardButton("⬅ Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
     
     try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
     except: 
@@ -216,18 +222,18 @@ def render_gym_info(bot, chat_id, message_id, uid, leader_key):
         f"🏟 *{escape_md(to_small_caps(leader['gym_name']))}*\n"
         f"✦━━━━━━━━━━━━━━━━✦\n\n"
         f"👤 Lᴇᴀᴅᴇʀ : {escape_md(to_small_caps(leader['name']))}\n"
-        f"🏅 Bᴀᴅɢᴇ  : {escape_md(to_small_caps(leader['badge']))}\n"
-        f"🧬 Tʏᴘᴇ   : {escape_md(to_small_caps(leader['type']))}\n\n"
+        f"🏅 Bᴀᴅɢᴇ  : {leader['icon']} {escape_md(to_small_caps(leader['badge']))}\n"
+        f"🧬 Tʏᴘᴇ   : {leader['icon']} {escape_md(to_small_caps(leader['type']))}\n\n"
         f"━━━━━━━━━━━━\n\n"
         f"🎮 Pᴏᴋᴇ́ᴍᴏɴ Tᴇᴀᴍ\n"
         f"{team_str}\n\n"
         f"━━━━━━━━━━━━\n"
-        f"Dᴏ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ ᴛʜɪs ɢʏᴍ?"
+        f"⚔️ Dᴏ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ ᴛʜɪs ɢʏᴍ?"
     )
     
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("Cʜᴀʟʟᴇɴɢᴇ", callback_data=f"gym_start_{uid}_{leader_key}"),
-           types.InlineKeyboardButton("Cᴀɴᴄᴇʟ", callback_data=f"gym_region_{uid}_Kanto"))
+    kb.row(types.InlineKeyboardButton("✅ Cʜᴀʟʟᴇɴɢᴇ", callback_data=f"gym_start_{uid}_{leader_key}"),
+           types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"gym_region_{uid}_Kanto"))
            
     file_id = db.get_gym_image(leader_key)
     try: bot.delete_message(chat_id, message_id)
@@ -256,11 +262,11 @@ def render_gym_ui(bot, chat_id, battle_id):
 
     ui_text = (
         f"{log_text}\n\n"
-        f"Gʏᴍ Lᴇᴀᴅᴇʀ {escape_md(leader['name'])}'s {escape_md(ai_poke['name'])}\n"
+        f"{leader['icon']} Gʏᴍ Lᴇᴀᴅᴇʀ {escape_md(leader['name'])}'s {escape_md(ai_poke['name'])}\n"
         f" \\[{ai_type_display}\\] Lv\\. 100  •  HP {int(ai_poke['hp'])}/{int(ai_poke['max_hp'])}\n"
         f"`{get_hp_bar(ai_poke['hp'], ai_poke['max_hp'])}`\n\n"
         f"Current turn: {player_mention_link} \\(Asʜ's Tᴇᴀᴍ\\)\n"
-        f"*{player_name_clean}'s {escape_md(player_poke['name'])} \\[{player_type_display}\\]*\n"
+        f"{player_name_clean}'s {escape_md(player_poke['name'])} \\[{player_type_display}\\]\n"
         f"Lv\\. 100  •  HP {int(player_poke['hp'])}/{int(player_poke['max_hp'])}\n"
         f"`{get_hp_bar(player_poke['hp'], player_poke['max_hp'])}`\n"
     )
@@ -276,10 +282,10 @@ def render_gym_ui(bot, chat_id, battle_id):
         move_buttons = []
         for i, m in enumerate(player_poke["moves"]):
             m_type_display = escape_md(get_type_display(m['type']))
-            moves_block += f"\n {escape_md(m['name'])} \\[{m_type_display}\\]\n Power: {m.get('power', 0)}, Accuracy: {m.get('acc', 100)}\n"
+            moves_block += f"\n {escape_md(m['name'])} \\[{m_type_display}\\]\n Power: {m.get('power', 0)}, Accuracy: {m.get('acc', 100)}"
             move_buttons.append(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"gym_move_{battle_id}_{i}"))
             
-        ui_text += moves_block
+        ui_text += moves_block + "\n"
         if len(move_buttons) == 4:
             kb.row(move_buttons[0], move_buttons[1])
             kb.row(move_buttons[2], move_buttons[3])
@@ -331,9 +337,13 @@ def resolve_action(b, actor, val):
             crit = 1.5 if random.random() < 0.06 else 1.0
             dmg = max(1, int(((42 * pow * (atk["atk"] / max(1, dfn["def"]))) / 50 + 2) * mult * stab * crit * random.uniform(0.85, 1.0)))
             dfn["hp"] = max(0, dfn["hp"] - dmg)
+            
             b["log"] += f"{atk['name']} used {mv['name']} ({dmg} DMG)\n"
         else:
             b["log"] += f"{atk['name']} used {mv['name']}\n"
+
+    if dfn["hp"] <= 0:
+        b["log"] += f"{dfn['name']} fainted!\n"
 
 def check_faint_state(bot, chat_id, battle_id):
     b = gym_battles[battle_id]
