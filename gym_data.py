@@ -1,6 +1,7 @@
 # gym_data.py
 
 GYM_LEADERS = {
+    # Kanto
     "Brock": {"name": "Brock", "region": "Kanto", "gym_name": "Pewter City Gym", "badge": "Boulder Badge", "icon": "🪨", "type": "Rock", "team": ["Geodude", "Graveler", "Onix"]},
     "Misty": {"name": "Misty", "region": "Kanto", "gym_name": "Cerulean City Gym", "badge": "Cascade Badge", "icon": "🌊", "type": "Water", "team": ["Staryu", "Psyduck", "Starmie"]},
     "Surge": {"name": "Lt. Surge", "region": "Kanto", "gym_name": "Vermilion City Gym", "badge": "Thunder Badge", "icon": "⚡", "type": "Electric", "team": ["Voltorb", "Pikachu", "Raichu"]},
@@ -10,6 +11,7 @@ GYM_LEADERS = {
     "Blaine": {"name": "Blaine", "region": "Kanto", "gym_name": "Cinnabar Island Gym", "badge": "Volcano Badge", "icon": "🔥", "type": "Fire", "team": ["Growlithe", "Ponyta", "Arcanine"]},
     "Giovanni": {"name": "Giovanni", "region": "Kanto", "gym_name": "Viridian City Gym", "badge": "Earth Badge", "icon": "🌍", "type": "Ground", "team": ["Dugtrio", "Nidoqueen", "Rhydon"]},
 
+    # Johto
     "Falkner": {"name": "Falkner", "region": "Johto", "gym_name": "Violet City Gym", "badge": "Zephyr Badge", "icon": "🕊", "type": "Flying", "team": ["Pidgey", "Pidgeotto"]},
     "Bugsy": {"name": "Bugsy", "region": "Johto", "gym_name": "Azalea Town Gym", "badge": "Hive Badge", "icon": "🐞", "type": "Bug", "team": ["Metapod", "Kakuna", "Scyther"]},
     "Whitney": {"name": "Whitney", "region": "Johto", "gym_name": "Goldenrod City Gym", "badge": "Plain Badge", "icon": "🐄", "type": "Normal", "team": ["Clefairy", "Miltank"]},
@@ -17,11 +19,22 @@ GYM_LEADERS = {
     "Chuck": {"name": "Chuck", "region": "Johto", "gym_name": "Cianwood City Gym", "badge": "Storm Badge", "icon": "🥊", "type": "Fighting", "team": ["Primeape", "Poliwrath"]},
     "Jasmine": {"name": "Jasmine", "region": "Johto", "gym_name": "Olivine City Gym", "badge": "Mineral Badge", "icon": "🔩", "type": "Steel", "team": ["Magnemite", "Magnemite", "Steelix"]},
     "Pryce": {"name": "Pryce", "region": "Johto", "gym_name": "Mahogany Town Gym", "badge": "Glacier Badge", "icon": "❄️", "type": "Ice", "team": ["Seel", "Dewgong", "Piloswine"]},
-    "Clair": {"name": "Clair", "region": "Johto", "gym_name": "Blackthorn City Gym", "badge": "Rising Badge", "icon": "🐉", "type": "Dragon", "team": ["Dragonair", "Dragonair", "Gyarados", "Kingdra"]}
+    "Clair": {"name": "Clair", "region": "Johto", "gym_name": "Blackthorn City Gym", "badge": "Rising Badge", "icon": "🐉", "type": "Dragon", "team": ["Dragonair", "Dragonair", "Gyarados", "Kingdra"]},
+
+    # Hoenn
+    "Roxanne": {"name": "Roxanne", "region": "Hoenn", "gym_name": "Rustboro City Gym", "badge": "Stone Badge", "icon": "🪨", "type": "Rock", "team": ["Geodude", "Nosepass"]},
+    "Brawly": {"name": "Brawly", "region": "Hoenn", "gym_name": "Dewford Town Gym", "badge": "Knuckle Badge", "icon": "🥊", "type": "Fighting", "team": ["Machop", "Makuhita"]},
+    "Wattson": {"name": "Wattson", "region": "Hoenn", "gym_name": "Mauville City Gym", "badge": "Dynamo Badge", "icon": "⚡", "type": "Electric", "team": ["Magnemite", "Voltorb", "Magneton"]},
+    "Flannery": {"name": "Flannery", "region": "Hoenn", "gym_name": "Lavaridge Town Gym", "badge": "Heat Badge", "icon": "🔥", "type": "Fire", "team": ["Numel", "Slugma", "Torkoal"]},
+    "Norman": {"name": "Norman", "region": "Hoenn", "gym_name": "Petalburg City Gym", "badge": "Balance Badge", "icon": "🌫", "type": "Normal", "team": ["Spinda", "Vigoroth", "Slaking"]},
+    "Winona": {"name": "Winona", "region": "Hoenn", "gym_name": "Fortree City Gym", "badge": "Feather Badge", "icon": "🪶", "type": "Flying", "team": ["Swablu", "Pelipper", "Skarmory", "Altaria"]},
+    "TateLiza": {"name": "Tate & Liza", "region": "Hoenn", "gym_name": "Mossdeep City Gym", "badge": "Mind Badge", "icon": "🧠", "type": "Psychic", "team": ["Solrock", "Lunatone"]},
+    "Wallace": {"name": "Wallace", "region": "Hoenn", "gym_name": "Sootopolis City Gym", "badge": "Rain Badge", "icon": "💧", "type": "Water", "team": ["Luvdisc", "Whiscash", "Sealeo", "Milotic"]}
 }
 
 ASH_KANTO_ROSTER = ["Pikachu", "Charizard", "Bulbasaur", "Squirtle", "Snorlax", "Pidgeot", "Muk", "Tauros", "Kingler"]
 ASH_JOHTO_ROSTER = ["Pikachu", "Bayleef", "Cyndaquil", "Totodile", "Noctowl", "Heracross", "Phanpy"]
+ASH_HOENN_ROSTER = ["Pikachu", "Sceptile", "Swellow", "Corphish", "Torkoal", "Glalie"]
 
 AUTHENTIC_MOVES = {
     # Kanto Pokemon
@@ -84,5 +97,31 @@ AUTHENTIC_MOVES = {
     "Piloswine": ["Blizzard", "Earthquake", "Ice Fang", "Take Down"],
     "Dragonair": ["Dragon Rage", "Slam", "Dragon Tail", "Aqua Tail"],
     "Gyarados": ["Hydro Pump", "Hyper Beam", "Dragon Breath", "Crunch"],
-    "Kingdra": ["Hydro Pump", "Dragon Pulse", "Twister", "Ice Beam"]
+    "Kingdra": ["Hydro Pump", "Dragon Pulse", "Twister", "Ice Beam"],
+
+    # Hoenn Pokemon
+    "Sceptile": ["Leaf Blade", "Quick Attack", "Bullet Seed", "Solar Beam"],
+    "Swellow": ["Aerial Ace", "Quick Attack", "Peck", "Double Team"],
+    "Corphish": ["Bubble Beam", "Crabhammer", "Vise Grip", "Harden"],
+    "Torkoal": ["Flamethrower", "Iron Defense", "Body Slam", "Heat Wave"],
+    "Glalie": ["Ice Beam", "Headbutt", "Double Team", "Icy Wind"],
+    "Nosepass": ["Rock Throw", "Tackle", "Rock Tomb", "Harden"],
+    "Machop": ["Karate Chop", "Seismic Toss", "Cross Chop", "Focus Energy"],
+    "Makuhita": ["Arm Thrust", "Vital Throw", "Tackle", "Sand Attack"],
+    "Magneton": ["Thunderbolt", "Tri Attack", "Spark", "Zap Cannon"],
+    "Numel": ["Ember", "Magnitude", "Tackle", "Flame Burst"],
+    "Slugma": ["Ember", "Smog", "Rock Throw", "Body Slam"],
+    "Spinda": ["Dizzy Punch", "Teeter Dance", "Uproar", "Tackle"],
+    "Vigoroth": ["Slash", "Scratch", "Uproar", "Fury Swipes"],
+    "Slaking": ["Hyper Beam", "Earthquake", "Yawn", "Focus Punch"],
+    "Swablu": ["Peck", "Astonish", "Sing", "Safeguard"],
+    "Pelipper": ["Water Gun", "Wing Attack", "Protect", "Hydro Pump"],
+    "Skarmory": ["Steel Wing", "Swift", "Agility", "Air Cutter"],
+    "Altaria": ["Dragon Breath", "Sky Attack", "Aerial Ace", "Safeguard"],
+    "Solrock": ["Confusion", "Rock Throw", "Psywave", "Solar Beam"],
+    "Lunatone": ["Confusion", "Rock Throw", "Psywave", "Ice Beam"],
+    "Luvdisc": ["Water Gun", "Sweet Kiss", "Attract", "Aqua Ring"],
+    "Whiscash": ["Mud Shot", "Surf", "Earthquake", "Tickle"],
+    "Sealeo": ["Aurora Beam", "Body Slam", "Water Gun", "Ice Ball"],
+    "Milotic": ["Hydro Pump", "Twister", "Recover", "Iron Tail"]
 }
