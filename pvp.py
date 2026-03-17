@@ -327,12 +327,12 @@ def render_pvp_ui(bot, chat_id, battle_id):
     ui_text = (
         f"{log_content}\n\n"
         f"*{def_mention}'s {escape_md(def_poke['name'])}{def_mega}*\n"
-        f" *\\[{escape_md(format_types(def_poke['types']))}\\] Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}*\n"
-        f"`{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}`{escape_md(def_status)}\n\n"
+        f" *\\[{escape_md(format_types(def_poke['types']))}\\] Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}\n"
+        f"`{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}`{escape_md(def_status)}*\n\n"
         f"Current turn: {act_mention}\n"
         f"*{act_mention}'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(format_types(active_poke['types']))}\\]*\n"
-        f"*Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}*\n"
-        f"`{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}`{escape_md(act_status)}\n\n"
+        f"*Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}\n"
+        f"`{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}`{escape_md(act_status)}*\n\n"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -523,9 +523,8 @@ def handle_pvp_callback(bot, call):
             if not chal_data: return safe_answer(bot, call.id, "This challenge has expired or was already answered!")
             
             chal_data["timer"].cancel()
-            safe_answer(bot, call.id, "Preparing the arena...")
+            safe_answer(bot, call.id, "Preparing the arena...", show_alert=False)
 
-            # 🟢 NEW AESTHETIC BATTLE START LOG!
             if LOG_GROUP_ID:
                 try: 
                     log_msg = f"⚔️ 【PᴠP】 {escape_md(chal_data['name'])} 🆚 {escape_md(chal_data['p2_name'])}"
@@ -623,14 +622,13 @@ def handle_pvp_callback(bot, call):
                     b["current_turn"] = button_turn
                     actual_turn = button_turn
                 else:
-                    return safe_answer(bot, call.id, "⏳ Processing previous move...")
+                    return safe_answer(bot, call.id, "⏳ Processing previous move...", show_alert=False)
 
             # 🛡️ THE 1.5-SECOND COOLDOWN SHIELD!
-            # Prevents Telegram 429 Too Many Requests errors.
             if action != "viewteam":
                 now = time.time()
                 if now - b.get("last_edit", 0) < 1.5:
-                    return safe_answer(bot, call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=True)
+                    return safe_answer(bot, call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=False)
                 b["last_edit"] = now
                 safe_answer(bot, call.id, "")
 
@@ -711,7 +709,6 @@ def handle_pvp_callback(bot, call):
                         win_mention = f"[{escape_md(winner_name)}](tg://user?id={b[actual_turn+'_id']})"
                         bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         
-                        # 🟢 NEW AESTHETIC RESULT LOG!
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 【Rᴇsᴜʟᴛ】 {escape_md(winner_name)} ᴅᴇғᴇᴀᴛᴇᴅ {escape_md(loser_name)}", parse_mode="MarkdownV2")
                             except: pass
@@ -739,7 +736,6 @@ def handle_pvp_callback(bot, call):
                         win_mention = f"[{escape_md(winner_name)}](tg://user?id={b[defender+'_id']})"
                         bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
                         
-                        # 🟢 NEW AESTHETIC RESULT LOG!
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 【Rᴇsᴜʟᴛ】 {escape_md(winner_name)} ᴅᴇғᴇᴀᴛᴇᴅ {escape_md(loser_name)}", parse_mode="MarkdownV2")
                             except: pass
@@ -764,8 +760,8 @@ def handle_pvp_callback(bot, call):
             elif action == "dosw":
                 idx = int(parts[4])
                 p = b[actual_turn+"_team"][idx]
-                if p["hp"] <= 0: return safe_answer(bot, call.id, "Pokemon is fainted!")
-                if idx == b[actual_turn+"_idx"]: return safe_answer(bot, call.id, "Already out!")
+                if p["hp"] <= 0: return safe_answer(bot, call.id, "Pokemon is fainted!", show_alert=True)
+                if idx == b[actual_turn+"_idx"]: return safe_answer(bot, call.id, "Already out!", show_alert=True)
                 
                 b["current_turn"] = "processing"
                 b["processing_start"] = time.time()
@@ -773,7 +769,7 @@ def handle_pvp_callback(bot, call):
                 b[actual_turn+"_idx"] = idx
                 
                 if b["state"] == "switch_menu":
-                    b["log"] = f"🔄 {old_name} was withdrawn!\n{p['name']} took the field!"
+                    b["log"] = f"🔄 {old_name} was withdrawn!\n🔄 {p['name']} took the field!"
                     b["state"] = "menu"
                     b["current_turn"] = "p2" if actual_turn == "p1" else "p1"
                 else:
@@ -789,7 +785,7 @@ def handle_pvp_callback(bot, call):
                 
             elif action == "mega":
                 p = b[actual_turn+"_team"][b[actual_turn+"_idx"]]
-                if p.get("is_mega"): return safe_answer(bot, call.id, "Already transformed!")
+                if p.get("is_mega"): return safe_answer(bot, call.id, "Already transformed!", show_alert=True)
                 
                 old_name = p['name']
                 
@@ -860,7 +856,7 @@ def handle_pvp_callback(bot, call):
                 p["name"] = new_name
                 if new_name in FORM_TYPE_CHANGES: p["types"] = FORM_TYPE_CHANGES[new_name]
                 
-                b["log"] = f"{old_name} {action_verb.lower()} into {new_name}!"
+                b["log"] = f"{icon} {old_name} {action_verb.lower()} into {new_name}!"
                 b["state"] = "menu"
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
