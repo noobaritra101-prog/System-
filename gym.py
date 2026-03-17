@@ -9,7 +9,7 @@ from config import logger, OWNER_ID
 from api_utils import escape_md
 from commands import clean_name, to_small_caps, safe_send
 from pvp import TYPE_CHART, TYPE_EMOJIS, get_hp_bar, format_types, get_type_multiplier, apply_nature, STATUS_EMOJIS
-from gym_data import GYM_LEADERS, ASH_KANTO_ROSTER, ASH_JOHTO_ROSTER, AUTHENTIC_MOVES
+from gym_data import GYM_LEADERS, ASH_KANTO_ROSTER, ASH_JOHTO_ROSTER, ASH_HOENN_ROSTER, AUTHENTIC_MOVES
 
 GYM_LOCKED = False  
 gym_battles = {}
@@ -248,6 +248,33 @@ def render_region_menu(bot, chat_id, message_id, uid, region):
                types.InlineKeyboardButton("Cʟᴀɪʀ", callback_data=f"gym_info_{uid}_Clair"))
         kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
 
+    elif region == "Hoenn":
+        text = (
+            f"✦━━━━━━━━━━━━━━━━✦\n"
+            f"🏟 Hᴏᴇɴɴ Gʏᴍ Cʜᴀʟʟᴇɴɢᴇ\n"
+            f"✦━━━━━━━━━━━━━━━━✦\n\n"
+            f"🪨 Sᴛᴏɴᴇ Bᴀᴅɢᴇ\n"
+            f"🥊 Kɴᴜᴄᴋʟᴇ Bᴀᴅɢᴇ\n"
+            f"⚡ Dʏɴᴀᴍᴏ Bᴀᴅɢᴇ\n"
+            f"🔥 Hᴇᴀᴛ Bᴀᴅɢᴇ\n"
+            f"🌫 Bᴀʟᴀɴᴄᴇ Bᴀᴅɢᴇ\n"
+            f"🪶 Fᴇᴀᴛʜᴇʀ Bᴀᴅɢᴇ\n"
+            f"🧠 Mɪɴᴅ Bᴀᴅɢᴇ\n"
+            f"💧 Rᴀɪɴ Bᴀᴅɢᴇ\n\n"
+            f"━━━━━━━━━━━━\n"
+            f"Sᴇʟᴇᴄᴛ ᴀ Gʏᴍ Lᴇᴀᴅᴇʀ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ\\."
+        )
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.row(types.InlineKeyboardButton("Rᴏxᴀɴɴᴇ", callback_data=f"gym_info_{uid}_Roxanne"),
+               types.InlineKeyboardButton("Bʀᴀᴡʟʏ", callback_data=f"gym_info_{uid}_Brawly"))
+        kb.row(types.InlineKeyboardButton("Wᴀᴛᴛsᴏɴ", callback_data=f"gym_info_{uid}_Wattson"),
+               types.InlineKeyboardButton("Fʟᴀɴɴᴇʀʏ", callback_data=f"gym_info_{uid}_Flannery"))
+        kb.row(types.InlineKeyboardButton("Nᴏʀᴍᴀɴ", callback_data=f"gym_info_{uid}_Norman"),
+               types.InlineKeyboardButton("Wɪɴᴏɴᴀ", callback_data=f"gym_info_{uid}_Winona"))
+        kb.row(types.InlineKeyboardButton("Tᴀᴛᴇ & Lɪᴢᴀ", callback_data=f"gym_info_{uid}_TateLiza"),
+               types.InlineKeyboardButton("Wᴀʟʟᴀᴄᴇ", callback_data=f"gym_info_{uid}_Wallace"))
+        kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
+
     else:
         bot.answer_callback_query(message_id, "This region is currently under construction!", show_alert=True)
         return
@@ -461,8 +488,17 @@ def setup_gym_battle(bot, call, leader_key, user_id, chat_id, battle_id):
         leader = GYM_LEADERS[leader_key]
         region = leader.get("region", "Kanto")
         
-        roster = ASH_KANTO_ROSTER if region == "Kanto" else ASH_JOHTO_ROSTER
-        player_roster = random.sample(roster, 3)
+        if region == "Kanto":
+            roster = ASH_KANTO_ROSTER
+        elif region == "Johto":
+            roster = ASH_JOHTO_ROSTER
+        else:
+            roster = ASH_HOENN_ROSTER
+            
+        num_pokemon = len(leader["team"])
+        num_to_sample = min(num_pokemon, len(roster))
+        
+        player_roster = random.sample(roster, num_to_sample)
         
         player_team = [build_mock_pokemon(n) for n in player_roster]
         ai_team = [build_mock_pokemon(n) for n in leader["team"]]
