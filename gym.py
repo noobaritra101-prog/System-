@@ -9,66 +9,84 @@ from config import logger, OWNER_ID
 from api_utils import escape_md
 from commands import clean_name, to_small_caps, safe_send
 from pvp import TYPE_CHART, TYPE_EMOJIS, get_hp_bar, format_types, get_type_multiplier, apply_nature, STATUS_EMOJIS
-from gym_data import GYM_LEADERS, ASH_ROSTER, AUTHENTIC_STATS, AUTHENTIC_MOVES
+from gym_data import GYM_LEADERS, ASH_KANTO_ROSTER, ASH_JOHTO_ROSTER, AUTHENTIC_MOVES
 
 GYM_LOCKED = False  
 gym_battles = {}
 
-# --- API MOVE MATCHER & CACHE ---
+# --- API DATA FETCHERS & CACHE ---
+POKEMON_CACHE = {}
 MOVE_CACHE = {}
 
-def clean_api_name(name):
-    return name.lower().replace(". ", "-").replace(" ", "-").replace("'", "")
-
-def fetch_api_moves(pokemon_name):
-    api_name = clean_api_name(pokemon_name)
+def fetch_pokemon_stats_from_api(name):
+    api_name = name.lower().replace(" ", "-").replace("'", "")
+    if api_name in POKEMON_CACHE:
+        return POKEMON_CACHE[api_name]
+    
     try:
         resp = requests.get(f"https://pokeapi.co/api/v2/pokemon/{api_name}", timeout=5)
-        if resp.status_code != 200: return []
+        if resp.status_code == 200:
+            data = resp.json()
             
-        all_moves = resp.json().get("moves", [])
-        random.shuffle(all_moves)
-        
-        final_moves = []
-        for m in all_moves:
-            if len(final_moves) >= 4: break
-            url = m["move"]["url"]
+            # Extract Types
+            types_list = [t["type"]["name"].title() for t in data.get("types", [])]
+            types_str = "/".join(types_list) if types_list else "Normal"
             
-            if url in MOVE_CACHE:
-                if MOVE_CACHE[url].get("power", 0) > 80:
-                    final_moves.append(MOVE_CACHE[url])
-                continue
-                
-            m_resp = requests.get(url, timeout=5)
-            if m_resp.status_code != 200: continue
-            m_data = m_resp.json()
+            # Extract Base Stats
+            stats = {s["stat"]["name"]: s["base_stat"] for s in data.get("stats", [])}
+            base_hp = stats.get("hp", 80)
+            base_atk = stats.get("attack", 80)
+            base_def = stats.get("defense", 80)
+            base_spd = stats.get("speed", 80)
             
-            power = m_data.get("power")
-            if not power or power <= 80:
-                MOVE_CACHE[url] = {"power": power or 0} 
-                continue
-                
-            acc = m_data.get("accuracy") or 100
-            m_type = m_data["type"]["name"].title()
-            name_formatted = m_data["name"].replace("-", " ").title()
+            # Convert to Level 100 Stats
+            hp = (2 * base_hp) + 110
+            atk = (2 * base_atk) + 5
+            dfn = (2 * base_def) + 5
+            spd = (2 * base_spd) + 5
             
-            move_dict = {"name": name_formatted, "type": m_type, "power": power, "acc": acc}
-            MOVE_CACHE[url] = move_dict
-            final_moves.append(move_dict)
-            
-        return final_moves
+            result = {"hp": hp, "atk": atk, "def": dfn, "spd": spd, "type": types_str}
+            POKEMON_CACHE[api_name] = result
+            return result
     except Exception as e:
-        logger.error(f"API Fetch Error: {e}")
-        return []
+        logger.error(f"API Pokemon Fetch Error for {name}: {e}")
+        
+    return {"hp": 250, "atk": 150, "def": 150, "spd": 150, "type": "Normal"}
+
+def fetch_move_data_from_api(move_name):
+    api_name = move_name.lower().replace(" ", "-").replace("'", "")
+    if api_name in MOVE_CACHE:
+        return MOVE_CACHE[api_name]
+        
+    try:
+        resp = requests.get(f"https://pokeapi.co/api/v2/move/{api_name}", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            power = data.get("power") or 0
+            acc = data.get("accuracy") or 100
+            m_type = data["type"]["name"].title()
+            
+            display_name = move_name.title().replace("-", " ")
+            
+            result = {"name": display_name, "type": m_type, "power": power, "acc": acc}
+            MOVE_CACHE[api_name] = result
+            return result
+    except Exception as e:
+        logger.error(f"API Move Fetch Error for {move_name}: {e}")
+        
+    return {"name": move_name.title(), "type": "Normal", "power": 40, "acc": 100}
 
 def build_mock_pokemon(name):
-    s = AUTHENTIC_STATS.get(name, {"hp": 300, "atk": 250, "def": 250, "spd": 250, "type": "Normal"})
+    s = fetch_pokemon_stats_from_api(name)
     p = {
         "name": name, "max_hp": s["hp"], "hp": s["hp"],
         "atk": s["atk"], "def": s["def"], "spd": s["spd"], "types": s["type"],
         "status": None, "is_mega": False, "can_mega": False
     }
-    p["moves"] = AUTHENTIC_MOVES.get(name, [{"name": "Tackle", "type": "Normal", "power": 40, "acc": 100}])
+    
+    move_names = AUTHENTIC_MOVES.get(name, ["Tackle", "Growl", "Scratch", "Bite"])
+    p["moves"] = [fetch_move_data_from_api(m_name) for m_name in move_names]
+    
     return p
 
 # --- TYPE CHART UTILS ---
@@ -164,7 +182,7 @@ def render_main_menu(bot, chat_id, uid, message_id=None, reply_to_id=None):
            types.InlineKeyboardButton("Kᴀʟᴏs", callback_data=f"gym_region_{uid}_Kalos"))
     kb.row(types.InlineKeyboardButton("Aʟᴏʟᴀ", callback_data=f"gym_region_{uid}_Alola"),
            types.InlineKeyboardButton("Gᴀʟᴀʀ", callback_data=f"gym_region_{uid}_Galar"))
-    kb.row(types.InlineKeyboardButton("⬅️ Bᴀᴄᴋ", callback_data=f"gym_close_{uid}"))
+    kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_close_{uid}"))
     
     if message_id:
         try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -176,46 +194,71 @@ def render_main_menu(bot, chat_id, uid, message_id=None, reply_to_id=None):
         bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2", reply_to_message_id=reply_to_id)
 
 def render_region_menu(bot, chat_id, message_id, uid, region):
-    if region != "Kanto":
-        bot.answer_callback_query(message_id, "🚧 This region is currently under construction!", show_alert=True)
-        return
+    if region == "Kanto":
+        text = (
+            f"✦━━━━━━━━━━━━━━━━✦\n"
+            f"🏟 Kᴀɴᴛᴏ Gʏᴍ Cʜᴀʟʟᴇɴɢᴇ\n"
+            f"✦━━━━━━━━━━━━━━━━✦\n\n"
+            f"🪨 Bᴏᴜʟᴅᴇʀ Bᴀᴅɢᴇ\n"
+            f"🌊 Cᴀsᴄᴀᴅᴇ Bᴀᴅɢᴇ\n"
+            f"⚡ Tʜᴜɴᴅᴇʀ Bᴀᴅɢᴇ\n"
+            f"🌈 Rᴀɪɴʙᴏᴡ Bᴀᴅɢᴇ\n"
+            f"☠️ Sᴏᴜʟ Bᴀᴅɢᴇ\n"
+            f"🔮 Mᴀʀsʜ Bᴀᴅɢᴇ\n"
+            f"🔥 Vᴏʟᴄᴀɴᴏ Bᴀᴅɢᴇ\n"
+            f"🌍 Eᴀʀᴛʜ Bᴀᴅɢᴇ\n\n"
+            f"━━━━━━━━━━━━\n"
+            f"Sᴇʟᴇᴄᴛ ᴀ Gʏᴍ Lᴇᴀᴅᴇʀ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ\\."
+        )
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.row(types.InlineKeyboardButton("Bʀᴏᴄᴋ", callback_data=f"gym_info_{uid}_Brock"),
+               types.InlineKeyboardButton("Mɪsᴛʏ", callback_data=f"gym_info_{uid}_Misty"))
+        kb.row(types.InlineKeyboardButton("Lᴛ\\. Sᴜʀɢᴇ", callback_data=f"gym_info_{uid}_Surge"),
+               types.InlineKeyboardButton("Eʀɪᴋᴀ", callback_data=f"gym_info_{uid}_Erika"))
+        kb.row(types.InlineKeyboardButton("Kᴏɢᴀ", callback_data=f"gym_info_{uid}_Koga"),
+               types.InlineKeyboardButton("Sᴀʙʀɪɴᴀ", callback_data=f"gym_info_{uid}_Sabrina"))
+        kb.row(types.InlineKeyboardButton("Bʟᴀɪɴᴇ", callback_data=f"gym_info_{uid}_Blaine"),
+               types.InlineKeyboardButton("Gɪᴏᴠᴀɴɴɪ", callback_data=f"gym_info_{uid}_Giovanni"))
+        kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
 
-    text = (
-        f"✦━━━━━━━━━━━━━━━━✦\n"
-        f"🏟 Kᴀɴᴛᴏ Gʏᴍ Cʜᴀʟʟᴇɴɢᴇ\n"
-        f"✦━━━━━━━━━━━━━━━━✦\n\n"
-        f"🪨 Bᴏᴜʟᴅᴇʀ Bᴀᴅɢᴇ\n"
-        f"🌊 Cᴀsᴄᴀᴅᴇ Bᴀᴅɢᴇ\n"
-        f"⚡ Tʜᴜɴᴅᴇʀ Bᴀᴅɢᴇ\n"
-        f"🌈 Rᴀɪɴʙᴏᴡ Bᴀᴅɢᴇ\n"
-        f"☠️ Sᴏᴜʟ Bᴀᴅɢᴇ\n"
-        f"🔮 Mᴀʀsʜ Bᴀᴅɢᴇ\n"
-        f"🔥 Vᴏʟᴄᴀɴᴏ Bᴀᴅɢᴇ\n"
-        f"🌍 Eᴀʀᴛʜ Bᴀᴅɢᴇ\n\n"
-        f"━━━━━━━━━━━━\n"
-        f"⚔️ Sᴇʟᴇᴄᴛ ᴀ Gʏᴍ Lᴇᴀᴅᴇʀ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ\\."
-    )
-    
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("Bʀᴏᴄᴋ", callback_data=f"gym_info_{uid}_Brock"),
-           types.InlineKeyboardButton("Mɪsᴛʏ", callback_data=f"gym_info_{uid}_Misty"))
-    kb.row(types.InlineKeyboardButton("Lᴛ\\. Sᴜʀɢᴇ", callback_data=f"gym_info_{uid}_Surge"),
-           types.InlineKeyboardButton("Eʀɪᴋᴀ", callback_data=f"gym_info_{uid}_Erika"))
-    kb.row(types.InlineKeyboardButton("Kᴏɢᴀ", callback_data=f"gym_info_{uid}_Koga"),
-           types.InlineKeyboardButton("Sᴀʙʀɪɴᴀ", callback_data=f"gym_info_{uid}_Sabrina"))
-    kb.row(types.InlineKeyboardButton("Bʟᴀɪɴᴇ", callback_data=f"gym_info_{uid}_Blaine"),
-           types.InlineKeyboardButton("Gɪᴏᴠᴀɴɴɪ", callback_data=f"gym_info_{uid}_Giovanni"))
-    kb.row(types.InlineKeyboardButton("⬅ Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
+    elif region == "Johto":
+        text = (
+            f"✦━━━━━━━━━━━━━━━━✦\n"
+            f"🏟 Jᴏʜᴛᴏ Gʏᴍ Cʜᴀʟʟᴇɴɢᴇ\n"
+            f"✦━━━━━━━━━━━━━━━━✦\n\n"
+            f"🕊 Zᴇᴘʜʏʀ Bᴀᴅɢᴇ\n"
+            f"🐞 Hɪᴠᴇ Bᴀᴅɢᴇ\n"
+            f"🐄 Pʟᴀɪɴ Bᴀᴅɢᴇ\n"
+            f"👻 Fᴏɢ Bᴀᴅɢᴇ\n"
+            f"🥊 Sᴛᴏʀᴍ Bᴀᴅɢᴇ\n"
+            f"🔩 Mɪɴᴇʀᴀʟ Bᴀᴅɢᴇ\n"
+            f"❄️ Gʟᴀᴄɪᴇʀ Bᴀᴅɢᴇ\n"
+            f"🐉 Rɪsɪɴɢ Bᴀᴅɢᴇ\n\n"
+            f"━━━━━━━━━━━━\n"
+            f"Sᴇʟᴇᴄᴛ ᴀ Gʏᴍ Lᴇᴀᴅᴇʀ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ\\."
+        )
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.row(types.InlineKeyboardButton("Fᴀʟᴋɴᴇʀ", callback_data=f"gym_info_{uid}_Falkner"),
+               types.InlineKeyboardButton("Bᴜɢsʏ", callback_data=f"gym_info_{uid}_Bugsy"))
+        kb.row(types.InlineKeyboardButton("Wʜɪᴛɴᴇʏ", callback_data=f"gym_info_{uid}_Whitney"),
+               types.InlineKeyboardButton("Mᴏʀᴛʏ", callback_data=f"gym_info_{uid}_Morty"))
+        kb.row(types.InlineKeyboardButton("Cʜᴜᴄᴋ", callback_data=f"gym_info_{uid}_Chuck"),
+               types.InlineKeyboardButton("Jᴀsᴍɪɴᴇ", callback_data=f"gym_info_{uid}_Jasmine"))
+        kb.row(types.InlineKeyboardButton("Pʀʏᴄᴇ", callback_data=f"gym_info_{uid}_Pryce"),
+               types.InlineKeyboardButton("Cʟᴀɪʀ", callback_data=f"gym_info_{uid}_Clair"))
+        kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_main_{uid}"))
+
+    else:
+        bot.answer_callback_query(message_id, "This region is currently under construction!", show_alert=True)
+        return
     
     try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
-    except: 
-        try: bot.delete_message(chat_id, message_id)
-        except: pass
-        bot.send_message(chat_id, text, reply_markup=kb, parse_mode="MarkdownV2")
+    except: pass
 
 def render_gym_info(bot, chat_id, message_id, uid, leader_key):
     leader = GYM_LEADERS[leader_key]
     team_str = "\n".join([f"• {escape_md(to_small_caps(p))}" for p in leader["team"]])
+    region = leader.get("region", "Kanto")
     
     text = (
         f"✦━━━━━━━━━━━━━━━━✦\n"
@@ -228,12 +271,12 @@ def render_gym_info(bot, chat_id, message_id, uid, leader_key):
         f"🎮 Pᴏᴋᴇ́ᴍᴏɴ Tᴇᴀᴍ\n"
         f"{team_str}\n\n"
         f"━━━━━━━━━━━━\n"
-        f"⚔️ Dᴏ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ ᴛʜɪs ɢʏᴍ?"
+        f"Dᴏ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴄʜᴀʟʟᴇɴɢᴇ ᴛʜɪs ɢʏᴍ?"
     )
     
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("✅ Cʜᴀʟʟᴇɴɢᴇ", callback_data=f"gym_start_{uid}_{leader_key}"),
-           types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"gym_region_{uid}_Kanto"))
+    kb.row(types.InlineKeyboardButton("Cʜᴀʟʟᴇɴɢᴇ", callback_data=f"gym_start_{uid}_{leader_key}"),
+           types.InlineKeyboardButton("Cᴀɴᴄᴇʟ", callback_data=f"gym_region_{uid}_{region}"))
            
     file_id = db.get_gym_image(leader_key)
     try: bot.delete_message(chat_id, message_id)
@@ -271,10 +314,6 @@ def render_gym_ui(bot, chat_id, battle_id):
         f"`{get_hp_bar(player_poke['hp'], player_poke['max_hp'])}`\n"
     )
 
-    if b["state"] == "waiting":
-        leader_small = escape_md(to_small_caps(leader['name']))
-        ui_text += f"\n_Gʏᴍ Lᴇᴀᴅᴇʀ {leader_small} ɪs ᴀᴛᴛᴀᴄᴋɪɴɢ\\.\\.\\.\\.\\._"
-
     kb = types.InlineKeyboardMarkup(row_width=2)
     
     if b["state"] == "menu":
@@ -307,7 +346,8 @@ def render_gym_ui(bot, chat_id, battle_id):
         if b["state"] == "switch_menu": kb.row(types.InlineKeyboardButton("Bᴀᴄᴋ", callback_data=f"gym_back_{battle_id}"))
 
     elif b["state"] == "waiting":
-        pass # Renders NO buttons so player must wait!
+        leader_small = escape_md(to_small_caps(leader['name']))
+        ui_text += f"\n_Gʏᴍ Lᴇᴀᴅᴇʀ {leader_small} ɪs ᴀᴛᴛᴀᴄᴋɪɴɢ\\.\\.\\.\\.\\._"
 
     try: bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
     except: pass
@@ -328,6 +368,7 @@ def resolve_action(b, actor, val):
 
     mv = atk["moves"][val]
     mult = get_type_multiplier(mv["type"], dfn["types"])
+    
     if mult == 0: 
         b["log"] += f"{atk['name']} used {mv['name']} (0 DMG)\n"
     else:
@@ -352,10 +393,13 @@ def check_faint_state(bot, chat_id, battle_id):
     if ai_poke["hp"] <= 0:
         if all(p["hp"] <= 0 for p in b["ai_team"]):
             leader = GYM_LEADERS[b["leader"]]
-            db.add_badge(b["player_id"], f"{leader['icon']} {leader['badge']}")
+            badge_icon = leader.get("icon", "")
+            db.add_badge(b["player_id"], f"{badge_icon} {leader['badge']}".strip())
+            
             b["state"] = "ended"
             player_mention = f"[{escape_md(b['player_name'])}](tg://user?id={b['player_id']})"
-            win_text = f"{escape_md(b['log'].strip())}\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n🏅 *You earned the {leader['icon']} {escape_md(leader['badge'])}*\\!"
+            
+            win_text = f"{escape_md(b['log'].strip())}\n\n{player_mention} *defeated Gym Leader {escape_md(leader['name'])}*\\!\n🏅 *You earned the {escape_md(badge_icon)} {escape_md(leader['badge'])}*\\!"
             try: bot.edit_message_text(win_text, chat_id, battle_id, parse_mode="MarkdownV2")
             except: pass
             return True
@@ -415,7 +459,10 @@ def execute_second_turn(bot, chat_id, battle_id):
 def setup_gym_battle(bot, call, leader_key, user_id, chat_id, battle_id):
     try:
         leader = GYM_LEADERS[leader_key]
-        player_roster = random.sample(ASH_ROSTER, 3)
+        region = leader.get("region", "Kanto")
+        
+        roster = ASH_KANTO_ROSTER if region == "Kanto" else ASH_JOHTO_ROSTER
+        player_roster = random.sample(roster, 3)
         
         player_team = [build_mock_pokemon(n) for n in player_roster]
         ai_team = [build_mock_pokemon(n) for n in leader["team"]]
