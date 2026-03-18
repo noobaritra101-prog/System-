@@ -64,15 +64,11 @@ FORM_TYPE_CHANGES = {
     "Crowned Zacian": "Fairy/Steel",
     "Crowned Zamazenta": "Fighting/Steel",
     "Shadow Rider Calyrex": "Psychic/Ghost",
-    
-    # Custom Formes
     "Mega Raichu X": "Electric/Fighting",
     "Mega Raichu Y": "Electric/Fairy",
     "Mega Lucario Z": "Fighting/Psychic",
     "Mega Zeraora": "Electric/Fighting",
     "Mega Greninja": "Water/Dark",
-    
-    # Custom Megas 
     "Mega Meganium": "Grass/Fairy", 
     "Mega Emboar": "Fire/Fighting",
     "Mega Malamar": "Dark/Psychic",
@@ -105,8 +101,6 @@ MEGA_STAT_BUFFS = {
     "Crowned Zamazenta": {"atk": -10, "def": 25, "spd": -10},
     "Shadow Rider Calyrex": {"atk": 0, "def": 0, "spd": 70},
     "Ash-Greninja": {"atk": 50, "def": 0, "spd": 10},
-    
-    # Custom Buffs
     "Mega Dragonite": {"atk": 40, "def": 20, "spd": 20}, 
     "Mega Meganium": {"atk": 10, "def": 40, "spd": 30},
     "Mega Emboar": {"atk": 40, "def": 20, "spd": 20},
@@ -126,18 +120,46 @@ MEGA_STAT_BUFFS = {
     "Mega Crabominable": {"atk": 60, "def": 40, "spd": 0}
 }
 
-# --- HELPERS ---
+# --- INTELLIGENT THREADED RATE LIMIT SHIELDS ---
 def safe_answer(bot, call_id, text="", show_alert=False):
-    """Answers callback queries to remove the spinning loading icon instantly."""
+    """Answers callback queries while gracefully absorbing 429 errors."""
     try: bot.answer_callback_query(call_id, text, show_alert=show_alert)
     except Exception: pass
 
+def _threaded_edit(bot, text, chat_id, message_id, reply_markup, retry_after):
+    """Background task to wait out Telegram API limits without freezing the bot!"""
+    time.sleep(retry_after)
+    try: bot.edit_message_text(text, chat_id, message_id, reply_markup=reply_markup, parse_mode="MarkdownV2")
+    except: pass
+
+def safe_edit(bot, text, chat_id, message_id, reply_markup=None):
+    """Edits messages and automatically threads if Telegram's group chat limit is hit."""
+    try:
+        bot.edit_message_text(text, chat_id, message_id, reply_markup=reply_markup, parse_mode="MarkdownV2")
+    except Exception as e:
+        err_str = str(e).lower()
+        if "message is not modified" in err_str: return
+        
+        # If Telegram hits us with a timeout, hand the update to a background thread!
+        if "429" in err_str or "too many requests" in err_str:
+            retry_after = 3 
+            if hasattr(e, 'result_json') and 'parameters' in e.result_json:
+                retry_after = e.result_json['parameters'].get('retry_after', 3)
+            elif "retry after" in err_str:
+                try: retry_after = int(err_str.split("retry after ")[1].split()[0])
+                except: pass
+                
+            logger.warning(f"Telegram Limit Hit (429). Threading background UI retry in {retry_after}s...")
+            threading.Thread(target=_threaded_edit, args=(bot, text, chat_id, message_id, reply_markup, retry_after)).start()
+        else:
+            logger.error(f"UI Update error: {e}")
+
+# --- HELPERS ---
 def clean_name(name):
     if not name: return "Trainer"
     return name.replace('\n', ' ').replace('\r', '').replace('*', '').replace('_', '').strip()
 
 def to_small_caps(text):
-    """Converts regular lowercase letters into premium small-caps font."""
     small_caps_map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
         'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
@@ -148,7 +170,11 @@ def to_small_caps(text):
 
 def get_faster_player(b):
     p1_spd = b["p1_team"][b["p1_idx"]]["spd"]
+    if b["p1_team"][b["p1_idx"]].get("status") == "PAR": p1_spd = int(p1_spd * 0.5)
+
     p2_spd = b["p2_team"][b["p2_idx"]]["spd"]
+    if b["p2_team"][b["p2_idx"]].get("status") == "PAR": p2_spd = int(p2_spd * 0.5)
+
     return "p1" if p1_spd >= p2_spd else "p2"
 
 def challenge_timeout(bot, chat_id, message_id):
@@ -157,8 +183,7 @@ def challenge_timeout(bot, chat_id, message_id):
         p1_name = escape_md(chal["name"])
         p1_id = chal["p1_id"]
         mention = f"[{p1_name}](tg://user?id={p1_id})"
-        try: bot.edit_message_text(f"*{mention}’s Cʜᴀʟʟᴇɴɢᴇ Hᴀs Exᴘɪʀᴇᴅ ⏳*", chat_id, message_id, parse_mode="MarkdownV2")
-        except Exception: pass
+        safe_edit(bot, f"*{mention}’s Cʜᴀʟʟᴇɴɢᴇ Hᴀs Exᴘɪʀᴇᴅ ⏳*", chat_id, message_id)
 
 def battle_timeout(bot, chat_id, battle_id):
     b = pvp_battles.get(battle_id)
@@ -174,16 +199,15 @@ def battle_timeout(bot, chat_id, battle_id):
         pvp_battles.pop(battle_id, None)
         
         try: db.update_battle_stats(winner_id, is_win=True)
-        except Exception as e: logger.error(f"Stat Save Error: {e}")
+        except: pass
         
         try: db.update_battle_stats(loser_id, is_win=False)
-        except Exception as e: logger.error(f"Stat Save Error: {e}")
+        except: pass
         
         loser_mention = f"[{escape_md(loser_name)}](tg://user?id={loser_id})"
         win_mention = f"[{escape_md(winner_name)}](tg://user?id={winner_id})"
         
-        try: bot.edit_message_text(f"⏳ *{loser_mention} ʀᴀɴ ᴏᴜᴛ ᴏғ ᴛɪᴍᴇ\\!*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", chat_id, battle_id, parse_mode="MarkdownV2")
-        except Exception: pass
+        safe_edit(bot, f"⏳ *{loser_mention} ʀᴀɴ ᴏᴜᴛ ᴏғ ᴛɪᴍᴇ\\!*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", chat_id, battle_id)
 
 def end_battle(battle_id):
     b = pvp_battles.pop(battle_id, None)
@@ -271,9 +295,7 @@ def update_challenge_message(bot, chat_id, message_id, chal):
         types.InlineKeyboardButton("✔️ Aᴄᴄᴇᴘᴛ", callback_data=f"pvp_accept_{chal['p1_id']}_{chal['p2_id']}"),
         types.InlineKeyboardButton("✖️ Dᴇᴄʟɪɴᴇ", callback_data=f"pvp_decline_{chal['p1_id']}_{chal['p2_id']}")
     )
-    try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
-    except Exception as e: 
-        if "message is not modified" not in str(e).lower(): pass
+    safe_edit(bot, text, chat_id, message_id, reply_markup=kb)
 
 def render_settings_ui(bot, chat_id, message_id, chal):
     text = f"⚙️ *Bᴀᴛᴛʟᴇ Sᴇᴛᴛɪɴɢs*\n\nCᴏɴғɪɢᴜʀᴇ ᴛʜᴇ ʀᴜʟᴇs ғᴏʀ ᴛʜɪs ᴍᴀᴛᴄʜ:"
@@ -293,9 +315,8 @@ def render_settings_ui(bot, chat_id, message_id, chal):
     kb.row(types.InlineKeyboardButton(sw_lbl, callback_data=f"pvp_setsw_{chal['p1_id']}"))
     kb.row(types.InlineKeyboardButton("💾 Sᴀᴠᴇ Sᴇᴛᴛɪɴɢs", callback_data=f"pvp_setsave_{chal['p1_id']}"))
     kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_setback_{chal['p1_id']}"))
-    try: bot.edit_message_text(text, chat_id, message_id, reply_markup=kb, parse_mode="MarkdownV2")
-    except Exception as e: 
-        if "message is not modified" not in str(e).lower(): pass
+    
+    safe_edit(bot, text, chat_id, message_id, reply_markup=kb)
 
 def render_pvp_ui(bot, chat_id, battle_id):
     if battle_id not in pvp_battles: return
@@ -412,12 +433,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
         kb.row(types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ Fʟᴇᴇ", callback_data=f"pvp_run_{battle_id}_{turn}"),
                types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
-    try: 
-        bot.edit_message_text(ui_text, chat_id, battle_id, reply_markup=kb, parse_mode="MarkdownV2")
-    except Exception as e: 
-        err_msg = str(e).lower()
-        if "message is not modified" in err_msg: pass 
-        else: logger.error(f"UI Update error: {e}")
+    safe_edit(bot, ui_text, chat_id, battle_id, reply_markup=kb)
 
 # --- COMMAND HANDLER ---
 def handle_pvp_command(bot, message):
@@ -456,8 +472,8 @@ def handle_pvp_command(bot, message):
         if p1_id in [c["p1_id"], c["p2_id"]]:
             c["timer"].cancel()
             to_remove.append(mid)
-            try: bot.edit_message_text("❌ *Challenge cancelled because a new one was started\\.*", c["chat_id"], mid, parse_mode="MarkdownV2")
-            except: pass
+            safe_edit(bot, "❌ *Challenge cancelled because a new one was started\\.*", c["chat_id"], mid)
+            
     for mid in to_remove: pending_challenges.pop(mid, None)
 
     if is_in_pending_challenge(p2_id): 
@@ -532,7 +548,7 @@ def handle_pvp_callback(bot, call):
                 except: pass
             
             def setup():
-                bot.edit_message_text("🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                safe_edit(bot, "🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id)
                 
                 t1_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
                 t2_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
@@ -583,6 +599,11 @@ def handle_pvp_callback(bot, call):
                         p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
                         p["is_mega"] = False
                         
+                        for m in p["moves"]:
+                            if "status_chance" not in m:
+                                m["status_chance"] = 0
+                                m["status_type"] = None
+                        
                         final_team.append(p)
                         
                 pvp_battles[battle_id] = {
@@ -608,11 +629,7 @@ def handle_pvp_callback(bot, call):
             button_turn = parts[3] 
             actual_turn = b["current_turn"]
             
-            if actual_turn in ["p1", "p2"] and button_turn != actual_turn:
-                if call.from_user.id == b[actual_turn + "_id"]:
-                    render_pvp_ui(bot, call.message.chat.id, battle_id)
-                    return safe_answer(bot, call.id, "🔄 Syncing battle state...", show_alert=False)
-
+            # STALE UI SHIELD: Prevents users from clicking opponent buttons via old UI frames
             if call.from_user.id != b[button_turn + "_id"]: 
                 if action == "viewteam": return safe_answer(bot, call.id, "❌ Cannot view opponent's team!", show_alert=True)
                 return safe_answer(bot, call.id, "❌ Not your buttons!", show_alert=True)
@@ -624,7 +641,12 @@ def handle_pvp_callback(bot, call):
                 else:
                     return safe_answer(bot, call.id, "⏳ Processing previous move...", show_alert=False)
 
-            # 🛡️ THE 1.5-SECOND COOLDOWN SHIELD!
+            if button_turn != actual_turn:
+                if action != "viewteam":
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                    return safe_answer(bot, call.id, "🔄 Syncing battle state...", show_alert=False)
+
+            # 🛡️ THE 1.5-SECOND RATE LIMIT SHIELD
             if action != "viewteam":
                 now = time.time()
                 if now - b.get("last_edit", 0) < 1.5:
@@ -644,14 +666,14 @@ def handle_pvp_callback(bot, call):
                 can_attack = True
                 
                 if atk.get("status") == "PAR" and random.random() < 0.25:
-                    can_attack = False; b["log"] += f"⚡ {atk['name']} is paralyzed! It can't move!\n"
+                    can_attack = False; b["log"] += f"{atk['name']} is paralyzed! It can't move!\n"
                 elif atk.get("status") == "SLP":
                     atk["sleep_turns"] -= 1
-                    if atk["sleep_turns"] <= 0: atk["status"] = None; b["log"] += f"💤 {atk['name']} woke up!\n"
-                    else: can_attack = False; b["log"] += f"💤 {atk['name']} is fast asleep.\n"
+                    if atk["sleep_turns"] <= 0: atk["status"] = None; b["log"] += f"{atk['name']} woke up!\n"
+                    else: can_attack = False; b["log"] += f"{atk['name']} is fast asleep.\n"
                 elif atk.get("status") == "FRZ":
-                    if random.random() < 0.20: atk["status"] = None; b["log"] += f"🧊 {atk['name']} thawed out!\n"
-                    else: can_attack = False; b["log"] += f"🧊 {atk['name']} is frozen solid!\n"
+                    if random.random() < 0.20: atk["status"] = None; b["log"] += f"{atk['name']} thawed out!\n"
+                    else: can_attack = False; b["log"] += f"{atk['name']} is frozen solid!\n"
 
                 if can_attack:
                     mv_acc = mv.get("acc")
@@ -671,33 +693,35 @@ def handle_pvp_callback(bot, call):
                             if mv_pow is None: mv_pow = 0
                             
                             if mv_pow > 0:
+                                eff_atk = atk["atk"]
+                                if atk.get("status") == "BRN":
+                                    eff_atk = int(eff_atk * 0.5)
+
                                 def_stat = max(1, dfn["def"])
                                 
-                                base_damage = ((42 * mv_pow * (atk["atk"] / def_stat)) / 50) + 2
+                                base_damage = ((42 * mv_pow * (eff_atk / def_stat)) / 50) + 2
                                 rand_roll = random.uniform(0.85, 1.00)
                                 dmg = max(1, int(base_damage * mult * stab * crit * rand_roll))
                                 dfn["hp"] = max(0, dfn["hp"] - dmg)
                                 
                                 b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
-                                if crit > 1: b["log"] += "A critical hit!\n"
-                                if mult > 1: b["log"] += "It's super effective!\n"
-                                elif mult < 1: b["log"] += "It's not very effective...\n"
                             else:
                                 b["log"] += f"{atk['name']} used {mv['name']}!\n"
                             
                             if not dfn.get("status") and mv.get("status_chance", 0) > 0 and dfn["hp"] > 0:
                                 if random.randint(1, 100) <= mv["status_chance"]:
                                     dfn["status"] = mv["status_type"]
-                                    if mv["status_type"] == "SLP": dfn["sleep_turns"] = random.randint(1, 3)
+                                    if mv["status_type"] == "SLP": 
+                                        dfn["sleep_turns"] = random.randint(1, 3)
                                     b["log"] += f"{dfn['name']} was inflicted with {mv['status_type']}!\n"
 
                 if atk["hp"] > 0:
                     if atk.get("status") == "BRN":
                         dmg = max(1, atk["max_hp"] // 16); atk["hp"] = max(0, atk["hp"] - dmg)
-                        b["log"] += f"🔥 {atk['name']} is hurt by its burn!\n"
+                        b["log"] += f"{atk['name']} is hurt by its burn!\n"
                     elif atk.get("status") == "PSN":
                         dmg = max(1, atk["max_hp"] // 8); atk["hp"] = max(0, atk["hp"] - dmg)
-                        b["log"] += f"☠️ {atk['name']} is hurt by poison!\n"
+                        b["log"] += f"{atk['name']} is hurt by poison!\n"
 
                 if dfn["hp"] <= 0:
                     dfn["hp"] = 0; dfn["status"] = None
@@ -707,7 +731,7 @@ def handle_pvp_callback(bot, call):
                         winner_name = b[actual_turn+'_name']
                         loser_name = b[defender+'_name']
                         win_mention = f"[{escape_md(winner_name)}](tg://user?id={b[actual_turn+'_id']})"
-                        bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        safe_edit(bot, f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id)
                         
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 【Rᴇsᴜʟᴛ】 {escape_md(winner_name)} ᴅᴇғᴇᴀᴛᴇᴅ {escape_md(loser_name)}", parse_mode="MarkdownV2")
@@ -734,7 +758,7 @@ def handle_pvp_callback(bot, call):
                         winner_name = b[defender+'_name']
                         loser_name = b[actual_turn+'_name']
                         win_mention = f"[{escape_md(winner_name)}](tg://user?id={b[defender+'_id']})"
-                        bot.edit_message_text(f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                        safe_edit(bot, f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id)
                         
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 【Rᴇsᴜʟᴛ】 {escape_md(winner_name)} ᴅᴇғᴇᴀᴛᴇᴅ {escape_md(loser_name)}", parse_mode="MarkdownV2")
@@ -766,14 +790,15 @@ def handle_pvp_callback(bot, call):
                 b["current_turn"] = "processing"
                 b["processing_start"] = time.time()
                 old_name = b[actual_turn+"_team"][b[actual_turn+"_idx"]]["name"]
+                
                 b[actual_turn+"_idx"] = idx
                 
                 if b["state"] == "switch_menu":
-                    b["log"] = f"🔄 {old_name} was withdrawn!\n🔄 {p['name']} took the field!"
+                    b["log"] = f"{old_name} was withdrawn!\n{p['name']} took the field!"
                     b["state"] = "menu"
                     b["current_turn"] = "p2" if actual_turn == "p1" else "p1"
                 else:
-                    b["log"] += f"\n🔄 {p['name']} took the field!"
+                    b["log"] += f"\n{p['name']} took the field!"
                     b["state"] = "menu"
                     b["current_turn"] = get_faster_player(b)
                     
@@ -856,7 +881,7 @@ def handle_pvp_callback(bot, call):
                 p["name"] = new_name
                 if new_name in FORM_TYPE_CHANGES: p["types"] = FORM_TYPE_CHANGES[new_name]
                 
-                b["log"] = f"{icon} {old_name} {action_verb.lower()} into {new_name}!"
+                b["log"] = f"{old_name} {action_verb.lower()} into {new_name}!"
                 b["state"] = "menu"
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
@@ -890,7 +915,7 @@ def handle_pvp_callback(bot, call):
                 winner_name = b["p2_name"] if actual_turn == "p1" else b["p1_name"]
                 win_mention = f"[{escape_md(winner_name)}](tg://user?id={winner_id})"
                 
-                bot.edit_message_text(f"🏃 *{runner_mention} ғʟᴇᴅ\\!*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id, parse_mode="MarkdownV2")
+                safe_edit(bot, f"🏃 *{runner_mention} ғʟᴇᴅ\\!*\n\n🏆 *{win_mention} Wɪɴs ᴛʜᴇ Bᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id)
                 
                 if LOG_GROUP_ID:
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Battle Ended:* [{escape_md(b[actual_turn+'_name'])}](tg://user?id={b[actual_turn+'_id']}) fled from battle\\.", parse_mode="MarkdownV2")
