@@ -15,9 +15,16 @@ db_pool = None
 def init_db():
     global db_pool
     try:
-        db_pool = pool.SimpleConnectionPool(1, 20, DATABASE_URL)
+        db_pool = pool.SimpleConnectionPool(
+            1, 20, 
+            DATABASE_URL,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5
+        )
         if db_pool:
-            logger.info("✅ Connection pool created successfully")
+            logger.info("✅ Connection pool created successfully with Keepalives")
             
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -47,7 +54,8 @@ def init_db():
                         user_id BIGINT PRIMARY KEY,
                         mode TEXT DEFAULT 'Mix',
                         size INTEGER DEFAULT 6,
-                        can_switch BOOLEAN DEFAULT TRUE
+                        can_switch BOOLEAN DEFAULT TRUE,
+                        status_effects BOOLEAN DEFAULT TRUE
                     )
                 """)
                 
@@ -58,6 +66,10 @@ def init_db():
                 cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='can_switch'")
                 if not cur.fetchone():
                     cur.execute("ALTER TABLE pvp_settings ADD COLUMN can_switch BOOLEAN DEFAULT TRUE")
+
+                cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='pvp_settings' AND column_name='status_effects'")
+                if not cur.fetchone():
+                    cur.execute("ALTER TABLE pvp_settings ADD COLUMN status_effects BOOLEAN DEFAULT TRUE")
 
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS battle_stats (
@@ -110,7 +122,6 @@ def init_db():
     except Exception as e:
         logger.error(f"❌ Database initialization error: {e}")
 
-# 🛡️ THE SUPABASE AUTO-RECONNECT SHIELD
 @contextmanager
 def get_conn():
     global db_pool
@@ -281,20 +292,20 @@ def get_user_pvp_rank(user_id):
 def get_pvp_settings(user_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT mode, size, can_switch FROM pvp_settings WHERE user_id = %s", (user_id,))
+            cur.execute("SELECT mode, size, can_switch, status_effects FROM pvp_settings WHERE user_id = %s", (user_id,))
             row = cur.fetchone()
-            if row: return row[0], row[1], row[2]
-            return "Mix", 6, True
+            if row: return row[0], row[1], row[2], row[3]
+            return "Mix", 6, True, True
 
-def update_pvp_settings(user_id, mode, size, can_switch):
+def update_pvp_settings(user_id, mode, size, can_switch, status_effects):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO pvp_settings (user_id, mode, size, can_switch) 
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO pvp_settings (user_id, mode, size, can_switch, status_effects) 
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (user_id) DO UPDATE 
-                SET mode = EXCLUDED.mode, size = EXCLUDED.size, can_switch = EXCLUDED.can_switch
-            """, (user_id, mode, size, can_switch))
+                SET mode = EXCLUDED.mode, size = EXCLUDED.size, can_switch = EXCLUDED.can_switch, status_effects = EXCLUDED.status_effects
+            """, (user_id, mode, size, can_switch, status_effects))
             conn.commit()
 
 def get_battle_stats(user_id):
