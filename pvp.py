@@ -186,12 +186,8 @@ def end_battle(battle_id, bot=None, chat_id=None):
     if b:
         if "timer" in b and b["timer"]: b["timer"].cancel()
         if bot and "tracked_msgs" in b:
-            for item in b["tracked_msgs"]:
-                try:
-                    if isinstance(item, tuple):
-                        bot.delete_message(item[0], item[1])
-                    elif chat_id:
-                        bot.delete_message(chat_id, item)
+            for dm_chat_id, msg_id in b["tracked_msgs"]:
+                try: bot.delete_message(dm_chat_id, msg_id)
                 except: pass
 
 def battle_timeout(bot, chat_id, battle_id):
@@ -444,7 +440,55 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
     safe_edit(bot, ui_text, chat_id, battle_id, reply_markup=kb)
 
-# --- COMMAND HANDLER ---
+# --- COMMAND HANDLERS ---
+def handle_myteam_command(bot, message):
+    user_id = message.from_user.id
+    battle_to_show = None
+    turn = None
+    
+    for b_id, b in pvp_battles.items():
+        if b["p1_id"] == user_id:
+            battle_to_show = b
+            turn = "p1"
+            break
+        elif b["p2_id"] == user_id:
+            battle_to_show = b
+            turn = "p2"
+            break
+    
+    if not battle_to_show:
+        return bot.reply_to(message, escape_md("❌ You are not currently in a PvP battle."), parse_mode="MarkdownV2")
+        
+    lines = ["🎒 *Yᴏᴜʀ Cᴜʀʀᴇɴᴛ PᴠP Tᴇᴀᴍ:*\n"]
+    for i, p in enumerate(battle_to_show[turn + '_team']):
+        types_raw = p['types'].split('/')
+        type_str = " / ".join([f"{t.strip()} {TYPE_EMOJIS.get(t.strip(), '')}" for t in types_raw])
+        
+        status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '')))))
+        
+        lines.append(f"*{i+1}\\. {escape_md(p['name'])} \\[{escape_md(type_str)}\\]* {status_icon}")
+        lines.append(f"🌿 *Nᴀᴛᴜʀᴇ:* {escape_md(p['nature'])}")
+        lines.append(f"⚔️ *Mᴏᴠᴇs:*")
+        
+        for m in p['moves']:
+            m_name = escape_md(m['name'])
+            m_type = f"{m['type']} {TYPE_EMOJIS.get(m['type'], '')}"
+            m_type_md = escape_md(m_type)
+            pow_str = escape_md(str(m.get('power', 0)))
+            acc_str = escape_md(str(m.get('acc', 100)))
+            lines.append(f"  \\- {m_name} \\[{m_type_md}\\] \\(Pow: {pow_str}, Acc: {acc_str}\\)")
+        lines.append("") 
+    
+    team_text = "\n".join(lines)
+    
+    try:
+        sent_msg = bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
+        battle_to_show.setdefault("tracked_msgs", []).append((user_id, sent_msg.message_id))
+        bot.reply_to(message, escape_md("✅ Detailed team sent to your DMs! It will auto-delete when the battle ends."), parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Myteam DM error: {e}")
+        bot.reply_to(message, escape_md("❌ Please start the bot in DM first to receive your team list!"), parse_mode="MarkdownV2")
+
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: 
         return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
@@ -959,43 +1003,13 @@ def handle_pvp_callback(bot, call):
                 b["state"] = "menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
             elif action == "viewteam":
-                if "tracked_msgs" in b:
-                    for item in b["tracked_msgs"]:
-                        try:
-                            if isinstance(item, tuple): bot.delete_message(item[0], item[1])
-                            else: bot.delete_message(call.message.chat.id, item)
-                        except: pass
-                    b["tracked_msgs"] = []
-
-                lines = ["🎒 *Yᴏᴜʀ Cᴜʀʀᴇɴᴛ PᴠP Tᴇᴀᴍ:*\n"]
+                lines = []
                 for i, p in enumerate(b[button_turn + '_team']):
-                    types_raw = p['types'].split('/')
-                    type_str = " / ".join([f"{t.strip()} {TYPE_EMOJIS.get(t.strip(), '')}" for t in types_raw])
-                    
+                    emojis = "/".join([TYPE_EMOJIS.get(t.strip(), '⚪') for t in p['types'].split('/')])
                     status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
-                    
-                    lines.append(f"*{i+1}\\. {escape_md(p['name'])} \\[{escape_md(type_str)}\\]* {status_icon}")
-                    lines.append(f"🌿 *Nᴀᴛᴜʀᴇ:* {escape_md(p['nature'])}")
-                    lines.append(f"⚔️ *Mᴏᴠᴇs:*")
-                    
-                    for m in p['moves']:
-                        m_name = escape_md(m['name'])
-                        m_type = f"{m['type']} {TYPE_EMOJIS.get(m['type'], '')}"
-                        m_type_md = escape_md(m_type)
-                        pow_str = escape_md(str(m.get('power', 0)))
-                        acc_str = escape_md(str(m.get('acc', 100)))
-                        lines.append(f"  \\- {m_name} \\[{m_type_md}\\] \\(Pow: {pow_str}, Acc: {acc_str}\\)")
-                    lines.append("") 
+                    lines.append(f"({p['name']}) [{emojis}] - {p['nature']} {status_icon}")
                 
-                team_text = "\n".join(lines)
-                
-                try:
-                    sent_msg = bot.send_message(call.from_user.id, team_text, parse_mode="MarkdownV2")
-                    b.setdefault("tracked_msgs", []).append((call.from_user.id, sent_msg.message_id))
-                    safe_answer(bot, call.id, "✅ Team sent to your DMs! It will auto-delete after the battle.", show_alert=True)
-                except Exception as e:
-                    logger.error(f"Viewteam DM error: {e}")
-                    safe_answer(bot, call.id, "❌ Please start the bot in DM first to receive your team list!", show_alert=True)
+                safe_answer(bot, call.id, "\n".join(lines), show_alert=True)
 
     except Exception as e: 
         logger.error(f"PvP Callback Error: {e}")
