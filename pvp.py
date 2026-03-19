@@ -181,15 +181,6 @@ def challenge_timeout(bot, chat_id, message_id):
         mention = f"[{p1_name}](tg://user?id={p1_id})"
         safe_edit(bot, f"*{mention}’s Cʜᴀʟʟᴇɴɢᴇ Hᴀs Exᴘɪʀᴇᴅ ⏳*", chat_id, message_id)
 
-def end_battle(battle_id, bot=None, chat_id=None):
-    b = pvp_battles.pop(battle_id, None)
-    if b:
-        if "timer" in b and b["timer"]: b["timer"].cancel()
-        if bot and "tracked_msgs" in b:
-            for dm_chat_id, msg_id in b["tracked_msgs"]:
-                try: bot.delete_message(dm_chat_id, msg_id)
-                except: pass
-
 def battle_timeout(bot, chat_id, battle_id):
     b = pvp_battles.get(battle_id)
     if b:
@@ -217,6 +208,11 @@ def battle_timeout(bot, chat_id, battle_id):
             except: pass
             
         end_battle(battle_id, bot, chat_id)
+
+def end_battle(battle_id, bot=None, chat_id=None):
+    b = pvp_battles.pop(battle_id, None)
+    if b:
+        if "timer" in b and b["timer"]: b["timer"].cancel()
 
 def get_type_multiplier(move_type, defender_types_str):
     multiplier = 1.0
@@ -286,13 +282,15 @@ def update_challenge_message(bot, chat_id, message_id, chal):
     else: mode_text = escape_md(mode_str)
     
     sw_text = "Oɴ" if chal["can_switch"] else "Oғғ"
+    status_text = "Oɴ" if chal.get("status_effects", True) else "Oғғ"
     
     act_mention = f"[{p1_name}](tg://user?id={p1_id})"
     def_mention = f"[{p2_name}](tg://user?id={p2_id})"
     
     text = (f"*{act_mention} ᴄʜᴀʟʟᴇɴɢᴇᴅ {def_mention} ᴛᴏ ᴀ {size} ᴠ {size} Rᴀɴᴅᴏᴍ Bᴀᴛᴛʟᴇ ❗❗*\n\n"
             f"⚙️ Mᴏᴅᴇ: {mode_text}\n"
-            f"🔄 Sᴡɪᴛᴄʜɪɴɢ: {sw_text}")
+            f"🔄 Sᴡɪᴛᴄʜɪɴɢ: {sw_text}\n"
+            f"✨ Sᴛᴀᴛᴜs Eғғᴇᴄᴛs: {status_text}")
     
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("⚙️ Sᴇᴛᴛɪɴɢs", callback_data=f"pvp_settings_{chal['p1_id']}"))
@@ -318,6 +316,10 @@ def render_settings_ui(bot, chat_id, message_id, chal):
     
     sw_lbl = "🔄 Sᴡɪᴛᴄʜ: Oɴ" if chal['can_switch'] else "🚫 Sᴡɪᴛᴄʜ: Oғғ"
     kb.row(types.InlineKeyboardButton(sw_lbl, callback_data=f"pvp_setsw_{chal['p1_id']}"))
+    
+    status_lbl = "Sᴛᴀᴛᴜs Eғғᴇᴄᴛs: 🟢 Oɴ" if chal.get("status_effects", True) else "Sᴛᴀᴛᴜs Eғғᴇᴄᴛs: 🔴 Oғғ"
+    kb.row(types.InlineKeyboardButton(status_lbl, callback_data=f"pvp_setstatus_{chal['p1_id']}"))
+    
     kb.row(types.InlineKeyboardButton("💾 Sᴀᴠᴇ Sᴇᴛᴛɪɴɢs", callback_data=f"pvp_setsave_{chal['p1_id']}"))
     kb.row(types.InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data=f"pvp_setback_{chal['p1_id']}"))
     
@@ -440,55 +442,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
     safe_edit(bot, ui_text, chat_id, battle_id, reply_markup=kb)
 
-# --- COMMAND HANDLERS ---
-def handle_myteam_command(bot, message):
-    user_id = message.from_user.id
-    battle_to_show = None
-    turn = None
-    
-    for b_id, b in pvp_battles.items():
-        if b["p1_id"] == user_id:
-            battle_to_show = b
-            turn = "p1"
-            break
-        elif b["p2_id"] == user_id:
-            battle_to_show = b
-            turn = "p2"
-            break
-    
-    if not battle_to_show:
-        return bot.reply_to(message, escape_md("❌ You are not currently in a PvP battle."), parse_mode="MarkdownV2")
-        
-    lines = ["🎒 *Yᴏᴜʀ Cᴜʀʀᴇɴᴛ PᴠP Tᴇᴀᴍ:*\n"]
-    for i, p in enumerate(battle_to_show[turn + '_team']):
-        types_raw = p['types'].split('/')
-        type_str = " / ".join([f"{t.strip()} {TYPE_EMOJIS.get(t.strip(), '')}" for t in types_raw])
-        
-        status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '')))))
-        
-        lines.append(f"*{i+1}\\. {escape_md(p['name'])} \\[{escape_md(type_str)}\\]* {status_icon}")
-        lines.append(f"🌿 *Nᴀᴛᴜʀᴇ:* {escape_md(p['nature'])}")
-        lines.append(f"⚔️ *Mᴏᴠᴇs:*")
-        
-        for m in p['moves']:
-            m_name = escape_md(m['name'])
-            m_type = f"{m['type']} {TYPE_EMOJIS.get(m['type'], '')}"
-            m_type_md = escape_md(m_type)
-            pow_str = escape_md(str(m.get('power', 0)))
-            acc_str = escape_md(str(m.get('acc', 100)))
-            lines.append(f"  \\- {m_name} \\[{m_type_md}\\] \\(Pow: {pow_str}, Acc: {acc_str}\\)")
-        lines.append("") 
-    
-    team_text = "\n".join(lines)
-    
-    try:
-        sent_msg = bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
-        battle_to_show.setdefault("tracked_msgs", []).append((user_id, sent_msg.message_id))
-        bot.reply_to(message, escape_md("✅ Detailed team sent to your DMs! It will auto-delete when the battle ends."), parse_mode="MarkdownV2")
-    except Exception as e:
-        logger.error(f"Myteam DM error: {e}")
-        bot.reply_to(message, escape_md("❌ Please start the bot in DM first to receive your team list!"), parse_mode="MarkdownV2")
-
+# --- COMMAND HANDLER ---
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: 
         return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
@@ -544,7 +498,7 @@ def handle_pvp_command(bot, message):
     
     chal = {"name": clean_name(message.from_user.first_name), "p2_name": clean_name(target.from_user.first_name),
             "timer": timer, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id, 
-            "mode": mode, "size": size, "can_switch": can_switch}
+            "mode": mode, "size": size, "can_switch": can_switch, "status_effects": True}
     
     pending_challenges[sent.message_id] = chal
     update_challenge_message(bot, message.chat.id, sent.message_id, chal)
@@ -573,6 +527,12 @@ def handle_pvp_callback(bot, call):
             chal = pending_challenges.get(call.message.message_id)
             if chal and call.from_user.id == chal["p1_id"]: 
                 chal["can_switch"] = not chal["can_switch"]; render_settings_ui(bot, call.message.chat.id, call.message.message_id, chal)
+            return
+        elif action == "setstatus":
+            chal = pending_challenges.get(call.message.message_id)
+            if chal and call.from_user.id == chal["p1_id"]: 
+                chal["status_effects"] = not chal.get("status_effects", True)
+                render_settings_ui(bot, call.message.chat.id, call.message.message_id, chal)
             return
         elif action == "setsave":
             chal = pending_challenges.get(call.message.message_id)
@@ -672,6 +632,9 @@ def handle_pvp_callback(bot, call):
                             if "status_chance" not in m:
                                 m["status_chance"] = 0
                                 m["status_type"] = None
+                            if not chal_data.get("status_effects", True):
+                                m["status_chance"] = 0
+                                m["status_type"] = None
                         
                         final_team.append(p)
                         
@@ -733,14 +696,14 @@ def handle_pvp_callback(bot, call):
                 can_attack = True
                 
                 if atk.get("status") == "PAR" and random.random() < 0.25:
-                    can_attack = False; b["log"] += f"{atk['name']} is paralyzed! It can't move!\n"
+                    can_attack = False; b["log"] += f"⚡ {atk['name']} is paralyzed! It can't move!\n"
                 elif atk.get("status") == "SLP":
                     atk["sleep_turns"] -= 1
-                    if atk["sleep_turns"] <= 0: atk["status"] = None; b["log"] += f"{atk['name']} woke up!\n"
-                    else: can_attack = False; b["log"] += f"{atk['name']} is fast asleep.\n"
+                    if atk["sleep_turns"] <= 0: atk["status"] = None; b["log"] += f"💤 {atk['name']} woke up!\n"
+                    else: can_attack = False; b["log"] += f"💤 {atk['name']} is fast asleep.\n"
                 elif atk.get("status") == "FRZ":
-                    if random.random() < 0.20: atk["status"] = None; b["log"] += f"{atk['name']} thawed out!\n"
-                    else: can_attack = False; b["log"] += f"{atk['name']} is frozen solid!\n"
+                    if random.random() < 0.20: atk["status"] = None; b["log"] += f"🧊 {atk['name']} thawed out!\n"
+                    else: can_attack = False; b["log"] += f"🧊 {atk['name']} is frozen solid!\n"
 
                 if can_attack:
                     mv_acc = mv.get("acc")
@@ -772,6 +735,9 @@ def handle_pvp_callback(bot, call):
                                 dfn["hp"] = max(0, dfn["hp"] - dmg)
                                 
                                 b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
+                                if crit > 1: b["log"] += "A critical hit!\n"
+                                if mult > 1: b["log"] += "It's super effective!\n"
+                                elif mult < 1: b["log"] += "It's not very effective...\n"
                             else:
                                 b["log"] += f"{atk['name']} used {mv['name']}!\n"
                             
@@ -785,14 +751,14 @@ def handle_pvp_callback(bot, call):
                 if atk["hp"] > 0:
                     if atk.get("status") == "BRN":
                         dmg = max(1, atk["max_hp"] // 16); atk["hp"] = max(0, atk["hp"] - dmg)
-                        b["log"] += f"{atk['name']} is hurt by its burn!\n"
+                        b["log"] += f"🔥 {atk['name']} is hurt by its burn!\n"
                     elif atk.get("status") == "PSN":
                         dmg = max(1, atk["max_hp"] // 8); atk["hp"] = max(0, atk["hp"] - dmg)
-                        b["log"] += f"{atk['name']} is hurt by poison!\n"
+                        b["log"] += f"☠️ {atk['name']} is hurt by poison!\n"
 
                 if dfn["hp"] <= 0:
                     dfn["hp"] = 0; dfn["status"] = None
-                    b["log"] += f"{dfn['name']} fainted!\n"
+                    b["log"] += f"💀 {dfn['name']} fainted!\n"
                     
                     if all(p["hp"] <= 0 for p in b[defender + "_team"]):
                         winner_name = b[actual_turn+'_name']
@@ -821,7 +787,7 @@ def handle_pvp_callback(bot, call):
                     
                 elif atk["hp"] <= 0:
                     atk["hp"] = 0; atk["status"] = None
-                    b["log"] += f"{atk['name']} fainted from status effect!\n"
+                    b["log"] += f"💀 {atk['name']} fainted from status effect!\n"
                     
                     if all(p["hp"] <= 0 for p in b[actual_turn + "_team"]):
                         winner_name = b[defender+'_name']
@@ -999,15 +965,12 @@ def handle_pvp_callback(bot, call):
                 
                 end_battle(battle_id, bot, call.message.chat.id)
                 
-            elif action == "back": 
-                b["state"] = "menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
-                
             elif action == "viewteam":
                 lines = []
                 for i, p in enumerate(b[button_turn + '_team']):
                     emojis = "/".join([TYPE_EMOJIS.get(t.strip(), '⚪') for t in p['types'].split('/')])
                     status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
-                    lines.append(f"({p['name']}) [{emojis}] - {p['nature']} {status_icon}")
+                    lines.append(f"{i+1}. {p['name']} [{emojis}] - {p['nature']} {status_icon}")
                 
                 safe_answer(bot, call.id, "\n".join(lines), show_alert=True)
 
