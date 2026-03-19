@@ -203,10 +203,11 @@ def battle_timeout(bot, chat_id, battle_id):
         loser_id = b[turn + "_id"]
         winner_id = b["p2_id"] if turn == "p1" else b["p1_id"]
         
-        try: db.update_battle_stats(winner_id, is_win=True)
-        except: pass
+        pvp_battles.pop(battle_id, None)
+        
+        # Winner gets NO WIN POINTS for a timeout. Loser gets a loss.
         try: db.update_battle_stats(loser_id, is_win=False)
-        except: pass
+        except Exception as e: logger.error(f"Stat Save Error: {e}")
         
         loser_mention = f"[{escape_md(loser_name)}](tg://user?id={loser_id})"
         win_mention = f"[{escape_md(winner_name)}](tg://user?id={winner_id})"
@@ -307,7 +308,7 @@ def update_challenge_message(bot, chat_id, message_id, chal):
     safe_edit(bot, text, chat_id, message_id, reply_markup=kb)
 
 def render_settings_ui(bot, chat_id, message_id, chal):
-    text = f"⚙️ *Bᴀᴛᴛʟᴇ Sᴇᴛᴛɪɴɢs*\n\nCᴏɴғɪɢᴜʀᴇ ᴛʜᴇ ʀᴜʟᴇs ғᴏʀ ᴛʜɪs ᴍᴀᴛᴄʜ:"
+    text = f"⚙️ *Bᴀᴛᴛʟᴇ Sᴇᴛᴛɪɴɢs*\n\nCᴏɴғɪɢᴜʀᴇ ᴛʜᴇ ʀᴜʟᴇs ғᴏʀ ᴛʜɪs ᴍᴀᴛCH:"
     kb = types.InlineKeyboardMarkup(row_width=3)
     
     m_0 = "✅ 0ʟs" if chal['mode'] == "0ls" else "0ʟs"
@@ -472,7 +473,7 @@ def handle_myteam_command(bot, message):
         types_raw = p['types'].split('/')
         type_str = " / ".join([f"{t.strip()} {TYPE_EMOJIS.get(t.strip(), '')}" for t in types_raw])
         
-        status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
+        status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '')))))
         
         lines.append(f"*{i+1}\\. {escape_md(p['name'])} \\[{escape_md(type_str)}\\]* {status_icon}")
         lines.append(f"🌿 *Nᴀᴛᴜʀᴇ:* {escape_md(p['nature'])}")
@@ -1011,10 +1012,8 @@ def handle_pvp_callback(bot, call):
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Forfeit:* {win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {runner_mention} ɪɴ ᴛʜᴇ ʙᴀᴛᴛʟᴇ\\!", parse_mode="MarkdownV2")
                     except: pass
                 
+                # Runner gets a loss, but winner gets NO POINTS for a forfeit.
                 try: db.update_battle_stats(runner_id, is_win=False)
-                except Exception as e: logger.error(f"Stat Save Error: {e}")
-                
-                try: db.update_battle_stats(winner_id, is_win=True)
                 except Exception as e: logger.error(f"Stat Save Error: {e}")
                 
                 end_battle(battle_id, bot, call.message.chat.id)
@@ -1025,7 +1024,7 @@ def handle_pvp_callback(bot, call):
             elif action == "viewteam":
                 lines = []
                 for i, p in enumerate(b[button_turn + '_team']):
-                    emojis = "/".join([TYPE_EMOJIS.get(t.strip(), '⚪') for t in p['types'].split('/')])
+                    emojis = "".join([TYPE_EMOJIS.get(t.strip(), '⚪') for t in p['types'].split('/')])
                     status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
                     lines.append(f"{i+1}. {p['name']} [{emojis}] - {p['nature']} {status_icon}")
                 
