@@ -181,6 +181,17 @@ def challenge_timeout(bot, chat_id, message_id):
         mention = f"[{p1_name}](tg://user?id={p1_id})"
         safe_edit(bot, f"*{mention}’s Cʜᴀʟʟᴇɴɢᴇ Hᴀs Exᴘɪʀᴇᴅ ⏳*", chat_id, message_id)
 
+def end_battle(battle_id, bot=None, chat_id=None):
+    b = pvp_battles.pop(battle_id, None)
+    if b:
+        if "timer" in b and b["timer"]: b["timer"].cancel()
+        if bot and "tracked_msgs" in b:
+            for item in b["tracked_msgs"]:
+                try:
+                    if isinstance(item, tuple): bot.delete_message(item[0], item[1])
+                    elif chat_id: bot.delete_message(chat_id, item)
+                except: pass
+
 def battle_timeout(bot, chat_id, battle_id):
     b = pvp_battles.get(battle_id)
     if b:
@@ -208,11 +219,6 @@ def battle_timeout(bot, chat_id, battle_id):
             except: pass
             
         end_battle(battle_id, bot, chat_id)
-
-def end_battle(battle_id, bot=None, chat_id=None):
-    b = pvp_battles.pop(battle_id, None)
-    if b:
-        if "timer" in b and b["timer"]: b["timer"].cancel()
 
 def get_type_multiplier(move_type, defender_types_str):
     multiplier = 1.0
@@ -442,7 +448,55 @@ def render_pvp_ui(bot, chat_id, battle_id):
 
     safe_edit(bot, ui_text, chat_id, battle_id, reply_markup=kb)
 
-# --- COMMAND HANDLER ---
+# --- COMMAND HANDLERS ---
+def handle_myteam_command(bot, message):
+    user_id = message.from_user.id
+    battle_to_show = None
+    turn = None
+    
+    for b_id, b in pvp_battles.items():
+        if b["p1_id"] == user_id:
+            battle_to_show = b
+            turn = "p1"
+            break
+        elif b["p2_id"] == user_id:
+            battle_to_show = b
+            turn = "p2"
+            break
+    
+    if not battle_to_show:
+        return bot.reply_to(message, escape_md("❌ You are not currently in a PvP battle."), parse_mode="MarkdownV2")
+        
+    lines = ["🎒 *Yᴏᴜʀ Cᴜʀʀᴇɴᴛ PᴠP Tᴇᴀᴍ:*\n"]
+    for i, p in enumerate(battle_to_show[turn + '_team']):
+        types_raw = p['types'].split('/')
+        type_str = " / ".join([f"{t.strip()} {TYPE_EMOJIS.get(t.strip(), '')}" for t in types_raw])
+        
+        status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
+        
+        lines.append(f"*{i+1}\\. {escape_md(p['name'])} \\[{escape_md(type_str)}\\]* {status_icon}")
+        lines.append(f"🌿 *Nᴀᴛᴜʀᴇ:* {escape_md(p['nature'])}")
+        lines.append(f"⚔️ *Mᴏᴠᴇs:*")
+        
+        for m in p['moves']:
+            m_name = escape_md(m['name'])
+            m_type = f"{m['type']} {TYPE_EMOJIS.get(m['type'], '')}"
+            m_type_md = escape_md(m_type)
+            pow_str = escape_md(str(m.get('power', 0)))
+            acc_str = escape_md(str(m.get('acc', 100)))
+            lines.append(f"  \\- {m_name} \\[{m_type_md}\\] \\(Pow: {pow_str}, Acc: {acc_str}\\)")
+        lines.append("") 
+    
+    team_text = "\n".join(lines)
+    
+    try:
+        sent_msg = bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
+        battle_to_show.setdefault("tracked_msgs", []).append((user_id, sent_msg.message_id))
+        bot.reply_to(message, escape_md("✅ Detailed team sent to your DMs! It will auto-delete when the battle ends."), parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Myteam DM error: {e}")
+        bot.reply_to(message, escape_md("❌ Please start the bot in DM first to receive your team list!"), parse_mode="MarkdownV2")
+
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: 
         return bot.reply_to(message, escape_md("⚠️ Reply to a user to challenge them!"))
@@ -490,7 +544,7 @@ def handle_pvp_command(bot, message):
         err_msg = "❌ *Cʜᴀʟʟᴇɴɢᴇ Fᴀɪʟᴇᴅ\\!*\n*Oɴᴇ Oғ Tʜᴇ Tʀᴀɪɴᴇʀs Iꜱ Aʟʀᴇᴀᴅʏ Iɴ A Bᴀᴛᴛʟᴇ\\.*"
         return bot.reply_to(message, err_msg, parse_mode="MarkdownV2")
 
-    mode, size, can_switch = db.get_pvp_settings(p1_id)
+    mode, size, can_switch, status_effects = db.get_pvp_settings(p1_id)
     sent = bot.reply_to(message, escape_md("🔄 Loading challenge..."), parse_mode="MarkdownV2")
     
     timer = threading.Timer(60.0, challenge_timeout, args=(bot, message.chat.id, sent.message_id))
@@ -498,7 +552,7 @@ def handle_pvp_command(bot, message):
     
     chal = {"name": clean_name(message.from_user.first_name), "p2_name": clean_name(target.from_user.first_name),
             "timer": timer, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id, 
-            "mode": mode, "size": size, "can_switch": can_switch, "status_effects": True}
+            "mode": mode, "size": size, "can_switch": can_switch, "status_effects": status_effects}
     
     pending_challenges[sent.message_id] = chal
     update_challenge_message(bot, message.chat.id, sent.message_id, chal)
@@ -537,7 +591,7 @@ def handle_pvp_callback(bot, call):
         elif action == "setsave":
             chal = pending_challenges.get(call.message.message_id)
             if chal and call.from_user.id == chal["p1_id"]: 
-                db.update_pvp_settings(chal["p1_id"], chal["mode"], chal["size"], chal["can_switch"])
+                db.update_pvp_settings(chal["p1_id"], chal["mode"], chal["size"], chal["can_switch"], chal.get("status_effects", True))
                 safe_answer(bot, call.id, "✅ Defaults Saved!", show_alert=True)
             return
         elif action == "setback":
@@ -964,6 +1018,9 @@ def handle_pvp_callback(bot, call):
                 except Exception as e: logger.error(f"Stat Save Error: {e}")
                 
                 end_battle(battle_id, bot, call.message.chat.id)
+                
+            elif action == "back": 
+                b["state"] = "menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
             elif action == "viewteam":
                 lines = []
