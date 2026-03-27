@@ -384,13 +384,20 @@ def register_user_handlers(bot, active_hunts):
         except: pass
 
         def process_travel():
-            if not db.get_user(message.from_user.id): 
+            user_data = db.get_user(message.from_user.id)
+            if not user_data: 
                 if sent:
                     try: bot.edit_message_text(escape_md("⚠️ Please /start the bot first."), message.chat.id, sent.message_id, parse_mode="MarkdownV2")
                     except: pass
                 return
+            
+            current_region = user_data[2] if len(user_data) > 2 else "Kanto"
                 
             kb = types.InlineKeyboardMarkup(row_width=2)
+            
+            # 📍 NEW: Current Region Alert Button
+            kb.add(types.InlineKeyboardButton(f"📍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ: {to_small_caps(current_region)}", callback_data=f"travel_current_{current_region}"))
+            
             btns = [types.InlineKeyboardButton(f"{to_small_caps(r)}", callback_data=f"travel_{message.from_user.id}_{r}") for r in REGIONS]
             for i in range(0, len(btns), 2):
                 if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
