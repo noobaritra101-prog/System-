@@ -94,13 +94,17 @@ def is_user_banned(user_id):
                 return bool(cur.fetchone())
     except: return False
 
-# 🛡️ THE GLOBAL BAN SHIELD
+# 🛡️ THE GLOBAL BAN SHIELD (WITH OWNER IMMUNITY)
 class BanMiddleware(BaseMiddleware):
     def __init__(self):
         super().__init__()
         self.update_types = ['message', 'callback_query']
 
     def pre_process(self, message, data):
+        # 🟢 OWNER IMMUNITY: The bot owner can never be blocked by the middleware!
+        if message.from_user.id == OWNER_ID:
+            return 
+            
         if is_user_banned(message.from_user.id):
             return CancelUpdate()
 
@@ -165,6 +169,8 @@ def generate_debug_ui(active_hunts):
     u_c, p_c, g_c, pvp_total, regions_active, db_size_mb = db.get_debug_stats()
     query_time = time.time() - start_q
     
+    banned_count = len(get_banned_users_db())
+    
     avg_response = round(max(0.11, query_time + 0.15), 2)
     uptime_seconds = int(time.time() - BOT_START_TIME)
     days = uptime_seconds // 86400
@@ -182,6 +188,7 @@ def generate_debug_ui(active_hunts):
         f"🛠 *Bᴏᴛ Dᴇʙᴜɢ Iɴғᴏ*\n"
         f"━━━━━━━━━━━━━━\n\n"
         f" 👥 Tʀᴀɪɴᴇʀs        : `{u_c}`\n"
+        f" 🚫 Bᴀɴɴᴇᴅ Usᴇʀs    : `{banned_count}`\n"
         f" 🎒 Pᴏᴋᴇ́ᴍᴏɴ         : `{p_c}`\n"
         f" 🎯 Aᴄᴛɪᴠᴇ Hᴜɴᴛs    : `{len(active_hunts)}`\n"
         f" ⚔️ Aᴄᴛɪᴠᴇ PᴠP      : `{len(pvp.pvp_battles)}`\n"
@@ -358,6 +365,10 @@ def register_admin_handlers(bot, active_hunts):
             
         if isinstance(target_id, str) and target_id.startswith('@'):
             return bot.reply_to(message, "❌ Telegram bots cannot look up users by <code>@username</code>! Please <b>reply</b> to their message or type their <b>Numeric ID</b>.", parse_mode="HTML")
+            
+        # 🟢 FRIENDLY FIRE PREVENTION: Cannot ban the owner!
+        if target_id == OWNER_ID:
+            return bot.reply_to(message, "❌ <b>Error:</b> You cannot ban the Bot Owner!", parse_mode="HTML")
             
         ban_user_db(target_id)
         mention = f'<a href="tg://user?id={target_id}">{target_name}</a>'
