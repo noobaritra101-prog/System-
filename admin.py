@@ -65,9 +65,10 @@ def ban_user_db(user_id):
     try:
         with db.get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("INSERT INTO banned_users (user_id, ban_date) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user_id, datetime.date.today()))
+                cur.execute("INSERT INTO banned_users (user_id, ban_date) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, datetime.date.today()))
             conn.commit()
-    except: pass
+    except Exception as e: 
+        logger.error(f"Failed to ban user: {e}")
 
 def unban_user_db(user_id):
     try:
@@ -75,7 +76,8 @@ def unban_user_db(user_id):
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM banned_users WHERE user_id = %s", (user_id,))
             conn.commit()
-    except: pass
+    except Exception as e: 
+        logger.error(f"Failed to unban user: {e}")
 
 def get_banned_users_db():
     try:
@@ -325,8 +327,9 @@ EXECUTE_MODULES = {
 
 def register_admin_handlers(bot, active_hunts):
     
-    # 🛡️ Initialize Ban System & Middleware 
+    # 🛡️ Initialize Ban System & Master Middleware Shield 
     create_ban_table()
+    bot.use_class_middlewares = True # THIS ENABLES THE BAN SHIELD!
     bot.setup_middleware(BanMiddleware())
     
     def extract_target(message):
@@ -354,6 +357,7 @@ def register_admin_handlers(bot, active_hunts):
         if isinstance(target_id, str) and target_id.startswith('@'):
             return bot.reply_to(message, "❌ Telegram bots cannot look up users by <code>@username</code>! Please <b>reply</b> to their message or type their <b>Numeric ID</b>.", parse_mode="HTML")
             
+        # Call the internal admin function, NOT the missing database function!
         ban_user_db(target_id)
         mention = f'<a href="tg://user?id={target_id}">{target_name}</a>'
         
@@ -377,6 +381,7 @@ def register_admin_handlers(bot, active_hunts):
         if isinstance(target_id, str) and target_id.startswith('@'):
             return bot.reply_to(message, "❌ Telegram bots cannot look up users by <code>@username</code>! Please <b>reply</b> to their message or type their <b>Numeric ID</b>.", parse_mode="HTML")
             
+        # Call the internal admin function!
         unban_user_db(target_id)
         mention = f'<a href="tg://user?id={target_id}">{target_name}</a>'
         
@@ -392,6 +397,7 @@ def register_admin_handlers(bot, active_hunts):
     def check_banned_users(message):
         if not is_owner(bot, message): return
         
+        # Call the internal admin function!
         banned = get_banned_users_db()
         if not banned:
             return bot.reply_to(message, "✨ No users are currently banned.")
