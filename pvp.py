@@ -148,7 +148,7 @@ def safe_edit(bot, text, chat_id, message_id, reply_markup=None):
             logger.warning(f"Telegram Limit Hit (429). Threading background UI retry in {retry_after}s...")
             threading.Thread(target=_threaded_edit, args=(bot, text, chat_id, message_id, reply_markup, retry_after)).start()
         else:
-            logger.error(f"UI Update error: {e}")
+            pass # Suppress standard API errors from clogging console
 
 # --- HELPERS ---
 def clean_name(name):
@@ -275,7 +275,6 @@ def apply_nature(p, n):
 
 # --- UI RENDERERS ---
 def get_challenge_ui(chal):
-    """Helper to instantly build the Challenge text and keyboard to prevent double API calls."""
     p1_name = escape_md(chal["name"])
     p2_name = escape_md(chal["p2_name"])
     p1_id = chal["p1_id"]
@@ -518,51 +517,57 @@ def handle_pvp_command(bot, message):
     if p1_id == p2_id: 
         return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
         
-    if not db.get_user(p1_id):
-        return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
-        
-    if not db.get_user(p2_id):
-        target_name = escape_md(clean_name(target.from_user.first_name))
-        err_msg = f"*🛰️ [{target_name}](tg://user?id={p2_id}) hasn't registered yet\\!*\n*They need to /start the bot to play❗❗*"
-        
-        kb = types.InlineKeyboardMarkup()
-        bot_username = bot.get_me().username
-        kb.add(types.InlineKeyboardButton("Start me ❗", url=f"https://t.me/{bot_username}?start=1"))
-        
-        return bot.reply_to(message, err_msg, reply_markup=kb, parse_mode="MarkdownV2")
+    # ⚡ INSTANT RESPONSE: Reply immediately so the bot feels fast, then check DB in background!
+    sent = bot.reply_to(message, escape_md("🔄 Loading challenge..."), parse_mode="MarkdownV2")
     
-    if is_in_battle(p1_id) or is_in_battle(p2_id): 
-        err_msg = "❌ *Cʜᴀʟʟᴇɴɢᴇ Fᴀɪʟᴇᴅ\\!*\n*Oɴᴇ Oғ Tʜᴇ Tʀᴀɪɴᴇʀs Iꜱ Aʟʀᴇᴀᴅʏ Iɴ A Bᴀᴛᴛʟᴇ\\.*"
-        return bot.reply_to(message, err_msg, parse_mode="MarkdownV2")
-
-    to_remove = []
-    for mid, c in list(pending_challenges.items()):
-        if p1_id in [c["p1_id"], c["p2_id"]]:
-            c["timer"].cancel()
-            to_remove.append(mid)
-            err_msg = "❌ *Cʜᴀʟʟᴇɴɢᴇ Cᴀɴᴄᴇʟʟᴇᴅ\\!*\n*A Nᴇᴡ Cʜᴀʟʟᴇɴɢᴇ Wᴀs Sᴛᴀʀᴛᴇᴅ\\.*"
-            safe_edit(bot, err_msg, c["chat_id"], mid)
+    def process_pvp_request():
+        if not db.get_user(p1_id):
+            return safe_edit(bot, "⚠️ You need to /start the bot first!", message.chat.id, sent.message_id)
             
-    for mid in to_remove: pending_challenges.pop(mid, None)
-
-    if is_in_pending_challenge(p2_id): 
-        err_msg = "❌ *Cʜᴀʟʟᴇɴɢᴇ Fᴀɪʟᴇᴅ\\!*\n*Oɴᴇ Oғ Tʜᴇ Tʀᴀɪɴᴇʀs Iꜱ Aʟʀᴇᴀᴅʏ Iɴ A Bᴀᴛᴛʟᴇ\\.*"
-        return bot.reply_to(message, err_msg, parse_mode="MarkdownV2")
-
-    mode, size, can_switch, status_effects = db.get_pvp_settings(p1_id)
-    
-    # 🚀 INSTANT CHALLENGE MENU 🚀
-    chal = {"name": clean_name(message.from_user.first_name), "p2_name": clean_name(target.from_user.first_name),
-            "timer": None, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id, 
-            "mode": mode, "size": size, "can_switch": can_switch, "status_effects": status_effects}
+        if not db.get_user(p2_id):
+            target_name = escape_md(clean_name(target.from_user.first_name))
+            err_msg = f"*🛰️ [{target_name}](tg://user?id={p2_id}) hasn't registered yet\\!*\n*They need to /start the bot to play❗❗*"
             
-    text, kb = get_challenge_ui(chal)
-    sent = bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
-    
-    timer = threading.Timer(60.0, challenge_timeout, args=(bot, message.chat.id, sent.message_id))
-    timer.start()
-    chal["timer"] = timer
-    pending_challenges[sent.message_id] = chal
+            kb = types.InlineKeyboardMarkup()
+            bot_username = bot.get_me().username
+            kb.add(types.InlineKeyboardButton("Start me ❗", url=f"https://t.me/{bot_username}?start=1"))
+            
+            return safe_edit(bot, err_msg, message.chat.id, sent.message_id, reply_markup=kb)
+        
+        if is_in_battle(p1_id) or is_in_battle(p2_id): 
+            err_msg = "❌ *Cʜᴀʟʟᴇɴɢᴇ Fᴀɪʟᴇᴅ\\!*\n*Oɴᴇ Oғ Tʜᴇ Tʀᴀɪɴᴇʀs Iꜱ Aʟʀᴇᴀᴅʏ Iɴ A Bᴀᴛᴛʟᴇ\\.*"
+            return safe_edit(bot, err_msg, message.chat.id, sent.message_id)
+
+        to_remove = []
+        for mid, c in list(pending_challenges.items()):
+            if p1_id in [c["p1_id"], c["p2_id"]]:
+                c["timer"].cancel()
+                to_remove.append(mid)
+                err_msg = "❌ *Cʜᴀʟʟᴇɴɢᴇ Cᴀɴᴄᴇʟʟᴇᴅ\\!*\n*A Nᴇᴡ Cʜᴀʟʟᴇɴɢᴇ Wᴀs Sᴛᴀʀᴛᴇᴅ\\.*"
+                safe_edit(bot, err_msg, c["chat_id"], mid)
+                
+        for mid in to_remove: pending_challenges.pop(mid, None)
+
+        if is_in_pending_challenge(p2_id): 
+            err_msg = "❌ *Cʜᴀʟʟᴇɴɢᴇ Fᴀɪʟᴇᴅ\\!*\n*Oɴᴇ Oғ Tʜᴇ Tʀᴀɪɴᴇʀs Iꜱ Aʟʀᴇᴀᴅʏ Iɴ A Bᴀᴛᴛʟᴇ\\.*"
+            return safe_edit(bot, err_msg, message.chat.id, sent.message_id)
+
+        mode, size, can_switch, status_effects = db.get_pvp_settings(p1_id)
+        
+        chal = {"name": clean_name(message.from_user.first_name), "p2_name": clean_name(target.from_user.first_name),
+                "timer": None, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id, 
+                "mode": mode, "size": size, "can_switch": can_switch, "status_effects": status_effects}
+                
+        text, kb = get_challenge_ui(chal)
+        safe_edit(bot, text, message.chat.id, sent.message_id, reply_markup=kb)
+        
+        timer = threading.Timer(60.0, challenge_timeout, args=(bot, message.chat.id, sent.message_id))
+        timer.start()
+        chal["timer"] = timer
+        pending_challenges[sent.message_id] = chal
+
+    # Launch background thread
+    threading.Thread(target=process_pvp_request).start()
 
 # --- CALLBACK HANDLER ---
 def handle_pvp_callback(bot, call):
@@ -638,79 +643,84 @@ def handle_pvp_callback(bot, call):
                 except: pass
             
             def setup():
-                safe_edit(bot, "🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id)
-                
-                t1_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
-                t2_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
-                
-                t1_final, t2_final = [], []
-                
-                for draft_team, final_team in [(t1_draft, t1_final), (t2_draft, t2_final)]:
-                    for p_cached in draft_team: 
-                        p = copy.deepcopy(p_cached) 
-                        
-                        base_hp = p.get("max_hp", 50)
-                        base_atk = p.get("atk", 50)
-                        base_def = p.get("def", 50)
-                        base_spd = p.get("spd", 50)
-
-                        p["base_atk"] = base_atk
-                        p["base_def"] = base_def
-                        p["base_spd"] = base_spd
-
-                        if base_hp <= 1: p["max_hp"] = 1 
-                        else: p["max_hp"] = int((2 * base_hp) + 31 + 21 + 110) 
+                try:
+                    safe_edit(bot, "🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id)
+                    
+                    t1_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
+                    t2_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
+                    
+                    t1_final, t2_final = [], []
+                    
+                    for draft_team, final_team in [(t1_draft, t1_final), (t2_draft, t2_final)]:
+                        for p_cached in draft_team: 
+                            p = copy.deepcopy(p_cached) 
                             
-                        p["hp"] = p["max_hp"]
-                        p["atk"] = int((2 * base_atk) + 31 + 21 + 5)
-                        p["def"] = int((2 * base_def) + 31 + 21 + 5)
-                        p["spd"] = int((2 * base_spd) + 31 + 21 + 5)
+                            base_hp = p.get("max_hp", 50)
+                            base_atk = p.get("atk", 50)
+                            base_def = p.get("def", 50)
+                            base_spd = p.get("spd", 50)
 
-                        n = random.choice(NATURES)
-                        p["nature"] = n
-                        p = apply_nature(p, n)
-                        
-                        if p["name"] == "Arceus":
-                            arc_type = random.choice(list(TYPE_CHART.keys()))
-                            if arc_type != 'Normal':
-                                p["name"] = f"Arceus ({arc_type})"
-                                p["types"] = arc_type
-                                for m in p["moves"]:
-                                    if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
-                        
-                        custom_megas = [
-                            "Pyroar", "Malamar", "Dragalge", "Eelektross", "Froslass", 
-                            "Clefable", "Chimecho", "Staraptor", "Heatran", "Darkrai", 
-                            "Meowstic", "Crabominable", "Dragonite", "Meganium", 
-                            "Emboar", "Falinks", "Zeraora"
-                        ]
-                        special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Greninja", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex"] + custom_megas
-                        
-                        p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
-                        p["is_mega"] = False
-                        
-                        for m in p["moves"]:
-                            if "status_chance" not in m:
-                                m["status_chance"] = 0
-                                m["status_type"] = None
-                            if not chal_data.get("status_effects", True):
-                                m["status_chance"] = 0
-                                m["status_type"] = None
-                        
-                        final_team.append(p)
-                        
-                pvp_battles[battle_id] = {
-                    "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1_final, "p1_idx": 0,
-                    "p2_id": chal_data["p2_id"], "p2_name": chal_data["p2_name"], "p2_team": t2_final, "p2_idx": 0,
-                    "can_switch": chal_data["can_switch"], "state": "menu", "log": "", "timer": None,
-                    "last_edit": 0, "processing_start": 0
-                }
-                
-                pvp_battles[battle_id]["current_turn"] = get_faster_player(pvp_battles[battle_id])
-                faster_name = pvp_battles[battle_id][pvp_battles[battle_id]['current_turn'] + '_name']
-                pvp_battles[battle_id]["log"] = f"⚡ {faster_name}'s speed allows them to move first!"
-                
-                render_pvp_ui(bot, call.message.chat.id, battle_id)
+                            p["base_atk"] = base_atk
+                            p["base_def"] = base_def
+                            p["base_spd"] = base_spd
+
+                            if base_hp <= 1: p["max_hp"] = 1 
+                            else: p["max_hp"] = int((2 * base_hp) + 31 + 21 + 110) 
+                                
+                            p["hp"] = p["max_hp"]
+                            p["atk"] = int((2 * base_atk) + 31 + 21 + 5)
+                            p["def"] = int((2 * base_def) + 31 + 21 + 5)
+                            p["spd"] = int((2 * base_spd) + 31 + 21 + 5)
+
+                            n = random.choice(NATURES)
+                            p["nature"] = n
+                            p = apply_nature(p, n)
+                            
+                            if p["name"] == "Arceus":
+                                arc_type = random.choice(list(TYPE_CHART.keys()))
+                                if arc_type != 'Normal':
+                                    p["name"] = f"Arceus ({arc_type})"
+                                    p["types"] = arc_type
+                                    for m in p["moves"]:
+                                        if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
+                            
+                            custom_megas = [
+                                "Pyroar", "Malamar", "Dragalge", "Eelektross", "Froslass", 
+                                "Clefable", "Chimecho", "Staraptor", "Heatran", "Darkrai", 
+                                "Meowstic", "Crabominable", "Dragonite", "Meganium", 
+                                "Emboar", "Falinks", "Zeraora"
+                            ]
+                            special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Greninja", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex"] + custom_megas
+                            
+                            p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
+                            p["is_mega"] = False
+                            
+                            for m in p["moves"]:
+                                if "status_chance" not in m:
+                                    m["status_chance"] = 0
+                                    m["status_type"] = None
+                                if not chal_data.get("status_effects", True):
+                                    m["status_chance"] = 0
+                                    m["status_type"] = None
+                            
+                            final_team.append(p)
+                            
+                    pvp_battles[battle_id] = {
+                        "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1_final, "p1_idx": 0,
+                        "p2_id": chal_data["p2_id"], "p2_name": chal_data["p2_name"], "p2_team": t2_final, "p2_idx": 0,
+                        "can_switch": chal_data["can_switch"], "state": "menu", "log": "", "timer": None,
+                        "last_edit": 0, "processing_start": 0
+                    }
+                    
+                    pvp_battles[battle_id]["current_turn"] = get_faster_player(pvp_battles[battle_id])
+                    faster_name = pvp_battles[battle_id][pvp_battles[battle_id]['current_turn'] + '_name']
+                    pvp_battles[battle_id]["log"] = f"⚡ {faster_name}'s speed allows them to move first!"
+                    
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                except Exception as e:
+                    logger.error(f"PvP Fetch Error: {e}")
+                    safe_edit(bot, "❌ *Fᴀɪʟᴇᴅ ᴛᴏ ʟᴏᴀᴅ Pᴏᴋᴇ́ᴍᴏɴ ᴅᴀᴛᴀ\\. Pʟᴇᴀsᴇ ᴛʀʏ ᴄʜᴀʟʟᴇɴɢɪɴɢ ᴀɢᴀɪɴ\\.*", call.message.chat.id, battle_id)
+                    
             threading.Thread(target=setup).start()
             return
 
@@ -732,16 +742,30 @@ def handle_pvp_callback(bot, call):
                 return safe_answer(bot, call.id, "❌ Not your buttons!", show_alert=True)
 
             if actual_turn == "processing": 
-                if time.time() - b.get("processing_start", 0) > 2.0:
+                # ⚡ REDUCED PROCESSING LAG: 2.0s -> 0.8s
+                if time.time() - b.get("processing_start", 0) > 0.8:
                     b["current_turn"] = button_turn
                     actual_turn = button_turn
                 else:
-                    return safe_answer(bot, call.id, "⏳ Processing previous move...", show_alert=False)
+                    return safe_answer(bot, call.id, "⏳ Processing...", show_alert=False)
 
             if action != "viewteam":
                 now = time.time()
-                if now - b.get("last_edit", 0) < 1.5:
-                    return safe_answer(bot, call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=False)
+                # ⚡ REDUCED RATE LIMIT SHIELD: 1.5s -> 0.5s for fast snappy clicks!
+                if now - b.get("last_edit", 0) < 0.5:
+                    return safe_answer(bot, call.id, "⏳ Too fast!", show_alert=False)
+                    
+                # 🛡️ INSTANT POPUPS (Prevents empty safe_answer from eating them!)
+                if action == "swmenu" and not b["can_switch"]:
+                    return safe_answer(bot, call.id, "🚫 Switching is disabled!", show_alert=True)
+                if action == "mega" and b[actual_turn+"_team"][b[actual_turn+"_idx"]].get("is_mega"):
+                    return safe_answer(bot, call.id, "Already transformed!", show_alert=True)
+                if action == "dosw":
+                    idx = int(parts[4])
+                    p = b[actual_turn+"_team"][idx]
+                    if p["hp"] <= 0: return safe_answer(bot, call.id, "Pokemon is fainted!", show_alert=True)
+                    if idx == b[actual_turn+"_idx"]: return safe_answer(bot, call.id, "Already out!", show_alert=True)
+                    
                 b["last_edit"] = now
                 safe_answer(bot, call.id, "")
 
@@ -882,8 +906,6 @@ def handle_pvp_callback(bot, call):
             elif action == "dosw":
                 idx = int(parts[4])
                 p = b[actual_turn+"_team"][idx]
-                if p["hp"] <= 0: return safe_answer(bot, call.id, "Pokemon is fainted!", show_alert=True)
-                if idx == b[actual_turn+"_idx"]: return safe_answer(bot, call.id, "Already out!", show_alert=True)
                 
                 b["current_turn"] = "processing"
                 b["processing_start"] = time.time()
@@ -903,13 +925,10 @@ def handle_pvp_callback(bot, call):
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
 
             elif action == "swmenu":
-                if not b["can_switch"]: return safe_answer(bot, call.id, "🚫 Switching is disabled!", show_alert=True)
                 b["state"] = "switch_menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
             elif action == "mega":
                 p = b[actual_turn+"_team"][b[actual_turn+"_idx"]]
-                if p.get("is_mega"): return safe_answer(bot, call.id, "Already transformed!", show_alert=True)
-                
                 old_name = p['name']
                 
                 if old_name in ["Charizard", "Mewtwo", "Raichu"] and len(parts) == 4:
@@ -1018,6 +1037,7 @@ def handle_pvp_callback(bot, call):
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Forfeit:* {win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {runner_mention} ɪɴ ᴛʜᴇ ʙᴀᴛᴛʟᴇ\\!", parse_mode="MarkdownV2")
                     except: pass
                 
+                # Runner gets a loss, but winner gets NO POINTS for a forfeit.
                 try: db.update_battle_stats(runner_id, is_win=False)
                 except Exception as e: logger.error(f"Stat Save Error: {e}")
                 
@@ -1031,7 +1051,6 @@ def handle_pvp_callback(bot, call):
                 for i, p in enumerate(b[button_turn + '_team']):
                     emojis = "".join([TYPE_EMOJIS.get(t.strip(), '⚪') for t in p['types'].split('/')])
                     status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
-                    
                     lines.append(f"{i+1}. {p['name']} [{emojis}] - {p['nature']} {status_icon}")
                 
                 safe_answer(bot, call.id, "\n".join(lines), show_alert=True)
