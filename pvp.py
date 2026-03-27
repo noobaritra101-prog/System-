@@ -205,7 +205,6 @@ def battle_timeout(bot, chat_id, battle_id):
         
         pvp_battles.pop(battle_id, None)
         
-        # Winner gets NO WIN POINTS for a timeout. Loser gets a loss.
         try: db.update_battle_stats(loser_id, is_win=False)
         except Exception as e: logger.error(f"Stat Save Error: {e}")
         
@@ -275,7 +274,8 @@ def apply_nature(p, n):
     return p
 
 # --- UI RENDERERS ---
-def update_challenge_message(bot, chat_id, message_id, chal):
+def get_challenge_ui(chal):
+    """Helper to instantly build the Challenge text and keyboard to prevent double API calls."""
     p1_name = escape_md(chal["name"])
     p2_name = escape_md(chal["p2_name"])
     p1_id = chal["p1_id"]
@@ -305,10 +305,14 @@ def update_challenge_message(bot, chat_id, message_id, chal):
         types.InlineKeyboardButton("✔️ Aᴄᴄᴇᴘᴛ", callback_data=f"pvp_accept_{chal['p1_id']}_{chal['p2_id']}"),
         types.InlineKeyboardButton("✖️ Dᴇᴄʟɪɴᴇ", callback_data=f"pvp_decline_{chal['p1_id']}_{chal['p2_id']}")
     )
+    return text, kb
+
+def update_challenge_message(bot, chat_id, message_id, chal):
+    text, kb = get_challenge_ui(chal)
     safe_edit(bot, text, chat_id, message_id, reply_markup=kb)
 
 def render_settings_ui(bot, chat_id, message_id, chal):
-    text = f"⚙️ *Bᴀᴛᴛʟᴇ Sᴇᴛᴛɪɴɢs*\n\nCᴏɴғɪɢᴜʀᴇ ᴛʜᴇ ʀᴜʟᴇs ғᴏʀ ᴛʜɪs ᴍᴀᴛCH:"
+    text = f"⚙️ *Bᴀᴛᴛʟᴇ Sᴇᴛᴛɪɴɢs*\n\nCᴏɴғɪɢᴜʀᴇ ᴛʜᴇ ʀᴜʟᴇs ғᴏʀ ᴛʜɪs ᴍᴀᴛᴄʜ:"
     kb = types.InlineKeyboardMarkup(row_width=3)
     
     m_0 = "✅ 0ʟs" if chal['mode'] == "0ls" else "0ʟs"
@@ -546,17 +550,19 @@ def handle_pvp_command(bot, message):
         return bot.reply_to(message, err_msg, parse_mode="MarkdownV2")
 
     mode, size, can_switch, status_effects = db.get_pvp_settings(p1_id)
-    sent = bot.reply_to(message, escape_md("🔄 Loading challenge..."), parse_mode="MarkdownV2")
+    
+    # 🚀 INSTANT CHALLENGE MENU 🚀
+    chal = {"name": clean_name(message.from_user.first_name), "p2_name": clean_name(target.from_user.first_name),
+            "timer": None, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id, 
+            "mode": mode, "size": size, "can_switch": can_switch, "status_effects": status_effects}
+            
+    text, kb = get_challenge_ui(chal)
+    sent = bot.reply_to(message, text, reply_markup=kb, parse_mode="MarkdownV2")
     
     timer = threading.Timer(60.0, challenge_timeout, args=(bot, message.chat.id, sent.message_id))
     timer.start()
-    
-    chal = {"name": clean_name(message.from_user.first_name), "p2_name": clean_name(target.from_user.first_name),
-            "timer": timer, "p1_id": p1_id, "p2_id": p2_id, "chat_id": message.chat.id, 
-            "mode": mode, "size": size, "can_switch": can_switch, "status_effects": status_effects}
-    
+    chal["timer"] = timer
     pending_challenges[sent.message_id] = chal
-    update_challenge_message(bot, message.chat.id, sent.message_id, chal)
 
 # --- CALLBACK HANDLER ---
 def handle_pvp_callback(bot, call):
@@ -1012,7 +1018,6 @@ def handle_pvp_callback(bot, call):
                     try: bot.send_message(LOG_GROUP_ID, f"🏃 *Forfeit:* {win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {runner_mention} ɪɴ ᴛʜᴇ ʙᴀᴛᴛʟᴇ\\!", parse_mode="MarkdownV2")
                     except: pass
                 
-                # Runner gets a loss, but winner gets NO POINTS for a forfeit.
                 try: db.update_battle_stats(runner_id, is_win=False)
                 except Exception as e: logger.error(f"Stat Save Error: {e}")
                 
@@ -1026,6 +1031,7 @@ def handle_pvp_callback(bot, call):
                 for i, p in enumerate(b[button_turn + '_team']):
                     emojis = "".join([TYPE_EMOJIS.get(t.strip(), '⚪') for t in p['types'].split('/')])
                     status_icon = '💀' if p['hp'] <= 0 else ('💤' if p.get('status') == 'SLP' else ('🧊' if p.get('status') == 'FRZ' else ('🔥' if p.get('status') == 'BRN' else ('☠️' if p.get('status') == 'PSN' else ('⚡' if p.get('status') == 'PAR' else '🟢')))))
+                    
                     lines.append(f"{i+1}. {p['name']} [{emojis}] - {p['nature']} {status_icon}")
                 
                 safe_answer(bot, call.id, "\n".join(lines), show_alert=True)
