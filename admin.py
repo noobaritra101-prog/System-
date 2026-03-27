@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 from collections import Counter
 from telebot import types
+from telebot.handler_backends import BaseMiddleware, CancelUpdate
 
 import database as db
 import pvp
@@ -44,6 +45,66 @@ def is_owner(bot, obj):
             except: pass
         return False
     return True
+
+# ================== BAN SYSTEM HELPERS ==================
+def create_ban_table():
+    try:
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS banned_users (
+                        user_id BIGINT PRIMARY KEY,
+                        ban_date DATE
+                    )
+                """)
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ban Table Error: {e}")
+
+def ban_user_db(user_id):
+    try:
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO banned_users (user_id, ban_date) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user_id, datetime.date.today()))
+            conn.commit()
+    except: pass
+
+def unban_user_db(user_id):
+    try:
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM banned_users WHERE user_id = %s", (user_id,))
+            conn.commit()
+    except: pass
+
+def get_banned_users_db():
+    try:
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id, ban_date FROM banned_users")
+                return cur.fetchall()
+    except: return []
+
+def is_user_banned(user_id):
+    try:
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM banned_users WHERE user_id = %s", (user_id,))
+                return bool(cur.fetchone())
+    except: return False
+
+# 🛡️ THE GLOBAL BAN SHIELD
+class BanMiddleware(BaseMiddleware):
+    def __init__(self):
+        super().__init__()
+        self.update_types = ['message', 'callback_query']
+
+    def pre_process(self, message, data):
+        if is_user_banned(message.from_user.id):
+            return CancelUpdate()
+
+    def post_process(self, message, data, exception):
+        pass
 
 # ================== NEW GROUP INFO UI ==================
 def generate_gcs_ui(bot, page_idx):
@@ -263,6 +324,90 @@ EXECUTE_MODULES = {
 }
 
 def register_admin_handlers(bot, active_hunts):
+    
+    # 🛡️ Initialize Ban System & Middleware 
+    create_ban_table()
+    bot.setup_middleware(BanMiddleware())
+    
+    def extract_target(message):
+        """Smart extractor for grabbing IDs and Names from replies or text arguments."""
+        if message.reply_to_message:
+            return message.reply_to_message.from_user.id, message.reply_to_message.from_user.first_name
+        parts = message.text.split()
+        if len(parts) > 1:
+            target = parts[-1] 
+            if target.isdigit():
+                return int(target), "User"
+            elif target.startswith('@'):
+                return target, target 
+        return None, None
+
+    @bot.message_handler(commands=['sexa_ban', 'swxa_ban'])
+    @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(("sexa ban", "swxa ban")))
+    def handle_sexa_ban(message):
+        if not is_owner(bot, message): return
+        
+        target_id, target_name = extract_target(message)
+        if not target_id:
+            return bot.reply_to(message, "⚠️ <b>Missing Target!</b>\nPlease reply to a user's message or provide their ID.", parse_mode="HTML")
+            
+        if isinstance(target_id, str) and target_id.startswith('@'):
+            return bot.reply_to(message, "❌ Telegram bots cannot look up users by <code>@username</code>! Please <b>reply</b> to their message or type their <b>Numeric ID</b>.", parse_mode="HTML")
+            
+        ban_user_db(target_id)
+        mention = f'<a href="tg://user?id={target_id}">{target_name}</a>'
+        
+        ban_text = (
+            f"⚠️ Uѕєr Bαnnєd ⚠️\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🚫 {mention} ʜᴀs ʙᴇᴇɴ ʙᴀɴɴᴇᴅ ғʀᴏᴍ ᴜsɪɴɢ ᴍᴇ.\n"
+            f"🔒 ᴀᴄᴄᴇss ʀᴇsᴛʀɪᴄᴛᴇᴅ."
+        )
+        bot.reply_to(message, ban_text, parse_mode="HTML")
+
+    @bot.message_handler(commands=['sexa_unban', 'swxa_unban'])
+    @bot.message_handler(func=lambda msg: msg.text and msg.text.lower().startswith(("sexa unban", "swxa unban")))
+    def handle_sexa_unban(message):
+        if not is_owner(bot, message): return
+        
+        target_id, target_name = extract_target(message)
+        if not target_id:
+            return bot.reply_to(message, "⚠️ <b>Missing Target!</b>\nPlease reply to a user's message or provide their ID.", parse_mode="HTML")
+            
+        if isinstance(target_id, str) and target_id.startswith('@'):
+            return bot.reply_to(message, "❌ Telegram bots cannot look up users by <code>@username</code>! Please <b>reply</b> to their message or type their <b>Numeric ID</b>.", parse_mode="HTML")
+            
+        unban_user_db(target_id)
+        mention = f'<a href="tg://user?id={target_id}">{target_name}</a>'
+        
+        unban_text = (
+            f"✨ Uѕєr Unbαnnєd  ✨\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🔓 {mention} ʜᴀs ʙᴇᴇɴ ᴜɴʙᴀɴɴᴇᴅ.\n"
+            f"✅ ᴀᴄᴄᴇss ʀᴇsᴛᴏʀᴇᴅ. ᴘʟᴇᴀsᴇ ғᴏʟʟᴏᴡ ᴛʜᴇ ʀᴜʟᴇs."
+        )
+        bot.reply_to(message, unban_text, parse_mode="HTML")
+
+    @bot.message_handler(commands=['busers'])
+    def check_banned_users(message):
+        if not is_owner(bot, message): return
+        
+        banned = get_banned_users_db()
+        if not banned:
+            return bot.reply_to(message, "✨ No users are currently banned.")
+            
+        banlist = ""
+        for uid, date in banned:
+            banlist += f"• <a href='tg://user?id={uid}'>{uid}</a> (Date: {date})\n"
+            
+        list_text = (
+            f"📛 Bαnnєd Uѕєrs Lιѕт  📛\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🚫 ʜᴇʀᴇ ᴀʀᴇ ᴛʜᴇ ʙᴀɴɴᴇᴅ ᴜsᴇʀs:\n"
+            f"{banlist}"
+            f"━━━━━━━━━━━━━━━"
+        )
+        bot.reply_to(message, list_text, parse_mode="HTML")
     
     # ================== 🏅 GYM ADMIN TOOLS ==================
     @bot.message_handler(commands=["upload", "setimage"])
