@@ -124,12 +124,30 @@ def auto_flee(bot, message_id, chat_id, pokemon_name, active_hunts):
     active_hunts.pop(message_id, None)
 
 def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
-    if not db.get_user(user_id): return safe_send(bot, chat_id, escape_md("⚠️ Please /start the bot first."), reply_to_id)
-    if pvp.is_in_battle(user_id): return safe_send(bot, chat_id, escape_md("⚔️ You cannot scout while engaged in a PvP battle!"), reply_to_id)
+    # INSTANT LOADING MESSAGE (so the bot feels fast before downloading the image)
+    loading_msg = None
+    try: loading_msg = bot.send_message(chat_id, "🔎 *Sᴄᴏᴜᴛɪɴɢ ᴛʜᴇ ᴀʀᴇᴀ\\.\\.\\.*", reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
+    except: pass
+
+    def cleanup_loading():
+        if loading_msg:
+            try: bot.delete_message(chat_id, loading_msg.message_id)
+            except: pass
+
+    if not db.get_user(user_id): 
+        cleanup_loading()
+        return safe_send(bot, chat_id, escape_md("⚠️ Please /start the bot first."), reply_to_id)
+    if pvp.is_in_battle(user_id): 
+        cleanup_loading()
+        return safe_send(bot, chat_id, escape_md("⚔️ You cannot scout while engaged in a PvP battle!"), reply_to_id)
         
     tries_left, region = db.update_user_tries(user_id)
-    if tries_left is None: return safe_send(bot, chat_id, escape_md("⚠️ Error checking your profile."), reply_to_id)
-    if tries_left <= 0: return safe_send(bot, chat_id, escape_md("💤 You have no scouts left today. Rest and come back tomorrow!"), reply_to_id)
+    if tries_left is None: 
+        cleanup_loading()
+        return safe_send(bot, chat_id, escape_md("⚠️ Error checking your profile."), reply_to_id)
+    if tries_left <= 0: 
+        cleanup_loading()
+        return safe_send(bot, chat_id, escape_md("💤 You have no scouts left today. Rest and come back tomorrow!"), reply_to_id)
         
     to_cancel = [msg_id for msg_id, hunt in active_hunts.items() if hunt["user_id"] == user_id]
     for msg_id in to_cancel:
@@ -140,7 +158,9 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
             except: pass
 
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
-    if not poke_id: return safe_send(bot, chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_id)
+    if not poke_id: 
+        cleanup_loading()
+        return safe_send(bot, chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_id)
 
     img_url = official_shiny_artwork_url(base_id)
     caption = f"A Wɪʟᴅ ✨ {escape_md(to_small_caps(name.title()))} Aᴘᴘᴇᴀʀᴇᴅ ɪɴ {escape_md(to_small_caps(region))}\\!\n\n🎒 Wʜᴀᴛ Wɪʟʟ Yᴏᴜ Dᴏ, Tʀᴀɪɴᴇʀ?"
@@ -151,6 +171,7 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
 
     try:
         sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
+        cleanup_loading() # DELETE THE LOADING MESSAGE AS SOON AS THE PHOTO ARRIVES
         timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(bot, sent.message_id, chat_id, name, active_hunts))
         timer.start()
         active_hunts[sent.message_id] = {"user_id": user_id, "chat_id": chat_id, "start_time": time.time(), "timer": timer, "name": name}
@@ -159,10 +180,12 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
             time.sleep(2) 
             try:
                 sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
+                cleanup_loading()
                 timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(bot, sent.message_id, chat_id, name, active_hunts))
                 timer.start()
                 active_hunts[sent.message_id] = {"user_id": user_id, "chat_id": chat_id, "start_time": time.time(), "timer": timer, "name": name}
-            except: pass
+            except: cleanup_loading()
+        else: cleanup_loading()
 
 def process_catch(bot, call, uid, pid, name):
     chat_id = call.message.chat.id
@@ -246,22 +269,25 @@ def register_user_handlers(bot, active_hunts):
     
     @bot.message_handler(commands=["start"])
     def cmd_start(message):
-        is_new = db.add_user_if_new(message.from_user.id)
-        
-        if is_new and LOG_GROUP_ID:
-            try:
-                u_name = clean_name(message.from_user.first_name)
-                u_id = message.from_user.id
-                log_msg = f"🌟 【Sᴛᴀʀᴛ】 [{escape_md(u_name)}](tg://user?id={u_id}) ᴇɴᴛᴇʀᴇᴅ ᴛʜᴇ ᴡᴏʀʟᴅ ᴏғ Sᴇxᴀ"
-                bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
-            except: pass
+        def process_start():
+            is_new = db.add_user_if_new(message.from_user.id)
             
-        if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.row(types.InlineKeyboardButton("Oᴡɴᴇʀ ⚡", url="https://t.me/monarch_sama"), types.InlineKeyboardButton("Mᴀɪɴ Gʀᴏᴜᴘ ⚡", url="https://t.me/sexagamechat"))
-        text = (f"Hҽყ {escape_md(clean_name(message.from_user.first_name))}\n\n*Wᴇʟᴄσɱᴇ ᴛσ Sᴇxᴀ ✨*\n*Tʜᴇ Sʜɪɴʏ Pᴏᴋᴇ́ᴍᴏɴ Aᴅᴠᴇɴᴛᴜʀᴇ*\n\n"
-                f"━━━━━━━━━━━━━━━\n*🔎 Hᴜɴᴛ • 🎯 Cᴀᴛᴄʜ • 💎 Fʟᴇx*\n━━━━━━━━━━━━━━━\n*🌍 Yᴏᴜʀ Jᴏᴜʀɴᴇʏ Bᴇɢɪɴs Nᴏᴡ*")
-        safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            if is_new and LOG_GROUP_ID:
+                try:
+                    u_name = clean_name(message.from_user.first_name)
+                    u_id = message.from_user.id
+                    log_msg = f"🌟 【Sᴛᴀʀᴛ】 [{escape_md(u_name)}](tg://user?id={u_id}) ᴇɴᴛᴇʀᴇᴅ ᴛʜᴇ ᴡᴏʀʟᴅ ᴏғ Sᴇxᴀ"
+                    bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
+                except: pass
+                
+            if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.row(types.InlineKeyboardButton("Oᴡɴᴇʀ ⚡", url="https://t.me/monarch_sama"), types.InlineKeyboardButton("Mᴀɪɴ Gʀᴏᴜᴘ ⚡", url="https://t.me/sexagamechat"))
+            text = (f"Hҽყ {escape_md(clean_name(message.from_user.first_name))}\n\n*Wᴇʟᴄσɱᴇ ᴛσ Sᴇxᴀ ✨*\n*Tʜᴇ Sʜɪɴʏ Pᴏᴋᴇ́ᴍᴏɴ Aᴅᴠᴇɴᴛᴜʀᴇ*\n\n"
+                    f"━━━━━━━━━━━━━━━\n*🔎 Hᴜɴᴛ • 🎯 Cᴀᴛᴄʜ • 💎 Fʟᴇx*\n━━━━━━━━━━━━━━━\n*🌍 Yᴏᴜʀ Jᴏᴜʀɴᴇʏ Bᴇɢɪɴs Nᴏᴡ*")
+            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            
+        threading.Thread(target=process_start).start()
 
     @bot.message_handler(commands=["open"])
     def cmd_open(message):
@@ -287,62 +313,98 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["profile", "trainer"])
     def cmd_profile(message):
-        user_id = message.from_user.id
-        if not db.get_user(user_id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+        # ⚡ INSTANT LOADING MESSAGE ⚡
+        sent = None
+        try: sent = bot.reply_to(message, "🔄 *Lᴏᴀᴅɪɴɢ Tʀᴀɪɴᴇʀ Pʀᴏғɪʟᴇ\\.\\.\\.*", parse_mode="MarkdownV2")
+        except: pass
         
-        tries_left, region = db.update_user_tries(user_id)
-        names = db.list_user_pokemon_names(user_id)
-        rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
-        wins, losses = db.get_battle_stats(user_id)
-        
-        badges = db.get_user_badges(user_id)
-        badge_str = " ".join(badges) if badges else "Nᴏɴᴇ Yᴇᴛ"
-        
-        total_battles = wins + losses
-        win_rate = round((wins / total_battles * 100), 1) if total_battles > 0 else 0.0
+        def process_profile():
+            user_id = message.from_user.id
+            if not db.get_user(user_id): 
+                if sent:
+                    try: bot.edit_message_text(escape_md("⚠️ Please /start the bot first."), message.chat.id, sent.message_id, parse_mode="MarkdownV2")
+                    except: pass
+                return
             
-        u_name = escape_md(to_small_caps(clean_name(message.from_user.first_name)))
-        region_str = escape_md(to_small_caps(region))
-        rarest_str = escape_md(to_small_caps(rarest_caught))
-        
-        text = (
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"      *🪪 Tʀᴀɪɴᴇʀ Cᴀʀᴅ 🪪*\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
-            f"*👤 Nᴀᴍᴇ — {u_name}*\n"
-            f"*🆔 Uɪᴅ — `{user_id}`*\n"
-            f"*🌍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ — {region_str}*\n\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"         *Gʏᴍ Bᴀᴅɢᴇs*\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"   {badge_str}\n\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"         *Aᴅᴠᴇɴᴛᴜʀᴇ Sᴛᴀᴛs*\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
-            f"*🎒 Cᴏʟʟᴇᴄᴛɪᴏɴ — {len(names)} Pᴏᴋᴇ́ᴍᴏɴ*\n"
-            f"*⭐ Rᴀʀᴇsᴛ — {rarest_str}*\n"
-            f"*🔋 Sᴄᴏᴜᴛs Lᴇғᴛ — {tries_left} / 2500*\n\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"           *Bᴀᴛᴛʟᴇ Rᴇᴄᴏʀᴅ*\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
-            f"*🏆 Wɪɴs — {wins}*\n"
-            f"*❌ Lᴏssᴇs — {losses}*\n"
-            f"*📊 Tᴏᴛᴀʟ Bᴀᴛᴛʟᴇs — {total_battles}*\n"
-            f"*📈 Wɪɴ Rᴀᴛᴇ — {escape_md(str(win_rate))}%*\n\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*"
-        )
-        safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
+            tries_left, region = db.update_user_tries(user_id)
+            names = db.list_user_pokemon_names(user_id)
+            rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
+            wins, losses = db.get_battle_stats(user_id)
+            
+            badges = db.get_user_badges(user_id)
+            badge_str = " ".join(badges) if badges else "Nᴏɴᴇ Yᴇᴛ"
+            
+            total_battles = wins + losses
+            win_rate = round((wins / total_battles * 100), 1) if total_battles > 0 else 0.0
+                
+            u_name = escape_md(to_small_caps(clean_name(message.from_user.first_name)))
+            region_str = escape_md(to_small_caps(region))
+            rarest_str = escape_md(to_small_caps(rarest_caught))
+            
+            text = (
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"      *🪪 Tʀᴀɪɴᴇʀ Cᴀʀᴅ 🪪*\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+                f"*👤 Nᴀᴍᴇ — {u_name}*\n"
+                f"*🆔 Uɪᴅ — `{user_id}`*\n"
+                f"*🌍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ — {region_str}*\n\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"         *Gʏᴍ Bᴀᴅɢᴇs*\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"   {badge_str}\n\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"         *Aᴅᴠᴇɴᴛᴜʀᴇ Sᴛᴀᴛs*\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+                f"*🎒 Cᴏʟʟᴇᴄᴛɪᴏɴ — {len(names)} Pᴏᴋᴇ́ᴍᴏɴ*\n"
+                f"*⭐ Rᴀʀᴇsᴛ — {rarest_str}*\n"
+                f"*🔋 Sᴄᴏᴜᴛs Lᴇғᴛ — {tries_left} / 2500*\n\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"           *Bᴀᴛᴛʟᴇ Rᴇᴄᴏʀᴅ*\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+                f"*🏆 Wɪɴs — {wins}*\n"
+                f"*❌ Lᴏssᴇs — {losses}*\n"
+                f"*📊 Tᴏᴛᴀʟ Bᴀᴛᴛʟᴇs — {total_battles}*\n"
+                f"*📈 Wɪɴ Rᴀᴛᴇ — {escape_md(str(win_rate))}%*\n\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*"
+            )
+            
+            if sent:
+                try: bot.edit_message_text(text, message.chat.id, sent.message_id, parse_mode="MarkdownV2")
+                except: pass
+            else:
+                safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
+                
+        threading.Thread(target=process_profile).start()
 
     @bot.message_handler(commands=["travel"])
     def cmd_travel(message):
-        if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        btns = [types.InlineKeyboardButton(f"{to_small_caps(r)}", callback_data=f"travel_{message.from_user.id}_{r}") for r in REGIONS]
-        for i in range(0, len(btns), 2):
-            if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
-            else: kb.add(btns[i])
-        kb.add(types.InlineKeyboardButton("Cᴀɴᴄᴇʟ ↩️", callback_data=f"travel_cancel_{message.from_user.id}"))
-        safe_send(bot, message.chat.id, "🌍 *Wʜᴇʀᴇ Wᴏᴜʟᴅ Yᴏᴜ Lɪᴋᴇ Tᴏ Tʀᴀᴠᴇʟ, Tʀᴀɪɴᴇʀ?*", reply_to_id=message.message_id, reply_markup=kb)
+        # ⚡ INSTANT LOADING MESSAGE ⚡
+        sent = None
+        try: sent = bot.reply_to(message, "🔄 *Pʀᴇᴘᴀʀɪɴɢ Tʀᴀᴠᴇʟ Rᴏᴜᴛᴇs\\.\\.\\.*", parse_mode="MarkdownV2")
+        except: pass
+
+        def process_travel():
+            if not db.get_user(message.from_user.id): 
+                if sent:
+                    try: bot.edit_message_text(escape_md("⚠️ Please /start the bot first."), message.chat.id, sent.message_id, parse_mode="MarkdownV2")
+                    except: pass
+                return
+                
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            btns = [types.InlineKeyboardButton(f"{to_small_caps(r)}", callback_data=f"travel_{message.from_user.id}_{r}") for r in REGIONS]
+            for i in range(0, len(btns), 2):
+                if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
+                else: kb.add(btns[i])
+            kb.add(types.InlineKeyboardButton("Cᴀɴᴄᴇʟ ↩️", callback_data=f"travel_cancel_{message.from_user.id}"))
+            
+            text = "🌍 *Wʜᴇʀᴇ Wᴏᴜʟᴅ Yᴏᴜ Lɪᴋᴇ Tᴏ Tʀᴀᴠᴇʟ, Tʀᴀɪɴᴇʀ?*"
+            if sent:
+                try: bot.edit_message_text(text, message.chat.id, sent.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except: pass
+            else:
+                safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+
+        threading.Thread(target=process_travel).start()
 
     @bot.message_handler(commands=["pokedex", "dex"])
     def cmd_pokedex(message):
@@ -364,9 +426,27 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
-        if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
-        text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
-        safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+        # ⚡ INSTANT LOADING MESSAGE ⚡
+        sent = None
+        try: sent = bot.reply_to(message, "🔄 *Lᴏᴀᴅɪɴɢ Pᴏᴋᴇ́ᴅᴇx\\.\\.\\.*", parse_mode="MarkdownV2")
+        except: pass
+        
+        def process_mypokemon():
+            if not db.get_user(message.from_user.id): 
+                if sent:
+                    try: bot.edit_message_text(escape_md("⚠️ Please /start the bot first."), message.chat.id, sent.message_id, parse_mode="MarkdownV2")
+                    except: pass
+                return
+                
+            text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
+            
+            if sent:
+                try: bot.edit_message_text(text, message.chat.id, sent.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except: pass
+            else:
+                safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+
+        threading.Thread(target=process_mypokemon).start()
 
     @bot.message_handler(commands=["inspect"])
     def cmd_inspect(message):
@@ -455,8 +535,19 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["flex", "top", "leaderboard"])
     def command_flex(message):
-        db.add_user_if_new(message.from_user.id)
-        send_leaderboard(bot, message.chat.id, message.from_user.id, mode="catch")
+        # ⚡ INSTANT LOADING MESSAGE ⚡
+        sent = None
+        try: sent = bot.reply_to(message, "🔄 *Fᴇᴛᴄʜɪɴɢ Lᴇᴀᴅᴇʀʙᴏᴀʀᴅ\\.\\.\\.*", parse_mode="MarkdownV2")
+        except: pass
+
+        def process_flex():
+            db.add_user_if_new(message.from_user.id)
+            if sent:
+                send_leaderboard(bot, message.chat.id, message.from_user.id, message_id=sent.message_id, mode="catch")
+            else:
+                send_leaderboard(bot, message.chat.id, message.from_user.id, mode="catch")
+
+        threading.Thread(target=process_flex).start()
         
     @bot.message_handler(commands=["getid"])
     def cmd_getid(message):
