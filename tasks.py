@@ -9,7 +9,7 @@ def to_small_caps(text):
     small_caps_map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
         'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
-        'o': 'ᴏ', 'p': 'ᴏ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
+        'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
         'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
     }
     return "".join(char if char.isupper() else small_caps_map.get(char.lower(), char) for char in text)
@@ -72,8 +72,8 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
         
         kb = types.InlineKeyboardMarkup(row_width=2)
         
-        # 📍 The new Progress Bar button spans the whole top row
-        btn_progress = types.InlineKeyboardButton(f"{progress_bar} 【{total_pct}%】", callback_data=f"task_refresh_{user_id}")
+        # 📍 The new Progress Bar button now uses "prog" instead of "refresh"
+        btn_progress = types.InlineKeyboardButton(f"{progress_bar} 【{total_pct}%】", callback_data=f"task_prog_{user_id}_{total_pct}")
         
         btn_refresh = types.InlineKeyboardButton("Rᴇғʀᴇsʜ 🌀", callback_data=f"task_refresh_{user_id}")
         
@@ -113,6 +113,11 @@ def handle_task_callback(bot, call):
     if action == "refresh":
         safe_answer(bot, call.id, "🔄 Refreshing progress...")
         render_tasks_ui(bot, call.message.chat.id, user_id, call.message.message_id)
+
+    # 📍 NEW: Intercept the progress bar click and show the percentage alert
+    elif action == "prog":
+        pct = parts[3]
+        safe_answer(bot, call.id, f"📊 Your progress is {pct}% completed!", show_alert=True)
         
     elif action == "claim":
         def process_claim():
