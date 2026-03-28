@@ -9,7 +9,7 @@ def to_small_caps(text):
     small_caps_map = {
         'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
         'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
-        'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
+        'o': 'ᴏ', 'p': 'ᴏ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
         'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
     }
     return "".join(char if char.isupper() else small_caps_map.get(char.lower(), char) for char in text)
@@ -55,7 +55,7 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
         pvp_icon = "✅" if pvp_done >= pvp_task['goal'] else "☒"
         catch_icon = "✅" if catch_done >= catch_task['goal'] else "☒"
         
-        # 5. Build the UI Text
+        # 5. Build the Sleek UI Text
         text = (
             "━━━━━━━━━━━━━━\n"
             f"📅 *{to_small_caps('Your Daily Tasks')}*\n"
@@ -64,9 +64,6 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
             f"• Wɪɴ {pvp_task['goal']} PᴠP ᴍᴀᴛᴄʜ{'ᴇs' if pvp_task['goal']>1 else ''} \\({pvp_done}/{pvp_task['goal']}\\) 【{pvp_icon}】\n"
             f"• Cᴀᴛᴄʜ {catch_task['goal']} Pᴏᴋᴇ́ᴍᴏɴ \\({catch_done}/{catch_task['goal']}\\) 【{catch_icon}】\n"
             "━━━━━━━━━━━━━━\n"
-            f"*{to_small_caps('Completion')} %*\n"
-            f"`{progress_bar}` 【{total_pct}%】\n"
-            "━━━━━━━━━━━━━━\n"
             f"🎁 *Rᴇᴡᴀʀᴅ:* ✨ Sʜɪɴʏ Mʏsᴛᴇʀʏ Bᴏx"
         )
         
@@ -74,6 +71,10 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
         all_claimed = all(t['completed'] for t in tasks_list)
         
         kb = types.InlineKeyboardMarkup(row_width=2)
+        
+        # 📍 The new Progress Bar button spans the whole top row
+        btn_progress = types.InlineKeyboardButton(f"{progress_bar} 【{total_pct}%】", callback_data=f"task_refresh_{user_id}")
+        
         btn_refresh = types.InlineKeyboardButton("Rᴇғʀᴇsʜ 🌀", callback_data=f"task_refresh_{user_id}")
         
         if all_claimed:
@@ -83,6 +84,7 @@ def render_tasks_ui(bot, chat_id, user_id, message_id=None):
         else:
             btn_claim = types.InlineKeyboardButton("Cʟᴀɪᴍ 🔒", callback_data=f"task_claim_{user_id}")
             
+        kb.add(btn_progress)
         kb.add(btn_refresh, btn_claim)
         
         # 7. Edit the message instantly
