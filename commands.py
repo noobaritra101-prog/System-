@@ -124,7 +124,7 @@ def auto_flee(bot, message_id, chat_id, pokemon_name, active_hunts):
     active_hunts.pop(message_id, None)
 
 def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
-    # INSTANT LOADING MESSAGE (so the bot feels fast before downloading the image)
+    # INSTANT LOADING MESSAGE
     loading_msg = None
     try: loading_msg = bot.send_message(chat_id, "🔎 *Sᴄᴏᴜᴛɪɴɢ ᴛʜᴇ ᴀʀᴇᴀ\\.\\.\\.*", reply_to_message_id=reply_to_id, parse_mode="MarkdownV2")
     except: pass
@@ -171,7 +171,7 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
 
     try:
         sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
-        cleanup_loading() # DELETE THE LOADING MESSAGE AS SOON AS THE PHOTO ARRIVES
+        cleanup_loading()
         timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(bot, sent.message_id, chat_id, name, active_hunts))
         timer.start()
         active_hunts[sent.message_id] = {"user_id": user_id, "chat_id": chat_id, "start_time": time.time(), "timer": timer, "name": name}
@@ -313,7 +313,6 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["profile", "trainer"])
     def cmd_profile(message):
-        # ⚡ INSTANT LOADING MESSAGE ⚡
         sent = None
         try: sent = bot.reply_to(message, "🔄 *Lᴏᴀᴅɪɴɢ Tʀᴀɪɴᴇʀ Pʀᴏғɪʟᴇ\\.\\.\\.*", parse_mode="MarkdownV2")
         except: pass
@@ -378,7 +377,6 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["travel"])
     def cmd_travel(message):
-        # ⚡ INSTANT LOADING MESSAGE ⚡
         sent = None
         try: sent = bot.reply_to(message, "🔄 *Pʀᴇᴘᴀʀɪɴɢ Tʀᴀᴠᴇʟ Rᴏᴜᴛᴇs\\.\\.\\.*", parse_mode="MarkdownV2")
         except: pass
@@ -395,8 +393,8 @@ def register_user_handlers(bot, active_hunts):
                 
             kb = types.InlineKeyboardMarkup(row_width=2)
             
-            # 📍 NEW: Current Region Alert Button
-            kb.add(types.InlineKeyboardButton(f"📍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ: {to_small_caps(current_region)}", callback_data=f"travel_current_{current_region}"))
+            # 📍 FIXED: Uses cur_reg_ so the callback handler parses it correctly!
+            kb.add(types.InlineKeyboardButton(f"📍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ: {to_small_caps(current_region)}", callback_data=f"cur_reg_{current_region}"))
             
             btns = [types.InlineKeyboardButton(f"{to_small_caps(r)}", callback_data=f"travel_{message.from_user.id}_{r}") for r in REGIONS]
             for i in range(0, len(btns), 2):
@@ -433,7 +431,6 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
-        # ⚡ INSTANT LOADING MESSAGE ⚡
         sent = None
         try: sent = bot.reply_to(message, "🔄 *Lᴏᴀᴅɪɴɢ Pᴏᴋᴇ́ᴅᴇx\\.\\.\\.*", parse_mode="MarkdownV2")
         except: pass
@@ -542,7 +539,6 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["flex", "top", "leaderboard"])
     def command_flex(message):
-        # ⚡ INSTANT LOADING MESSAGE ⚡
         sent = None
         try: sent = bot.reply_to(message, "🔄 *Fᴇᴛᴄʜɪɴɢ Lᴇᴀᴅᴇʀʙᴏᴀʀᴅ\\.\\.\\.*", parse_mode="MarkdownV2")
         except: pass
