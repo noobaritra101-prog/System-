@@ -7,6 +7,8 @@ import datetime
 import random
 import csv
 import io
+import time
+import threading
 from config import DATABASE_URL, logger
 
 # ================== CONNECTION POOL ==================
@@ -15,7 +17,8 @@ db_pool = None
 def init_db():
     global db_pool
     try:
-        db_pool = pool.SimpleConnectionPool(
+        # ⚡ UPGRADED TO THREADED CONNECTION POOL
+        db_pool = pool.ThreadedConnectionPool(
             1, 20, 
             DATABASE_URL,
             keepalives=1,
@@ -24,7 +27,7 @@ def init_db():
             keepalives_count=5
         )
         if db_pool:
-            logger.info("✅ Connection pool created successfully with Keepalives")
+            logger.info("✅ Threaded Connection pool created successfully with Keepalives")
             
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -534,3 +537,17 @@ def get_debug_stats():
                 db_size_mb = 0.0
                 
             return u_c, p_c, g_c, pvp_total, regions_active, db_size_mb
+
+# ⚡ HEARTBEAT: Keep Supabase connection alive permanently
+def keep_db_alive():
+    while True:
+        time.sleep(240) # Ping every 4 minutes
+        try:
+            if db_pool:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1")
+        except Exception:
+            pass
+
+threading.Thread(target=keep_db_alive, daemon=True).start()
