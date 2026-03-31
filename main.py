@@ -158,6 +158,13 @@ def cb_handler(call):
             except: pass
             return
             
+        # 📍 NEW: Intercept the Current Region button so it doesn't crash!
+        elif call.data.startswith("cur_reg_"):
+            region = call.data.split("_")[2]
+            try: bot.answer_callback_query(call.id, f"📍 You are currently in {region}!", show_alert=True)
+            except: pass
+            return
+
         elif call.data.startswith("travel_"):
             uid, region = int(call.data.split("_")[1]), call.data.split("_")[2]
             if call.from_user.id != uid: return bot.answer_callback_query(call.id, "Not your menu.")
