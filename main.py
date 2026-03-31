@@ -254,7 +254,15 @@ def cb_handler(call):
 if __name__ == "__main__":
     db.init_db()
     logger.info("Bot is starting...")
-    bot.delete_webhook()
     
-    # ⚡ FIX 4: `skip_pending=True` ignores all text commands typed while the bot was offline!
-    bot.infinity_polling(skip_pending=True)
+    # 🛡️ THE INVINCIBLE BOOT SHIELD
+    # If the server loses internet, the bot will patiently retry instead of crashing!
+    while True:
+        try:
+            bot.delete_webhook()
+            # skip_pending=True ignores all text commands typed while the bot was offline!
+            bot.infinity_polling(skip_pending=True)
+            break # Exits cleanly if you manually shut the bot down
+        except Exception as e:
+            logger.error(f"Network error at boot: {e}. Retrying in 10 seconds...")
+            time.sleep(10)
