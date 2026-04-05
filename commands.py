@@ -124,6 +124,7 @@ def auto_flee(bot, message_id, chat_id, pokemon_name, active_hunts):
     active_hunts.pop(message_id, None)
 
 def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
+    # ⚡ FAST PATH: No loading text, just instant image request
     if not db.get_user(user_id): return safe_send(bot, chat_id, escape_md("⚠️ Please /start the bot first."), reply_to_id)
     if pvp.is_in_battle(user_id): return safe_send(bot, chat_id, escape_md("⚔️ You cannot scout while engaged in a PvP battle!"), reply_to_id)
         
@@ -246,22 +247,24 @@ def register_user_handlers(bot, active_hunts):
     
     @bot.message_handler(commands=["start"])
     def cmd_start(message):
-        is_new = db.add_user_if_new(message.from_user.id)
-        
-        if is_new and LOG_GROUP_ID:
-            try:
-                u_name = clean_name(message.from_user.first_name)
-                u_id = message.from_user.id
-                log_msg = f"🌟 【Sᴛᴀʀᴛ】 [{escape_md(u_name)}](tg://user?id={u_id}) ᴇɴᴛᴇʀᴇᴅ ᴛʜᴇ ᴡᴏʀʟᴅ ᴏғ Sᴇxᴀ"
-                bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
-            except: pass
+        def process():
+            is_new = db.add_user_if_new(message.from_user.id)
             
-        if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.row(types.InlineKeyboardButton("Oᴡɴᴇʀ ⚡", url="https://t.me/monarch_sama"), types.InlineKeyboardButton("Mᴀɪɴ Gʀᴏᴜᴘ ⚡", url="https://t.me/sexagamechat"))
-        text = (f"Hҽყ {escape_md(clean_name(message.from_user.first_name))}\n\n*Wᴇʟᴄσɱᴇ ᴛσ Sᴇxᴀ ✨*\n*Tʜᴇ Sʜɪɴʏ Pᴏᴋᴇ́ᴍᴏɴ Aᴅᴠᴇɴᴛᴜʀᴇ*\n\n"
-                f"━━━━━━━━━━━━━━━\n*🔎 Hᴜɴᴛ • 🎯 Cᴀᴛᴄʜ • 💎 Fʟᴇx*\n━━━━━━━━━━━━━━━\n*🌍 Yᴏᴜʀ Jᴏᴜʀɴᴇʏ Bᴇɢɪɴs Nᴏᴡ*")
-        safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            if is_new and LOG_GROUP_ID:
+                try:
+                    u_name = clean_name(message.from_user.first_name)
+                    u_id = message.from_user.id
+                    log_msg = f"🌟 【Sᴛᴀʀᴛ】 [{escape_md(u_name)}](tg://user?id={u_id}) ᴇɴᴛᴇʀᴇᴅ ᴛʜᴇ ᴡᴏʀʟᴅ ᴏғ Sᴇxᴀ"
+                    bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
+                except: pass
+                
+            if message.chat.type in ["group", "supergroup"]: db.add_group(message.chat.id)
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.row(types.InlineKeyboardButton("Oᴡɴᴇʀ ⚡", url="https://t.me/monarch_sama"), types.InlineKeyboardButton("Mᴀɪɴ Gʀᴏᴜᴘ ⚡", url="https://t.me/sexagamechat"))
+            text = (f"Hҽყ {escape_md(clean_name(message.from_user.first_name))}\n\n*Wᴇʟᴄσɱᴇ ᴛσ Sᴇxᴀ ✨*\n*Tʜᴇ Sʜɪɴʏ Pᴏᴋᴇ́ᴍᴏɴ Aᴅᴠᴇɴᴛᴜʀᴇ*\n\n"
+                    f"━━━━━━━━━━━━━━━\n*🔎 Hᴜɴᴛ • 🎯 Cᴀᴛᴄʜ • 💎 Fʟᴇx*\n━━━━━━━━━━━━━━━\n*🌍 Yᴏᴜʀ Jᴏᴜʀɴᴇʏ Bᴇɢɪɴs Nᴏᴡ*")
+            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+        threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["open"])
     def cmd_open(message):
@@ -282,135 +285,156 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["task", "tasks"])
     def cmd_task(message):
-        db.add_user_if_new(message.from_user.id)
-        tasks.render_tasks_ui(bot, message.chat.id, message.from_user.id)
+        def process():
+            db.add_user_if_new(message.from_user.id)
+            tasks.render_tasks_ui(bot, message.chat.id, message.from_user.id)
+        threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["profile", "trainer"])
     def cmd_profile(message):
-        user_id = message.from_user.id
-        if not db.get_user(user_id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
-        
-        tries_left, region = db.update_user_tries(user_id)
-        names = db.list_user_pokemon_names(user_id)
-        rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
-        wins, losses = db.get_battle_stats(user_id)
-        
-        badges = db.get_user_badges(user_id)
-        badge_str = " ".join(badges) if badges else "Nᴏɴᴇ Yᴇᴛ"
-        
-        total_battles = wins + losses
-        win_rate = round((wins / total_battles * 100), 1) if total_battles > 0 else 0.0
+        def process():
+            user_id = message.from_user.id
+            if not db.get_user(user_id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
             
-        u_name = escape_md(to_small_caps(clean_name(message.from_user.first_name)))
-        region_str = escape_md(to_small_caps(region))
-        rarest_str = escape_md(to_small_caps(rarest_caught))
-        
-        text = (
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"      *🪪 Tʀᴀɪɴᴇʀ Cᴀʀᴅ 🪪*\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
-            f"*👤 Nᴀᴍᴇ — {u_name}*\n"
-            f"*🆔 Uɪᴅ — `{user_id}`*\n"
-            f"*🌍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ — {region_str}*\n\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"         *Gʏᴍ Bᴀᴅɢᴇs*\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"   {badge_str}\n\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"         *Aᴅᴠᴇɴᴛᴜʀᴇ Sᴛᴀᴛs*\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
-            f"*🎒 Cᴏʟʟᴇᴄᴛɪᴏɴ — {len(names)} Pᴏᴋᴇ́ᴍᴏɴ*\n"
-            f"*⭐ Rᴀʀᴇsᴛ — {rarest_str}*\n"
-            f"*🔋 Sᴄᴏᴜᴛs Lᴇғᴛ — {tries_left} / 2500*\n\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n"
-            f"           *Bᴀᴛᴛʟᴇ Rᴇᴄᴏʀᴅ*\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
-            f"*🏆 Wɪɴs — {wins}*\n"
-            f"*❌ Lᴏssᴇs — {losses}*\n"
-            f"*📊 Tᴏᴛᴀʟ Bᴀᴛᴛʟᴇs — {total_battles}*\n"
-            f"*📈 Wɪɴ Rᴀᴛᴇ — {escape_md(str(win_rate))}%*\n\n"
-            f"*✦━━━━━━━━━━━━━━━━✦*"
-        )
-        safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
+            tries_left, region = db.update_user_tries(user_id)
+            names = db.list_user_pokemon_names(user_id)
+            rarest_caught = [p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p][0] if names and any(p for p in names if p in LEGENDARY_NAMES or "Mega" in p or "Primal" in p) else (names[-1] if names else "None")
+            wins, losses = db.get_battle_stats(user_id)
+            
+            badges = db.get_user_badges(user_id)
+            badge_str = " ".join(badges) if badges else "Nᴏɴᴇ Yᴇᴛ"
+            
+            total_battles = wins + losses
+            win_rate = round((wins / total_battles * 100), 1) if total_battles > 0 else 0.0
+                
+            u_name = escape_md(to_small_caps(clean_name(message.from_user.first_name)))
+            region_str = escape_md(to_small_caps(region))
+            rarest_str = escape_md(to_small_caps(rarest_caught))
+            
+            text = (
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"      *🪪 Tʀᴀɪɴᴇʀ Cᴀʀᴅ 🪪*\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+                f"*👤 Nᴀᴍᴇ — {u_name}*\n"
+                f"*🆔 Uɪᴅ — `{user_id}`*\n"
+                f"*🌍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ — {region_str}*\n\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"         *Gʏᴍ Bᴀᴅɢᴇs*\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"   {badge_str}\n\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"         *Aᴅᴠᴇɴᴛᴜʀᴇ Sᴛᴀᴛs*\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+                f"*🎒 Cᴏʟʟᴇᴄᴛɪᴏɴ — {len(names)} Pᴏᴋᴇ́ᴍᴏɴ*\n"
+                f"*⭐ Rᴀʀᴇsᴛ — {rarest_str}*\n"
+                f"*🔋 Sᴄᴏᴜᴛs Lᴇғᴛ — {tries_left} / 2500*\n\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n"
+                f"           *Bᴀᴛᴛʟᴇ Rᴇᴄᴏʀᴅ*\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
+                f"*🏆 Wɪɴs — {wins}*\n"
+                f"*❌ Lᴏssᴇs — {losses}*\n"
+                f"*📊 Tᴏᴛᴀʟ Bᴀᴛᴛʟᴇs — {total_battles}*\n"
+                f"*📈 Wɪɴ Rᴀᴛᴇ — {escape_md(str(win_rate))}%*\n\n"
+                f"*✦━━━━━━━━━━━━━━━━✦*"
+            )
+            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id)
+        threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["travel"])
     def cmd_travel(message):
-        if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        btns = [types.InlineKeyboardButton(f"{to_small_caps(r)}", callback_data=f"travel_{message.from_user.id}_{r}") for r in REGIONS]
-        for i in range(0, len(btns), 2):
-            if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
-            else: kb.add(btns[i])
-        kb.add(types.InlineKeyboardButton("Cᴀɴᴄᴇʟ ↩️", callback_data=f"travel_cancel_{message.from_user.id}"))
-        safe_send(bot, message.chat.id, "🌍 *Wʜᴇʀᴇ Wᴏᴜʟᴅ Yᴏᴜ Lɪᴋᴇ Tᴏ Tʀᴀᴠᴇʟ, Tʀᴀɪɴᴇʀ?*", reply_to_id=message.message_id, reply_markup=kb)
+        def process():
+            user_data = db.get_user(message.from_user.id)
+            if not user_data: return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+            
+            # 📍 FIXED: Current Region restored
+            current_region = user_data[2] if len(user_data) > 2 else "Kanto"
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.add(types.InlineKeyboardButton(f"📍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ: {to_small_caps(current_region)}", callback_data=f"cur_reg_{current_region}"))
+            
+            btns = [types.InlineKeyboardButton(f"{to_small_caps(r)}", callback_data=f"travel_{message.from_user.id}_{r}") for r in REGIONS]
+            for i in range(0, len(btns), 2):
+                if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
+                else: kb.add(btns[i])
+            kb.add(types.InlineKeyboardButton("Cᴀɴᴄᴇʟ ↩️", callback_data=f"travel_cancel_{message.from_user.id}"))
+            safe_send(bot, message.chat.id, "🌍 *Wʜᴇʀᴇ Wᴏᴜʟᴅ Yᴏᴜ Lɪᴋᴇ Tᴏ Tʀᴀᴠᴇʟ, Tʀᴀɪɴᴇʀ?*", reply_to_id=message.message_id, reply_markup=kb)
+        threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["pokedex", "dex"])
     def cmd_pokedex(message):
-        parts = message.text.split(maxsplit=1)
-        if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /pokedex <pokemon_name>"), reply_to_id=message.message_id)
-        name_raw = parts[1].strip()
-        name = name_raw.lower()
-        
-        poke_id = get_pokemon_id_sync(name)
-        if not poke_id: 
-            text, kb = generate_did_you_mean(name_raw, pokemon_name_to_id_cache.keys(), "dym_dex", message.from_user.id)
-            return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+        def process():
+            parts = message.text.split(maxsplit=1)
+            if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /pokedex <pokemon_name>"), reply_to_id=message.message_id)
+            name_raw = parts[1].strip()
+            name = name_raw.lower()
             
-        text = get_dex_text(name, "info")
-        img_url = official_shiny_artwork_url(poke_id)
-        kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"), types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}"))
-        try: bot.send_photo(message.chat.id, img_url, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
-        except: pass
+            poke_id = get_pokemon_id_sync(name)
+            if not poke_id: 
+                text, kb = generate_did_you_mean(name_raw, pokemon_name_to_id_cache.keys(), "dym_dex", message.from_user.id)
+                return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+                
+            text = get_dex_text(name, "info")
+            img_url = official_shiny_artwork_url(poke_id)
+            kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"), types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}"))
+            try: bot.send_photo(message.chat.id, img_url, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
+            except: pass
+        threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
-        if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
-        text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
-        safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+        # ⚡ FAST PATH: Instantly pushes the heavy 20-emoji fetching load into the background
+        def process():
+            if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+            text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
+            safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+        threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["inspect"])
     def cmd_inspect(message):
-        if not db.get_user(message.from_user.id): return
-        parts = message.text.split(maxsplit=1)
-        if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /inspect <pokemon_name>"), reply_to_id=message.message_id)
-        name_raw = parts[1].strip()
-        name = name_raw.lower()
-        
-        user_pokemon = db.list_user_pokemon_names(message.from_user.id)
-        if name not in [n.lower() for n in user_pokemon]: 
-            text, kb = generate_did_you_mean(name_raw, user_pokemon, "dym_ins", message.from_user.id)
-            return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+        def process():
+            if not db.get_user(message.from_user.id): return
+            parts = message.text.split(maxsplit=1)
+            if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /inspect <pokemon_name>"), reply_to_id=message.message_id)
+            name_raw = parts[1].strip()
+            name = name_raw.lower()
             
-        poke_id = get_pokemon_id_sync(name)
-        if poke_id:
-            try: bot.send_photo(message.chat.id, official_shiny_artwork_url(poke_id), caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
-            except: pass
+            user_pokemon = db.list_user_pokemon_names(message.from_user.id)
+            if name not in [n.lower() for n in user_pokemon]: 
+                text, kb = generate_did_you_mean(name_raw, user_pokemon, "dym_ins", message.from_user.id)
+                return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+                
+            poke_id = get_pokemon_id_sync(name)
+            if poke_id:
+                try: bot.send_photo(message.chat.id, official_shiny_artwork_url(poke_id), caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
+                except: pass
+        threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["release"])
     def cmd_release(message):
-        if not db.get_user(message.from_user.id): return
-        parts = message.text.split(maxsplit=1)
-        if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /release <pokemon_name>"), reply_to_id=message.message_id)
-        poke_name_raw = parts[1].strip()
-        poke_name = poke_name_raw.title()
-        
-        user_pokemon = db.list_user_pokemon_names(message.from_user.id)
-        if poke_name.lower() not in [n.lower() for n in user_pokemon]:
-            text, kb = generate_did_you_mean(poke_name_raw, user_pokemon, "dym_rel", message.from_user.id)
-            return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+        def process():
+            if not db.get_user(message.from_user.id): return
+            parts = message.text.split(maxsplit=1)
+            if len(parts) < 2: return safe_send(bot, message.chat.id, escape_md("📝 Usage: /release <pokemon_name>"), reply_to_id=message.message_id)
+            poke_name_raw = parts[1].strip()
+            poke_name = poke_name_raw.title()
             
-        small_name = to_small_caps(poke_name)
-        text = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
-                f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
-                f"*{escape_md(small_name)}?*\n\n"
-                f"*Tʜɪs Aᴄᴛɪᴏɴ Cᴀɴɴᴏᴛ Bᴇ Uɴᴅᴏɴᴇ\\.*")
-        
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"relc_Y_{message.from_user.id}_{poke_name[:32]}"),
-            types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"relc_N_{message.from_user.id}_{poke_name[:32]}")
-        )
-        safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+            user_pokemon = db.list_user_pokemon_names(message.from_user.id)
+            if poke_name.lower() not in [n.lower() for n in user_pokemon]:
+                text, kb = generate_did_you_mean(poke_name_raw, user_pokemon, "dym_rel", message.from_user.id)
+                return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+                
+            small_name = to_small_caps(poke_name)
+            text = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
+                    f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
+                    f"*{escape_md(small_name)}?*\n\n"
+                    f"*Tʜɪs Aᴄᴛɪᴏɴ Cᴀɴɴᴏᴛ Bᴇ Uɴᴅᴏɴᴇ\\.*")
+            
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.add(
+                types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"relc_Y_{message.from_user.id}_{poke_name[:32]}"),
+                types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"relc_N_{message.from_user.id}_{poke_name[:32]}")
+            )
+            safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
+        threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["pvp"])
     def command_pvp(message): pvp.handle_pvp_command(bot, message)
@@ -455,8 +479,10 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["flex", "top", "leaderboard"])
     def command_flex(message):
-        db.add_user_if_new(message.from_user.id)
-        send_leaderboard(bot, message.chat.id, message.from_user.id, mode="catch")
+        def process():
+            db.add_user_if_new(message.from_user.id)
+            send_leaderboard(bot, message.chat.id, message.from_user.id, mode="catch")
+        threading.Thread(target=process).start()
         
     @bot.message_handler(commands=["getid"])
     def cmd_getid(message):
