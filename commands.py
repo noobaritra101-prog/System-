@@ -3,6 +3,9 @@ import time
 import threading
 import random
 import difflib
+import requests
+import io
+import concurrent.futures
 from telebot import types
 
 import database as db
@@ -20,6 +23,9 @@ TYPE_EMOJIS = {
     'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
     'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
 }
+
+# ⚡ CACHE FOR EXPLORE SPEED ⚡
+local_type_cache = {}
 
 def clean_name(name):
     if not name: return "Trainer"
@@ -70,6 +76,19 @@ def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
     return text, kb
 
 # ================== NEW INVENTORY UI GENERATOR ==================
+def get_cached_type_str(poke_name):
+    lower_name = poke_name.lower()
+    if lower_name in local_type_cache: return local_type_cache[lower_name]
+    try:
+        types_list, _ = get_pokemon_stats_sync(lower_name)
+        if types_list:
+            emojis = "/ ".join([TYPE_EMOJIS.get(t, '') for t in types_list if t]).strip()
+            if emojis: 
+                local_type_cache[lower_name] = f"【{emojis}】"
+                return local_type_cache[lower_name]
+    except: pass
+    return ""
+
 def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
     names = db.list_user_pokemon_names(uid)
     if not names: return escape_md("🎒 No Pokémon found."), None
@@ -86,16 +105,15 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
     
     text = f"{title}\n━━━━━━━━━━━━━━━━\n📃 Pᴀɢᴇ【{page_idx + 1} / {len(pages)}】\n\n"
 
-    for i, name in enumerate(pages[page_idx]):
+    page_names = pages[page_idx]
+    
+    # ⚡ MASSIVE SPEED BOOST: Fetch all 20 types simultaneously!
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        type_strings = list(executor.map(get_cached_type_str, page_names))
+
+    for i, name in enumerate(page_names):
         item_num = (page_idx * page_size) + i + 1
-        type_str = ""
-        try:
-            types_list, _ = get_pokemon_stats_sync(name.lower())
-            if types_list:
-                emojis = "/ ".join([TYPE_EMOJIS.get(t, '') for t in types_list if t]).strip()
-                if emojis: type_str = f"【{emojis}】"
-        except: pass
-        text += f"`{item_num:02d}.` {escape_md(name)}{escape_md(type_str)}\n"
+        text += f"`{item_num:02d}.` {escape_md(name)}{escape_md(type_strings[i])}\n"
 
     text += f"\n📦 Tᴏᴛᴀʟ Pᴏᴋᴇ́ᴍᴏɴ — {total_poke}\n━━━━━━━━━━━━━━━━"
 
@@ -124,7 +142,6 @@ def auto_flee(bot, message_id, chat_id, pokemon_name, active_hunts):
     active_hunts.pop(message_id, None)
 
 def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
-    # ⚡ FAST PATH: No loading text, just instant image request
     if not db.get_user(user_id): return safe_send(bot, chat_id, escape_md("⚠️ Please /start the bot first."), reply_to_id)
     if pvp.is_in_battle(user_id): return safe_send(bot, chat_id, escape_md("⚔️ You cannot scout while engaged in a PvP battle!"), reply_to_id)
         
@@ -150,8 +167,15 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
         types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"run_{user_id}_{name[:16]}")
     )
 
+    # ⚡ MASSIVE SPEED BOOST: Download image to bot RAM instantly to bypass Telegram URL queue!
     try:
-        sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
+        img_data = requests.get(img_url, timeout=2).content
+        photo_payload = io.BytesIO(img_data)
+    except:
+        photo_payload = img_url # Safe fallback
+
+    try:
+        sent = bot.send_photo(chat_id, photo_payload, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
         timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(bot, sent.message_id, chat_id, name, active_hunts))
         timer.start()
         active_hunts[sent.message_id] = {"user_id": user_id, "chat_id": chat_id, "start_time": time.time(), "timer": timer, "name": name}
@@ -159,7 +183,8 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
         if "429" in str(e):
             time.sleep(2) 
             try:
-                sent = bot.send_photo(chat_id, img_url, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
+                if isinstance(photo_payload, io.BytesIO): photo_payload.seek(0)
+                sent = bot.send_photo(chat_id, photo_payload, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
                 timer = threading.Timer(FLEE_TIMEOUT, auto_flee, args=(bot, sent.message_id, chat_id, name, active_hunts))
                 timer.start()
                 active_hunts[sent.message_id] = {"user_id": user_id, "chat_id": chat_id, "start_time": time.time(), "timer": timer, "name": name}
@@ -346,7 +371,6 @@ def register_user_handlers(bot, active_hunts):
             user_data = db.get_user(message.from_user.id)
             if not user_data: return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
             
-            # 📍 FIXED: Current Region restored
             current_region = user_data[2] if len(user_data) > 2 else "Kanto"
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(types.InlineKeyboardButton(f"📍 Cᴜʀʀᴇɴᴛ Rᴇɢɪᴏɴ: {to_small_caps(current_region)}", callback_data=f"cur_reg_{current_region}"))
@@ -381,9 +405,8 @@ def register_user_handlers(bot, active_hunts):
 
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
-        # ⚡ FAST PATH: Instantly pushes the heavy 20-emoji fetching load into the background
         def process():
-            if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+            if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
             text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
             safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
         threading.Thread(target=process).start()
