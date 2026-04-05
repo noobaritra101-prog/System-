@@ -107,7 +107,6 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
 
     page_names = pages[page_idx]
     
-    # ⚡ MASSIVE SPEED BOOST: Fetch all 20 types simultaneously!
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         type_strings = list(executor.map(get_cached_type_str, page_names))
 
@@ -134,11 +133,7 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
 
 # ================== GAME LOGIC ==================
 def auto_flee(bot, message_id, chat_id, pokemon_name, active_hunts):
-    if message_id not in active_hunts: return
-    try:
-        fled_cap = f"💨 Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(pokemon_name.title()))} Fʟᴇᴅ\\!"
-        bot.edit_message_caption(caption=fled_cap, chat_id=chat_id, message_id=message_id, reply_markup=None, parse_mode="MarkdownV2")
-    except: pass
+    # SILENT EXPIRE: Just pop it from memory, leave the message alone!
     active_hunts.pop(message_id, None)
 
 def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
@@ -149,13 +144,12 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
     if tries_left is None: return safe_send(bot, chat_id, escape_md("⚠️ Error checking your profile."), reply_to_id)
     if tries_left <= 0: return safe_send(bot, chat_id, escape_md("💤 You have no scouts left today. Rest and come back tomorrow!"), reply_to_id)
         
+    # SILENT OVERWRITE: Cancel old hunts without editing their message
     to_cancel = [msg_id for msg_id, hunt in active_hunts.items() if hunt["user_id"] == user_id]
     for msg_id in to_cancel:
         hunt = active_hunts.pop(msg_id, None)
         if hunt:
             hunt["timer"].cancel()
-            try: bot.edit_message_caption(caption=f"💨 Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(hunt['name'].title()))} Fʟᴇᴅ\\!", chat_id=hunt["chat_id"], message_id=msg_id, reply_markup=None, parse_mode="MarkdownV2")
-            except: pass
 
     poke_id, name, base_id = fetch_random_pokemon_id_and_name_sync(region)
     if not poke_id: return safe_send(bot, chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_id)
@@ -167,12 +161,11 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
         types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"run_{user_id}_{name[:16]}")
     )
 
-    # ⚡ MASSIVE SPEED BOOST: Download image to bot RAM instantly to bypass Telegram URL queue!
     try:
         img_data = requests.get(img_url, timeout=2).content
         photo_payload = io.BytesIO(img_data)
     except:
-        photo_payload = img_url # Safe fallback
+        photo_payload = img_url 
 
     try:
         sent = bot.send_photo(chat_id, photo_payload, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -490,23 +483,4 @@ def register_user_handlers(bot, active_hunts):
                 m_str = escape_md(f"{m_type} {m_emoji}".strip())
                 m_pow = m.get('power', 0)
                 m_acc = m.get('acc', 100)
-                team_text += f"  \\- {escape_md(m['name'])} \\[{m_str}\\] \\(Pow: {m_pow}, Acc: {m_acc}\\)\n"
-            team_text += "\n"
-            
-        try:
-            bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
-            if message.chat.type != "private":
-                kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Cʜᴇᴄᴋ DMs ❗❗", url=f"https://t.me/{bot.get_me().username}"))
-                safe_send(bot, message.chat.id, "📩 *I’ᴠᴇ Sᴇɴᴛ Yᴏᴜʀ Tᴇᴀᴍ Sᴛʀᴀᴛᴇɢʏ Tᴏ Yᴏᴜʀ DMs\\!*", reply_to_id=message.message_id, reply_markup=kb)
-        except: safe_send(bot, message.chat.id, escape_md("⚠️ Please send me a private message first!"))
-
-    @bot.message_handler(commands=["flex", "top", "leaderboard"])
-    def command_flex(message):
-        def process():
-            db.add_user_if_new(message.from_user.id)
-            send_leaderboard(bot, message.chat.id, message.from_user.id, mode="catch")
-        threading.Thread(target=process).start()
-        
-    @bot.message_handler(commands=["getid"])
-    def cmd_getid(message):
-        safe_send(bot, message.chat.id, escape_md(f"🆔 Chat ID: {message.chat.id}\n📁 Chat Type: {message.chat.type}"), reply_to_id=message.message_id)
+                team_text += f"  \\- {escape_md(m['name'])} \\[{m_str}\\] \\(Pow: {m_pow}, Acc: {m
