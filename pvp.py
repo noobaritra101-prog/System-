@@ -4,9 +4,10 @@ import random
 import threading
 import asyncio
 import copy
+import traceback
 from telebot import types
 import database as db
-from api_utils import escape_md, generate_random_team, get_pokemon_id_sync, official_shiny_artwork_url
+from api_utils import escape_md, generate_random_team, get_pokemon_id_sync, official_shiny_artwork_url, get_pokemon_stats_sync
 from config import logger, MEGA_POKEMON, LOG_GROUP_ID
 
 pvp_battles = {}
@@ -46,78 +47,6 @@ TYPE_CHART = {
     'Dark': {'Fighting': 0.5, 'Psychic': 2.0, 'Ghost': 2.0, 'Dark': 0.5, 'Fairy': 0.5},
     'Steel': {'Fire': 0.5, 'Water': 0.5, 'Electric': 0.5, 'Ice': 2.0, 'Rock': 2.0, 'Steel': 0.5, 'Fairy': 2.0},
     'Fairy': {'Fire': 0.5, 'Fighting': 2.0, 'Poison': 0.5, 'Dragon': 2.0, 'Dark': 2.0, 'Steel': 0.5}
-}
-
-# 🌟 CUSTOM OP MEGA TYPINGS 🌟
-FORM_TYPE_CHANGES = {
-    "Mega Charizard X": "Fire/Dragon",
-    "Mega Mewtwo X": "Psychic/Fighting",
-    "Mega Gyarados": "Water/Dark",
-    "Mega Sceptile": "Grass/Dragon",
-    "Mega Altaria": "Dragon/Fairy",
-    "Mega Ampharos": "Electric/Dragon",
-    "Mega Pinsir": "Bug/Flying",
-    "Mega Aggron": "Steel",
-    "Mega Lopunny": "Normal/Fighting",
-    "Mega Audino": "Normal/Fairy",
-    "Primal Groudon": "Ground/Fire",
-    "Crowned Zacian": "Fairy/Steel",
-    "Crowned Zamazenta": "Fighting/Steel",
-    "Shadow Rider Calyrex": "Psychic/Ghost",
-    "Mega Raichu X": "Electric/Fighting",
-    "Mega Raichu Y": "Electric/Fairy",
-    "Mega Lucario Z": "Fighting/Psychic",
-    "Mega Zeraora": "Electric/Fighting",
-    "Mega Greninja": "Water/Dark",
-    "Mega Meganium": "Grass/Fairy", 
-    "Mega Emboar": "Fire/Fighting",
-    "Mega Malamar": "Dark/Psychic",
-    "Mega Eelektross": "Electric/Dragon",
-    "Mega Falinks": "Fighting/Steel",
-    "Mega Chimecho": "Psychic/Ghost",
-    "Mega Pyroar": "Fire/Dark",
-    "Mega Dragalge": "Poison/Dragon",
-    "Mega Froslass": "Ice/Ghost",
-    "Mega Clefable": "Fairy/Ghost",
-    "Mega Staraptor": "Fighting/Flying",
-    "Mega Heatran": "Fire/Steel",
-    "Mega Darkrai": "Dark/Ghost",
-    "Mega Meowstic": "Psychic/Dark",
-    "Mega Crabominable": "Fighting/Ice"
-}
-
-# 🌟 CUSTOM OP MEGA STAT BUFFS 🌟
-MEGA_STAT_BUFFS = {
-    "Mega Charizard X": {"atk": 46, "def": 33, "spd": 0},
-    "Mega Charizard Y": {"atk": 20, "def": 0, "spd": 0},
-    "Mega Mewtwo X": {"atk": 80, "def": 10, "spd": 0},
-    "Mega Mewtwo Y": {"atk": 40, "def": -20, "spd": 10},
-    "Mega Raichu X": {"atk": 50, "def": 10, "spd": 40},
-    "Mega Raichu Y": {"atk": 10, "def": 30, "spd": 60},
-    "Mega Lucario Z": {"atk": 40, "def": 20, "spd": 40},
-    "Primal Groudon": {"atk": 30, "def": 20, "spd": 0},
-    "Primal Kyogre": {"atk": 50, "def": 0, "spd": 0},
-    "Crowned Zacian": {"atk": 20, "def": 0, "spd": 10},
-    "Crowned Zamazenta": {"atk": -10, "def": 25, "spd": -10},
-    "Shadow Rider Calyrex": {"atk": 0, "def": 0, "spd": 70},
-    "Ash-Greninja": {"atk": 50, "def": 0, "spd": 10},
-    "Mega Dragonite": {"atk": 40, "def": 20, "spd": 20}, 
-    "Mega Meganium": {"atk": 10, "def": 40, "spd": 30},
-    "Mega Emboar": {"atk": 40, "def": 20, "spd": 20},
-    "Mega Greninja": {"atk": 40, "def": 10, "spd": 30},
-    "Mega Malamar": {"atk": 30, "def": 40, "spd": 30},
-    "Mega Eelektross": {"atk": 40, "def": 30, "spd": 30},
-    "Mega Falinks": {"atk": 40, "def": 30, "spd": 30},
-    "Mega Chimecho": {"atk": 20, "def": 40, "spd": 40},
-    "Mega Pyroar": {"atk": 50, "def": 15, "spd": 35},
-    "Mega Dragalge": {"atk": 20, "def": 60, "spd": 20},
-    "Mega Froslass": {"atk": 25, "def": 25, "spd": 50},
-    "Mega Clefable": {"atk": 10, "def": 60, "spd": 30},
-    "Mega Staraptor": {"atk": 60, "def": 10, "spd": 30},
-    "Mega Heatran": {"atk": 30, "def": 50, "spd": 20},
-    "Mega Darkrai": {"atk": 40, "def": 20, "spd": 40},
-    "Mega Meowstic": {"atk": 30, "def": 30, "spd": 40},
-    "Mega Crabominable": {"atk": 60, "def": 40, "spd": 0}
 }
 
 # --- INTELLIGENT THREADED RATE LIMIT SHIELDS ---
@@ -205,7 +134,6 @@ def battle_timeout(bot, chat_id, battle_id):
         
         pvp_battles.pop(battle_id, None)
         
-        # Winner gets NO WIN POINTS for a timeout. Loser gets a loss.
         try: db.update_battle_stats(loser_id, is_win=False)
         except Exception as e: logger.error(f"Stat Save Error: {e}")
         
@@ -632,79 +560,90 @@ def handle_pvp_callback(bot, call):
                 except: pass
             
             def setup():
-                safe_edit(bot, "🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id)
-                
-                t1_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
-                t2_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
-                
-                t1_final, t2_final = [], []
-                
-                for draft_team, final_team in [(t1_draft, t1_final), (t2_draft, t2_final)]:
-                    for p_cached in draft_team: 
-                        p = copy.deepcopy(p_cached) 
-                        
-                        base_hp = p.get("max_hp", 50)
-                        base_atk = p.get("atk", 50)
-                        base_def = p.get("def", 50)
-                        base_spd = p.get("spd", 50)
+                try:
+                    safe_edit(bot, "🔄 *Drafting Teams\\.\\.\\.*", call.message.chat.id, battle_id)
+                    
+                    t1_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
+                    t2_draft = asyncio.run(generate_random_team(chal_data["mode"], chal_data["size"]))
+                    
+                    # 🛡️ FIX: Safety check if PokeAPI completely timed out and returned None
+                    if not t1_draft or not t2_draft:
+                        logger.error("PvP Fetch Error: generate_random_team returned None.")
+                        safe_edit(bot, "❌ *Aᴘɪ ᴛɪᴍᴇᴏᴜᴛ\\. Tʜᴇ sᴇʀᴠᴇʀ ᴄᴏᴜʟᴅ ɴᴏᴛ ɢᴇɴᴇʀᴀᴛᴇ ᴛᴇᴀᴍs ғᴀsᴛ ᴇɴᴏᴜɢʜ\\. Pʟᴇᴀsᴇ ᴛʀʏ ᴀɢᴀɪɴ\\.*", call.message.chat.id, battle_id)
+                        return
 
-                        p["base_atk"] = base_atk
-                        p["base_def"] = base_def
-                        p["base_spd"] = base_spd
-
-                        if base_hp <= 1: p["max_hp"] = 1 
-                        else: p["max_hp"] = int((2 * base_hp) + 31 + 21 + 110) 
+                    t1_final, t2_final = [], []
+                    
+                    for draft_team, final_team in [(t1_draft, t1_final), (t2_draft, t2_final)]:
+                        for p_cached in draft_team: 
+                            p = copy.deepcopy(p_cached) 
                             
-                        p["hp"] = p["max_hp"]
-                        p["atk"] = int((2 * base_atk) + 31 + 21 + 5)
-                        p["def"] = int((2 * base_def) + 31 + 21 + 5)
-                        p["spd"] = int((2 * base_spd) + 31 + 21 + 5)
+                            base_hp = p.get("max_hp", 50)
+                            base_atk = p.get("atk", 50)
+                            base_def = p.get("def", 50)
+                            base_spd = p.get("spd", 50)
 
-                        n = random.choice(NATURES)
-                        p["nature"] = n
-                        p = apply_nature(p, n)
-                        
-                        if p["name"] == "Arceus":
-                            arc_type = random.choice(list(TYPE_CHART.keys()))
-                            if arc_type != 'Normal':
-                                p["name"] = f"Arceus ({arc_type})"
-                                p["types"] = arc_type
-                                for m in p["moves"]:
-                                    if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
-                        
-                        custom_megas = [
-                            "Pyroar", "Malamar", "Dragalge", "Eelektross", "Froslass", 
-                            "Clefable", "Chimecho", "Staraptor", "Heatran", "Darkrai", 
-                            "Meowstic", "Crabominable", "Dragonite", "Meganium", 
-                            "Emboar", "Falinks", "Zeraora"
-                        ]
-                        special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Greninja", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex"] + custom_megas
-                        
-                        p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
-                        p["is_mega"] = False
-                        
-                        for m in p["moves"]:
-                            if "status_chance" not in m:
-                                m["status_chance"] = 0
-                                m["status_type"] = None
-                            if not chal_data.get("status_effects", True):
-                                m["status_chance"] = 0
-                                m["status_type"] = None
-                        
-                        final_team.append(p)
-                        
-                pvp_battles[battle_id] = {
-                    "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1_final, "p1_idx": 0,
-                    "p2_id": chal_data["p2_id"], "p2_name": chal_data["p2_name"], "p2_team": t2_final, "p2_idx": 0,
-                    "can_switch": chal_data["can_switch"], "state": "menu", "log": "", "timer": None,
-                    "last_edit": 0, "processing_start": 0
-                }
-                
-                pvp_battles[battle_id]["current_turn"] = get_faster_player(pvp_battles[battle_id])
-                faster_name = pvp_battles[battle_id][pvp_battles[battle_id]['current_turn'] + '_name']
-                pvp_battles[battle_id]["log"] = f"⚡ {faster_name}'s speed allows them to move first!"
-                
-                render_pvp_ui(bot, call.message.chat.id, battle_id)
+                            p["base_atk"] = base_atk
+                            p["base_def"] = base_def
+                            p["base_spd"] = base_spd
+
+                            if base_hp <= 1: p["max_hp"] = 1 
+                            else: p["max_hp"] = int((2 * base_hp) + 31 + 21 + 110) 
+                                
+                            p["hp"] = p["max_hp"]
+                            p["atk"] = int((2 * base_atk) + 31 + 21 + 5)
+                            p["def"] = int((2 * base_def) + 31 + 21 + 5)
+                            p["spd"] = int((2 * base_spd) + 31 + 21 + 5)
+
+                            n = random.choice(NATURES)
+                            p["nature"] = n
+                            p = apply_nature(p, n)
+                            
+                            if p["name"] == "Arceus":
+                                arc_type = random.choice(list(TYPE_CHART.keys()))
+                                if arc_type != 'Normal':
+                                    p["name"] = f"Arceus ({arc_type})"
+                                    p["types"] = arc_type
+                                    for m in p["moves"]:
+                                        if m["name"].lower() in ["judgment", "judgement"]: m["type"] = arc_type
+                            
+                            custom_megas = [
+                                "Pyroar", "Malamar", "Dragalge", "Eelektross", "Froslass", 
+                                "Clefable", "Chimecho", "Staraptor", "Heatran", "Darkrai", 
+                                "Meowstic", "Crabominable", "Dragonite", "Meganium", 
+                                "Emboar", "Falinks", "Zeraora"
+                            ]
+                            special_forms = ["Charizard", "Mewtwo", "Raichu", "Lucario", "Greninja", "Groudon", "Kyogre", "Zacian", "Zamazenta", "Calyrex"] + custom_megas
+                            
+                            p["can_mega"] = any(m[1].split("-")[0].lower() == p["name"].lower() for m in MEGA_POKEMON) or p["name"] in special_forms
+                            p["is_mega"] = False
+                            
+                            for m in p["moves"]:
+                                if "status_chance" not in m:
+                                    m["status_chance"] = 0
+                                    m["status_type"] = None
+                                if not chal_data.get("status_effects", True):
+                                    m["status_chance"] = 0
+                                    m["status_type"] = None
+                            
+                            final_team.append(p)
+                            
+                    pvp_battles[battle_id] = {
+                        "p1_id": chal_data["p1_id"], "p1_name": chal_data["name"], "p1_team": t1_final, "p1_idx": 0,
+                        "p2_id": chal_data["p2_id"], "p2_name": chal_data["p2_name"], "p2_team": t2_final, "p2_idx": 0,
+                        "can_switch": chal_data["can_switch"], "state": "menu", "log": "", "timer": None,
+                        "last_edit": 0, "processing_start": 0
+                    }
+                    
+                    pvp_battles[battle_id]["current_turn"] = get_faster_player(pvp_battles[battle_id])
+                    faster_name = pvp_battles[battle_id][pvp_battles[battle_id]['current_turn'] + '_name']
+                    pvp_battles[battle_id]["log"] = f"⚡ {faster_name}'s speed allows them to move first!"
+                    
+                    render_pvp_ui(bot, call.message.chat.id, battle_id)
+                except Exception as e:
+                    logger.error(f"PvP Fetch Error:\n{traceback.format_exc()}")
+                    safe_edit(bot, "❌ *Fᴀɪʟᴇᴅ ᴛᴏ ʟᴏᴀᴅ Pᴏᴋᴇ́ᴍᴏɴ ᴅᴀᴛᴀ\\. Pʟᴇᴀsᴇ ᴛʀʏ ᴄʜᴀʟʟᴇɴɢɪɴɢ ᴀɢᴀɪɴ\\.*", call.message.chat.id, battle_id)
+                    
             threading.Thread(target=setup).start()
             return
 
@@ -726,16 +665,27 @@ def handle_pvp_callback(bot, call):
                 return safe_answer(bot, call.id, "❌ Not your buttons!", show_alert=True)
 
             if actual_turn == "processing": 
-                if time.time() - b.get("processing_start", 0) > 2.0:
+                if time.time() - b.get("processing_start", 0) > 0.8:
                     b["current_turn"] = button_turn
                     actual_turn = button_turn
                 else:
-                    return safe_answer(bot, call.id, "⏳ Processing previous move...", show_alert=False)
+                    return safe_answer(bot, call.id, "⏳ Processing...", show_alert=False)
 
             if action != "viewteam":
                 now = time.time()
-                if now - b.get("last_edit", 0) < 1.5:
-                    return safe_answer(bot, call.id, "⏳ Whoa, slow down Trainer! Wait a second.", show_alert=False)
+                if now - b.get("last_edit", 0) < 0.5:
+                    return safe_answer(bot, call.id, "⏳ Too fast!", show_alert=False)
+                    
+                if action == "swmenu" and not b["can_switch"]:
+                    return safe_answer(bot, call.id, "🚫 Switching is disabled!", show_alert=True)
+                if action == "mega" and b[actual_turn+"_team"][b[actual_turn+"_idx"]].get("is_mega"):
+                    return safe_answer(bot, call.id, "Already transformed!", show_alert=True)
+                if action == "dosw":
+                    idx = int(parts[4])
+                    p = b[actual_turn+"_team"][idx]
+                    if p["hp"] <= 0: return safe_answer(bot, call.id, "Pokemon is fainted!", show_alert=True)
+                    if idx == b[actual_turn+"_idx"]: return safe_answer(bot, call.id, "Already out!", show_alert=True)
+                    
                 b["last_edit"] = now
                 safe_answer(bot, call.id, "")
 
@@ -876,8 +826,6 @@ def handle_pvp_callback(bot, call):
             elif action == "dosw":
                 idx = int(parts[4])
                 p = b[actual_turn+"_team"][idx]
-                if p["hp"] <= 0: return safe_answer(bot, call.id, "Pokemon is fainted!", show_alert=True)
-                if idx == b[actual_turn+"_idx"]: return safe_answer(bot, call.id, "Already out!", show_alert=True)
                 
                 b["current_turn"] = "processing"
                 b["processing_start"] = time.time()
@@ -897,13 +845,10 @@ def handle_pvp_callback(bot, call):
                 render_pvp_ui(bot, call.message.chat.id, battle_id)
 
             elif action == "swmenu":
-                if not b["can_switch"]: return safe_answer(bot, call.id, "🚫 Switching is disabled!", show_alert=True)
                 b["state"] = "switch_menu"; render_pvp_ui(bot, call.message.chat.id, battle_id)
                 
             elif action == "mega":
                 p = b[actual_turn+"_team"][b[actual_turn+"_idx"]]
-                if p.get("is_mega"): return safe_answer(bot, call.id, "Already transformed!", show_alert=True)
-                
                 old_name = p['name']
                 
                 if old_name in ["Charizard", "Mewtwo", "Raichu"] and len(parts) == 4:
@@ -959,19 +904,23 @@ def handle_pvp_callback(bot, call):
                     action_verb = "Mega Evolved"
                     icon = "💎"
 
-                buffs = MEGA_STAT_BUFFS.get(new_name, {"atk": 30, "def": 30, "spd": 20})
-                new_base_atk = p["base_atk"] + buffs["atk"]
-                new_base_def = p["base_def"] + buffs["def"]
-                new_base_spd = p["base_spd"] + buffs["spd"]
+                # --- FETCH REAL STATS FROM API ---
+                types_list, new_base_stats = get_pokemon_stats_sync(search_name)
+                if new_base_stats:
+                    p["base_atk"] = new_base_stats.get("atk", new_base_stats.get("Attack", new_base_stats.get("attack", p["base_atk"])))
+                    p["base_def"] = new_base_stats.get("def", new_base_stats.get("Defense", new_base_stats.get("defense", p["base_def"])))
+                    p["base_spd"] = new_base_stats.get("spd", new_base_stats.get("Speed", new_base_stats.get("speed", p["base_spd"])))
+                    if types_list:
+                        p["types"] = "/".join(types_list)
                 
-                p["atk"] = int((2 * new_base_atk) + 31 + 21 + 5)
-                p["def"] = int((2 * new_base_def) + 31 + 21 + 5)
-                p["spd"] = int((2 * new_base_spd) + 31 + 21 + 5)
+                # Recalculate Final Stats
+                p["atk"] = int((2 * p["base_atk"]) + 31 + 21 + 5)
+                p["def"] = int((2 * p["base_def"]) + 31 + 21 + 5)
+                p["spd"] = int((2 * p["base_spd"]) + 31 + 21 + 5)
                 
                 p = apply_nature(p, p["nature"])
                 p["is_mega"] = True
                 p["name"] = new_name
-                if new_name in FORM_TYPE_CHANGES: p["types"] = FORM_TYPE_CHANGES[new_name]
                 
                 b["log"] = f"{icon} {old_name} {action_verb.lower()} into {new_name}!"
                 b["state"] = "menu"
