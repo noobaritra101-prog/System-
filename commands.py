@@ -27,6 +27,21 @@ TYPE_EMOJIS = {
 # ⚡ CACHE FOR EXPLORE SPEED ⚡
 local_type_cache = {}
 
+# ⚡ SMART RAM CACHE FOR INSTANT IMAGES ⚡
+IMAGE_CACHE = {}
+
+def get_cached_image_payload(poke_id, img_url):
+    """Fetches image from RAM instantly, or downloads it once and caches it forever."""
+    if poke_id in IMAGE_CACHE:
+        return io.BytesIO(IMAGE_CACHE[poke_id])
+    try:
+        # Fast timeout so it never hangs the bot if the network blips
+        img_data = requests.get(img_url, timeout=1.5).content
+        IMAGE_CACHE[poke_id] = img_data
+        return io.BytesIO(img_data)
+    except:
+        return img_url # Safe fallback to standard URL if download fails
+
 def clean_name(name):
     if not name: return "Trainer"
     return name.replace('\n', ' ').replace('\r', '').replace('*', '').replace('_', '').strip()
@@ -133,7 +148,6 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
 
 # ================== GAME LOGIC ==================
 def auto_flee(bot, message_id, chat_id, pokemon_name, active_hunts):
-    # SILENT EXPIRE: Just pop it from memory, leave the message alone!
     active_hunts.pop(message_id, None)
 
 def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
@@ -144,7 +158,6 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
     if tries_left is None: return safe_send(bot, chat_id, escape_md("⚠️ Error checking your profile."), reply_to_id)
     if tries_left <= 0: return safe_send(bot, chat_id, escape_md("💤 You have no scouts left today. Rest and come back tomorrow!"), reply_to_id)
         
-    # SILENT OVERWRITE: Cancel old hunts without editing their message
     to_cancel = [msg_id for msg_id, hunt in active_hunts.items() if hunt["user_id"] == user_id]
     for msg_id in to_cancel:
         hunt = active_hunts.pop(msg_id, None)
@@ -161,11 +174,8 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
         types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"run_{user_id}_{name[:16]}")
     )
 
-    try:
-        img_data = requests.get(img_url, timeout=2).content
-        photo_payload = io.BytesIO(img_data)
-    except:
-        photo_payload = img_url 
+    # ⚡ Pull from RAM Cache if available, otherwise fetch and save it
+    photo_payload = get_cached_image_payload(base_id, img_url)
 
     try:
         sent = bot.send_photo(chat_id, photo_payload, caption=caption, reply_to_message_id=reply_to_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -391,8 +401,12 @@ def register_user_handlers(bot, active_hunts):
                 
             text = get_dex_text(name, "info")
             img_url = official_shiny_artwork_url(poke_id)
+            
+            # ⚡ Use RAM Cache to make Pokedex instant too!
+            photo_payload = get_cached_image_payload(poke_id, img_url)
+            
             kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"), types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}"))
-            try: bot.send_photo(message.chat.id, img_url, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
+            try: bot.send_photo(message.chat.id, photo_payload, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
             except: pass
         threading.Thread(target=process).start()
 
@@ -420,7 +434,9 @@ def register_user_handlers(bot, active_hunts):
                 
             poke_id = get_pokemon_id_sync(name)
             if poke_id:
-                try: bot.send_photo(message.chat.id, official_shiny_artwork_url(poke_id), caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
+                # ⚡ Use RAM Cache to make Inspect instant too!
+                photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
+                try: bot.send_photo(message.chat.id, photo_payload, caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
                 except: pass
         threading.Thread(target=process).start()
 
