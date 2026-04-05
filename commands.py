@@ -483,4 +483,23 @@ def register_user_handlers(bot, active_hunts):
                 m_str = escape_md(f"{m_type} {m_emoji}".strip())
                 m_pow = m.get('power', 0)
                 m_acc = m.get('acc', 100)
-                team_text += f"  \\- {escape_md(m['name'])} \\[{m_str}\\] \\(Pow: {m_pow}, Acc: {m
+                team_text += f"  \\- {escape_md(m['name'])} \\[{m_str}\\] \\(Pow: {m_pow}, Acc: {m_acc}\\)\n"
+            team_text += "\n"
+            
+        try:
+            bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
+            if message.chat.type != "private":
+                kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Cʜᴇᴄᴋ DMs ❗❗", url=f"https://t.me/{bot.get_me().username}"))
+                safe_send(bot, message.chat.id, "📩 *I’ᴠᴇ Sᴇɴᴛ Yᴏᴜʀ Tᴇᴀᴍ Sᴛʀᴀᴛᴇɢʏ Tᴏ Yᴏᴜʀ DMs\\!*", reply_to_id=message.message_id, reply_markup=kb)
+        except: safe_send(bot, message.chat.id, escape_md("⚠️ Please send me a private message first!"))
+
+    @bot.message_handler(commands=["flex", "top", "leaderboard"])
+    def command_flex(message):
+        def process():
+            db.add_user_if_new(message.from_user.id)
+            send_leaderboard(bot, message.chat.id, message.from_user.id, mode="catch")
+        threading.Thread(target=process).start()
+        
+    @bot.message_handler(commands=["getid"])
+    def cmd_getid(message):
+        safe_send(bot, message.chat.id, escape_md(f"🆔 Chat ID: {message.chat.id}\n📁 Chat Type: {message.chat.type}"), reply_to_id=message.message_id)
