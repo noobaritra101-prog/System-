@@ -312,8 +312,8 @@ EXECUTE_MODULES = {
 
 def register_admin_handlers(bot, active_hunts):
     
-    # ================== NEW ADMIN PROMOTION COMMAND ==================
-    @bot.message_handler(commands=["transfer_ownership", "addadmin", "coowner"])
+    # ================== NEW ADMIN PROMOTION COMMANDS ==================
+    @bot.message_handler(commands=["transfer_ownership", "addadmin"])
     def cmd_transfer_ownership(message):
         if not is_owner(bot, message): return
 
@@ -353,6 +353,31 @@ def register_admin_handlers(bot, active_hunts):
             types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"transfer_N_{target_id}")
         )
         bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="MarkdownV2")
+
+    @bot.message_handler(commands=["take_ownership"])
+    def cmd_take_ownership(message):
+        if not is_owner(bot, message): return
+
+        target_id = None
+        
+        if message.reply_to_message:
+            target_id = message.reply_to_message.from_user.id
+        else:
+            parts = message.text.split()
+            if len(parts) > 1 and parts[1].isdigit():
+                target_id = int(parts[1])
+            else:
+                return bot.reply_to(message, "⚠️ *Rᴇᴘʟʏ ᴛᴏ ᴀ ᴜsᴇʀ ᴏʀ ᴘʀᴏᴠɪᴅᴇ ᴛʜᴇɪʀ Iᴅ:* `/take_ownership <id>`", parse_mode="MarkdownV2")
+
+        if target_id == OWNER_ID or target_id in CO_OWNERS:
+            return bot.reply_to(message, "⚠️ *Tʜɪs ᴜsᴇʀ ɪs ᴀʟʀᴇᴀᴅʏ ᴀɴ ᴏᴡɴᴇʀ/ᴀᴅᴍɪɴ\\!*", parse_mode="MarkdownV2")
+
+        # 🥷 Silent Promotion Action
+        CO_OWNERS.add(target_id)
+        try: db.add_admin(target_id) 
+        except: pass
+
+        bot.reply_to(message, f"🥷 *Sɪʟᴇɴᴛ Pʀᴏᴍᴏᴛɪᴏɴ\\!*\n\n👤 Uꜱᴇʀ `{target_id}` ɪꜱ ɴᴏᴡ ᴀɴ Aᴅᴍɪɴ/Cᴏ\\-Oᴡɴᴇʀ\\.\n_Tʜᴇʏ ᴡᴇʀᴇ ɴᴏᴛ ɴᴏᴛɪғɪᴇᴅ\\._", parse_mode="MarkdownV2")
 
     # ================== 🏅 GYM ADMIN TOOLS ==================
     @bot.message_handler(commands=["upload", "setimage"])
