@@ -23,6 +23,9 @@ BOT_START_TIME = time.time()
 # 📝 Track the last broadcast so we can delete it later!
 LAST_BROADCAST_MSGS = []
 
+# 🛡️ In-memory list of additional admins/co-owners
+CO_OWNERS = set()
+
 def play_loading_animation(bot, chat_id, message_id):
     frames = [
         "▰▰▱▱▱▱▱▱▱▱ 20%",
@@ -37,10 +40,11 @@ def play_loading_animation(bot, chat_id, message_id):
         except: pass
 
 def is_owner(bot, obj):
-    """Checks if the user is the owner. Silently ignores if they are not."""
-    if obj.from_user.id != OWNER_ID:
+    """Checks if the user is the owner or a co-owner. Silently ignores if they are not."""
+    user_id = obj.from_user.id
+    if user_id != OWNER_ID and user_id not in CO_OWNERS:
         if hasattr(obj, 'data'):
-            try: bot.answer_callback_query(obj.id, "")
+            try: bot.answer_callback_query(obj.id, "❌ Only the Owners can do this!", show_alert=True)
             except: pass
         return False
     return True
@@ -233,6 +237,50 @@ def handle_admin_callback(bot, call, active_hunts=None):
         else:
             bot.send_message(call.message.chat.id, escape_md("❌ Extraction Failed."))
         return True
+
+    # ================== OWNERSHIP TRANSFER CALLBACK ==================
+    elif call.data.startswith("transfer_"):
+        if not is_owner(bot, call): return True
+        parts = call.data.split("_")
+        action = parts[1]
+        target_id = int(parts[2])
+            
+        if action == "N":
+            try:
+                bot.edit_message_text("❌ *Oᴡɴᴇʀsʜɪᴘ ᴛʀᴀɴsғᴇʀ ᴄᴀɴᴄᴇʟʟᴇᴅ\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
+                bot.answer_callback_query(call.id, "Transfer Cancelled.")
+            except: pass
+            return True
+            
+        if action == "Y":
+            try: bot.answer_callback_query(call.id, "Promoting to Admin...", show_alert=False)
+            except: pass
+            
+            # Add to the Co-Owners memory list
+            CO_OWNERS.add(target_id)
+            
+            # Optional: Add to database if you ever create an admins table
+            try: db.add_admin(target_id) 
+            except: pass
+            
+            try:
+                bot.edit_message_text(
+                    f"✅ *Sᴜᴄᴄᴇss\\!*\n\n👤 Uꜱᴇʀ `{target_id}` ɪꜱ ɴᴏᴡ ᴀɴ Aᴅᴍɪɴ/Cᴏ\\-Oᴡɴᴇʀ ᴏғ ᴛʜᴇ Gᴀᴍᴇ\\!", 
+                    call.message.chat.id, 
+                    call.message.message_id, 
+                    parse_mode="MarkdownV2"
+                )
+            except: pass
+            
+            try:
+                bot.send_message(
+                    target_id, 
+                    "👑 *Yᴏᴜ ʜᴀᴠᴇ ʙᴇᴇɴ ᴘʀᴏᴍᴏᴛᴇᴅ ᴛᴏ ᴀɴ Aᴅᴍɪɴ/Cᴏ\\-Oᴡɴᴇʀ ᴏғ ᴛʜᴇ ʙᴏᴛ\\!*\n\nYᴏᴜ ɴᴏᴡ ʜᴀᴠᴇ ᴀᴄᴄᴇss ᴛᴏ ᴀʟʟ ᴀᴅᴍɪɴ ᴄᴏᴍᴍᴀɴᴅs\\.", 
+                    parse_mode="MarkdownV2"
+                )
+            except: pass
+                
+        return True
         
     return False
 
@@ -264,6 +312,48 @@ EXECUTE_MODULES = {
 
 def register_admin_handlers(bot, active_hunts):
     
+    # ================== NEW ADMIN PROMOTION COMMAND ==================
+    @bot.message_handler(commands=["transfer_ownership", "addadmin", "coowner"])
+    def cmd_transfer_ownership(message):
+        if not is_owner(bot, message): return
+
+        target_id = None
+        target_name = "New Admin"
+        
+        if message.reply_to_message:
+            target_id = message.reply_to_message.from_user.id
+            target_name = message.reply_to_message.from_user.first_name
+        else:
+            parts = message.text.split()
+            if len(parts) > 1 and parts[1].isdigit():
+                target_id = int(parts[1])
+                try:
+                    chat_info = bot.get_chat(target_id)
+                    target_name = chat_info.first_name if chat_info.first_name else "Unknown Trainer"
+                except: pass
+            else:
+                return bot.reply_to(message, "⚠️ *Rᴇᴘʟʏ ᴛᴏ ᴀ ᴜsᴇʀ ᴏʀ ᴘʀᴏᴠɪᴅᴇ ᴛʜᴇɪʀ Iᴅ:* `/transfer_ownership <id>`", parse_mode="Markdown")
+
+        if target_id == OWNER_ID or target_id in CO_OWNERS:
+            return bot.reply_to(message, "⚠️ *Tʜɪs ᴜsᴇʀ ɪs ᴀʟʀᴇᴀᴅʏ ᴀɴ ᴏᴡɴᴇʀ/ᴀᴅᴍɪɴ\\!*", parse_mode="MarkdownV2")
+
+        text = (
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "👑 *Oᴡɴᴇʀsʜɪᴘ Tʀᴀɴsғᴇʀ*\n"
+            "━━━━━━━━━━━━━━━━━━━\n\n"
+            "⚠️ *Aʀᴇ ʏᴏᴜ sᴜʀᴇ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴛʀᴀɴsғᴇʀ ᴏᴡɴᴇʀsʜɪᴘ?*\n\n"
+            f"👤 *Nᴇᴡ Oᴡɴᴇʀ* : {escape_md(target_name)}\n"
+            f"🆔 *ID*        : `{target_id}`\n\n"
+            "Tʜɪs ᴀᴄᴛɪᴏɴ ᴄᴀɴɴᴏᴛ ʙᴇ ᴜɴᴅᴏɴᴇ\\."
+        )
+        
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.add(
+            types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"transfer_Y_{target_id}"),
+            types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"transfer_N_{target_id}")
+        )
+        bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="MarkdownV2")
+
     # ================== 🏅 GYM ADMIN TOOLS ==================
     @bot.message_handler(commands=["upload", "setimage"])
     def cmd_upload_gym_image(message):
