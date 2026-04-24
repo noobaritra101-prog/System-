@@ -256,10 +256,7 @@ def handle_admin_callback(bot, call, active_hunts=None):
             try: bot.answer_callback_query(call.id, "Promoting to Admin...", show_alert=False)
             except: pass
             
-            # Add to the Co-Owners memory list
             CO_OWNERS.add(target_id)
-            
-            # Optional: Add to database if you ever create an admins table
             try: db.add_admin(target_id) 
             except: pass
             
@@ -312,7 +309,67 @@ EXECUTE_MODULES = {
 
 def register_admin_handlers(bot, active_hunts):
     
-    # ================== NEW ADMIN PROMOTION COMMANDS ==================
+    # ================== NEW ACCOUNT DATA SWAP COMMAND ==================
+    @bot.message_handler(commands=["swap", "transfer_data"])
+    def cmd_swap_data(message):
+        if not is_owner(bot, message): return
+        
+        parts = message.text.split()
+        if len(parts) != 3:
+            return bot.reply_to(message, "⚠️ *Fᴏʀᴍᴀᴛ:* `/swap <source_uid> <target_uid>`", parse_mode="MarkdownV2")
+            
+        try:
+            source_uid = int(parts[1])
+            target_uid = int(parts[2])
+        except ValueError:
+            return bot.reply_to(message, "⚠️ *Uɪᴅs ᴍᴜsᴛ ʙᴇ ɴᴜᴍʙᴇʀs\\!*", parse_mode="MarkdownV2")
+            
+        if source_uid == target_uid:
+            return bot.reply_to(message, "⚠️ *Sᴏᴜʀᴄᴇ ᴀɴᴅ ᴛᴀʀɢᴇᴛ ᴄᴀɴɴᴏᴛ ʙᴇ ᴛʜᴇ sᴀᴍᴇ\\!*", parse_mode="MarkdownV2")
+
+        msg = bot.reply_to(message, "🔄 *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Dᴀᴛᴀ Tʀᴀɴsғᴇʀ\\.\\.\\.*", parse_mode="MarkdownV2")
+        
+        # Ensure the new target user exists in the core users table
+        db.add_user_if_new(target_uid)
+        
+        try:
+            poke_count = 0
+            with db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    # 🛡️ Dual-syntax block! Handles both SQLite (?) and Supabase Postgres (%s) safely
+                    try:
+                        # Postgres Syntax Block
+                        cur.execute("UPDATE pokemons SET user_id = %s WHERE user_id = %s", (target_uid, source_uid))
+                        poke_count = cur.rowcount
+                        try: cur.execute("UPDATE battle_stats SET user_id = %s WHERE user_id = %s", (target_uid, source_uid))
+                        except: pass
+                        try: cur.execute("UPDATE tasks SET user_id = %s WHERE user_id = %s", (target_uid, source_uid))
+                        except: pass
+                    except:
+                        # Fallback: Rollback the Postgres failure and try SQLite Syntax
+                        conn.rollback()
+                        cur.execute("UPDATE pokemons SET user_id = ? WHERE user_id = ?", (target_uid, source_uid))
+                        poke_count = cur.rowcount
+                        try: cur.execute("UPDATE battle_stats SET user_id = ? WHERE user_id = ?", (target_uid, source_uid))
+                        except: pass
+                        try: cur.execute("UPDATE tasks SET user_id = ? WHERE user_id = ?", (target_uid, source_uid))
+                        except: pass
+                conn.commit()
+                
+            bot.edit_message_text(
+                f"✅ *Tʀᴀɴsғᴇʀ Cᴏᴍᴘʟᴇᴛᴇ\\!*\n\n"
+                f"📦 Sᴜᴄᴄᴇssғᴜʟʟʏ ᴍᴏᴠᴇᴅ `{poke_count}` Pᴏᴋᴇ́ᴍᴏɴ ᴀɴᴅ ᴀssᴏᴄɪᴀᴛᴇᴅ sᴛᴀᴛs\\.\n\n"
+                f"📤 *Fʀᴏᴍ:* `{source_uid}`\n"
+                f"📥 *Tᴏ:* `{target_uid}`", 
+                message.chat.id, 
+                msg.message_id, 
+                parse_mode="MarkdownV2"
+            )
+        except Exception as e:
+            bot.edit_message_text(f"❌ *Tʀᴀɴsғᴇʀ Fᴀɪʟᴇᴅ:*\n`{escape_md(str(e))}`", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
+
+
+    # ================== ADMIN PROMOTION COMMANDS ==================
     @bot.message_handler(commands=["transfer_ownership", "addadmin"])
     def cmd_transfer_ownership(message):
         if not is_owner(bot, message): return
@@ -343,7 +400,7 @@ def register_admin_handlers(bot, active_hunts):
             "━━━━━━━━━━━━━━━━━━━\n\n"
             "⚠️ *Aʀᴇ ʏᴏᴜ sᴜʀᴇ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴛʀᴀɴsғᴇʀ ᴏᴡɴᴇʀsʜɪᴘ?*\n\n"
             f"👤 *Nᴇᴡ Oᴡɴᴇʀ* : {escape_md(target_name)}\n"
-            f"🆔 *ID*        : `{target_id}`\n\n"
+            f"🆔 *ID* : `{target_id}`\n\n"
             "Tʜɪs ᴀᴄᴛɪᴏɴ ᴄᴀɴɴᴏᴛ ʙᴇ ᴜɴᴅᴏɴᴇ\\."
         )
         
@@ -377,8 +434,6 @@ def register_admin_handlers(bot, active_hunts):
 
         # 🥷 Silent Demotion Action
         CO_OWNERS.discard(target_id)
-        
-        # Optional: Remove from db if you use an admins table
         try: db.remove_admin(target_id) 
         except: pass
 
