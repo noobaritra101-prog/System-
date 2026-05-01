@@ -23,9 +23,10 @@ TYPE_EMOJIS = {
     'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
 }
 
+# ⚡ UPDATED FORMAT: Status effects rearranged to [PSN ☠️]
 STATUS_EMOJIS = {
-    "BRN": "🔥 BRN", "PAR": "⚡ PAR", "PSN": "☠️ PSN", 
-    "FRZ": "🧊 FRZ", "SLP": "💤 SLP"
+    "BRN": "BRN 🔥", "PAR": "PAR ⚡", "PSN": "PSN ☠️", 
+    "FRZ": "FRZ 🧊", "SLP": "SLP 💤"
 }
 
 TYPE_CHART = {
@@ -167,7 +168,6 @@ def is_in_pending_challenge(user_id):
         if chal["p1_id"] == user_id or chal["p2_id"] == user_id: return True
     return False
 
-# ⚡ UPDATED: Changed from length 14 to length 10 with new characters █ and ▒
 def get_hp_bar(current, maximum, length=10):
     if maximum <= 0: return "▒" * length
     filled = int(round((current / maximum) * length))
@@ -280,15 +280,16 @@ def render_pvp_ui(bot, chat_id, battle_id):
     act_mention = f"[{escape_md(active_name)}](tg://user?id={act_id})"
     def_mention = f"[{escape_md(def_name)}](tg://user?id={def_id})"
     
-    log_content = f"*{escape_md(b['log'].strip())}*" if b['log'] else "*Tʜᴇ ʙᴀᴛᴛʟᴇ ʙᴇɢɪɴs\\!*"
+    # ⚡ UPDATED FORMAT: Removed the BOLD Markdown `*` wrapping around the entire battle log.
+    log_content = f"{escape_md(b['log'].strip())}" if b['log'] else "Tʜᴇ ʙᴀᴛᴛʟᴇ ʙᴇɢɪɴs\\!"
     
-    act_status = f" \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
-    def_status = f" \\[{STATUS_EMOJIS.get(def_poke['status'], '')}\\]" if def_poke.get('status') else ""
+    # ⚡ UPDATED FORMAT: Safely wrap status brackets so escape_md prints them out correctly as [PSN ☠️]
+    act_status = f"\n \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
+    def_status = f"\n \\[{STATUS_EMOJIS.get(def_poke['status'], '')}\\]" if def_poke.get('status') else ""
     
     act_mega = get_form_icon(active_poke['name'], active_poke.get("is_mega"))
     def_mega = get_form_icon(def_poke['name'], def_poke.get("is_mega"))
 
-    # ⚡ UPDATED FORMAT: Clean layout with ⤷ indentations
     ui_text = (
         f"{log_content}\n\n"
         f"*{def_mention}'s {escape_md(def_poke['name'])}{def_mega}*\n"
@@ -315,7 +316,6 @@ def render_pvp_ui(bot, chat_id, battle_id):
             m_pow = m.get('power', 0)
             m_acc = m.get('acc', 100)
             
-            # ⚡ UPDATED FORMAT: Clean layout for moves
             moves_block += f" *{m_name} \\[{m_type_display}\\]*\n  ⤷ Power: {m_pow}, Accuracy: {m_acc}\n"
             move_buttons.append(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
             
@@ -719,7 +719,7 @@ def handle_pvp_callback(bot, call):
                     if mv_acc is None: mv_acc = 100
                     
                     if random.randint(1, 100) > mv_acc:
-                        b["log"] += f"{atk['name']}'s {mv['name']} missed!\n"
+                        b["log"] += f"{atk['name']} used {mv['name']}! It missed!\n"
                     else:
                         mult = get_type_multiplier(mv["type"], dfn["types"])
                         if mult == 0:
@@ -743,13 +743,13 @@ def handle_pvp_callback(bot, call):
                                 dmg = max(1, int(base_damage * mult * stab * crit * rand_roll))
                                 dfn["hp"] = max(0, dfn["hp"] - dmg)
                                 
-                                # ⚡ UPDATED FORMAT: Explicit attack log style
-                                b["log"] += f"*{atk['name']} used {mv['name']}! It dealt {dmg} damage!*\n"
+                                # ⚡ UPDATED FORMAT: Stripped the Bold Markdown from the attack log
+                                b["log"] += f"{atk['name']} used {mv['name']}! It dealt {dmg} damage!\n"
                                 if crit > 1: b["log"] += "A critical hit!\n"
                                 if mult > 1: b["log"] += "It's super effective!\n"
                                 elif mult < 1: b["log"] += "It's not very effective...\n"
                             else:
-                                b["log"] += f"*{atk['name']} used {mv['name']}!*\n"
+                                b["log"] += f"{atk['name']} used {mv['name']}!\n"
                             
                             if not dfn.get("status") and mv.get("status_chance", 0) > 0 and dfn["hp"] > 0:
                                 if random.randint(1, 100) <= mv["status_chance"]:
@@ -776,7 +776,7 @@ def handle_pvp_callback(bot, call):
                         win_mention = f"[{escape_md(winner_name)}](tg://user?id={b[actual_turn+'_id']})"
                         loser_mention = f"[{escape_md(loser_name)}](tg://user?id={b[defender+'_id']})"
                         
-                        safe_edit(bot, f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {loser_mention} ɪɴ ᴛʜᴇ ʙᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id)
+                        safe_edit(bot, f"{escape_md(b['log'].strip())}\n\n🏆 *{win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {loser_mention} ɪɴ ᴛʜᴇ ʙᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id)
                         
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 【Rᴇsᴜʟᴛ】 {win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {loser_mention}", parse_mode="MarkdownV2")
@@ -805,7 +805,7 @@ def handle_pvp_callback(bot, call):
                         win_mention = f"[{escape_md(winner_name)}](tg://user?id={b[defender+'_id']})"
                         loser_mention = f"[{escape_md(loser_name)}](tg://user?id={b[actual_turn+'_id']})"
                         
-                        safe_edit(bot, f"*{escape_md(b['log'].strip())}*\n\n🏆 *{win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {loser_mention} ɪɴ ᴛʜᴇ ʙᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id)
+                        safe_edit(bot, f"{escape_md(b['log'].strip())}\n\n🏆 *{win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {loser_mention} ɪɴ ᴛʜᴇ ʙᴀᴛᴛʟᴇ\\!*", call.message.chat.id, battle_id)
                         
                         if LOG_GROUP_ID:
                             try: bot.send_message(LOG_GROUP_ID, f"🏆 【Rᴇsᴜʟᴛ】 {win_mention} ᴅᴇғᴇᴀᴛᴇᴅ {loser_mention}", parse_mode="MarkdownV2")
