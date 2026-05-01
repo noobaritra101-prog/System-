@@ -167,11 +167,12 @@ def is_in_pending_challenge(user_id):
         if chal["p1_id"] == user_id or chal["p2_id"] == user_id: return True
     return False
 
-def get_hp_bar(current, maximum, length=14):
-    if maximum <= 0: return "░" * length
+# ⚡ UPDATED: Changed from length 14 to length 10 with new characters █ and ▒
+def get_hp_bar(current, maximum, length=10):
+    if maximum <= 0: return "▒" * length
     filled = int(round((current / maximum) * length))
     if current > 0 and filled == 0: filled = 1
-    return escape_md("█" * filled + "░" * (length - filled))
+    return escape_md("█" * filled + "▒" * (length - filled))
 
 def format_types(types_str):
     types_list = types_str.split('/')
@@ -287,15 +288,17 @@ def render_pvp_ui(bot, chat_id, battle_id):
     act_mega = get_form_icon(active_poke['name'], active_poke.get("is_mega"))
     def_mega = get_form_icon(def_poke['name'], def_poke.get("is_mega"))
 
+    # ⚡ UPDATED FORMAT: Clean layout with ⤷ indentations
     ui_text = (
         f"{log_content}\n\n"
         f"*{def_mention}'s {escape_md(def_poke['name'])}{def_mega}*\n"
-        f" *\\[{escape_md(format_types(def_poke['types']))}\\] Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}\n"
-        f"`{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}`{escape_md(def_status)}*\n\n"
+        f" \\[{escape_md(format_types(def_poke['types']))}\\]\n"
+        f"  ⤷ Lv\\. 100  •  HP {int(def_poke['hp'])}/{int(def_poke['max_hp'])}\n"
+        f"`{get_hp_bar(def_poke['hp'], def_poke['max_hp'])}`{escape_md(def_status)}\n\n"
         f"Current turn: {act_mention}\n"
         f"*{act_mention}'s {escape_md(active_poke['name'])}{act_mega} \\[{escape_md(format_types(active_poke['types']))}\\]*\n"
-        f"*Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}\n"
-        f"`{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}`{escape_md(act_status)}*\n\n"
+        f"  ⤷ Lv\\. 100  •  HP {int(active_poke['hp'])}/{int(active_poke['max_hp'])}\n"
+        f"`{get_hp_bar(active_poke['hp'], active_poke['max_hp'])}`{escape_md(act_status)}\n\n"
     )
 
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -312,7 +315,8 @@ def render_pvp_ui(bot, chat_id, battle_id):
             m_pow = m.get('power', 0)
             m_acc = m.get('acc', 100)
             
-            moves_block += f" *{m_name} \\[{m_type_display}\\]*\n *Power: {m_pow}, Accuracy: {m_acc}*\n"
+            # ⚡ UPDATED FORMAT: Clean layout for moves
+            moves_block += f" *{m_name} \\[{m_type_display}\\]*\n  ⤷ Power: {m_pow}, Accuracy: {m_acc}\n"
             move_buttons.append(types.InlineKeyboardButton(f"{m['name']}", callback_data=f"pvp_move_{battle_id}_{turn}_{i}"))
             
         ui_text += moves_block
@@ -739,12 +743,13 @@ def handle_pvp_callback(bot, call):
                                 dmg = max(1, int(base_damage * mult * stab * crit * rand_roll))
                                 dfn["hp"] = max(0, dfn["hp"] - dmg)
                                 
-                                b["log"] += f"{atk['name']} used {mv['name']}! ({dmg} DMG)\n"
+                                # ⚡ UPDATED FORMAT: Explicit attack log style
+                                b["log"] += f"*{atk['name']} used {mv['name']}! It dealt {dmg} damage!*\n"
                                 if crit > 1: b["log"] += "A critical hit!\n"
                                 if mult > 1: b["log"] += "It's super effective!\n"
                                 elif mult < 1: b["log"] += "It's not very effective...\n"
                             else:
-                                b["log"] += f"{atk['name']} used {mv['name']}!\n"
+                                b["log"] += f"*{atk['name']} used {mv['name']}!*\n"
                             
                             if not dfn.get("status") and mv.get("status_chance", 0) > 0 and dfn["hp"] > 0:
                                 if random.randint(1, 100) <= mv["status_chance"]:
