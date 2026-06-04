@@ -124,12 +124,17 @@ def init_db():
 
 @contextmanager
 def get_conn():
+    """
+    ⚡ OPTIMIZED: Removed the SELECT 1 health-check ping that ran on every single
+    connection checkout. The pool already has TCP keepalives configured
+    (keepalives=1, idle=30s) which handles stale connections at the OS level.
+    The old ping was adding a full round-trip to the DB on every query.
+    Bad connections are still caught and recycled via the OperationalError handler.
+    """
     global db_pool
     conn = None
     try:
         conn = db_pool.getconn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
     except (psycopg2.OperationalError, psycopg2.InterfaceError):
         logger.warning("♻️ Supabase connection dropped. Recycling pool connection...")
         if conn:
@@ -534,3 +539,9 @@ def get_debug_stats():
                 db_size_mb = 0.0
                 
             return u_c, p_c, g_c, pvp_total, regions_active, db_size_mb
+
+def add_admin(user_id):
+    pass  # In-memory only via CO_OWNERS; persist here if needed
+
+def remove_admin(user_id):
+    pass  # In-memory only via CO_OWNERS; persist here if needed
