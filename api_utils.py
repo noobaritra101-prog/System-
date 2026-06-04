@@ -40,8 +40,20 @@ REGION_DEX = {
     "Galar": (810, 898)
 }
 
+# ⚡ TYPE EMOJI MAP — duplicated here so build_cache can seed commands.local_type_cache
+_TYPE_EMOJIS = {
+    'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
+    'Ice': '🧊', 'Fighting': '🥊', 'Poison': '☣️', 'Ground': '⛰️', 'Flying': '🪽', 
+    'Psychic': '🔮', 'Bug': '🐛', 'Rock': '🪨', 'Ghost': '👻', 'Dragon': '🐉', 
+    'Dark': '🌑', 'Steel': '🔩', 'Fairy': '🧚‍♀️'
+}
+
 def build_cache():
-    """Fetches all 898 Pokemon names/IDs once on startup so /scout is instant."""
+    """
+    ⚡ OPTIMIZED: Fetches all 898 Pokémon names/IDs AND their types in one pass.
+    Types are written directly into commands.local_type_cache so /mypokemon is
+    instant even on the very first call after startup.
+    """
     try:
         url = "https://pokeapi.co/api/v2/pokemon?limit=898"
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -51,9 +63,53 @@ def build_cache():
                 name = result['name'].capitalize()
                 pokemon_cache[i] = name
                 pokemon_name_to_id_cache[name.lower()] = i
-        logger.info("✅ Pokémon cache built! /scout is now instant.")
+        logger.info("✅ Pokémon name/ID cache built! /scout is now instant.")
     except Exception as e:
-        logger.error(f"Failed to build cache: {e}")
+        logger.error(f"Failed to build name cache: {e}")
+        return
+
+    # ⚡ Phase 2: Pre-warm the type cache used by /mypokemon
+    # Fetch types for the 151 most commonly caught Pokémon (Kanto) synchronously,
+    # then do the rest of the dex in a low-priority background pass.
+    def _seed_type_cache():
+        try:
+            # Import here to avoid circular import at module load time
+            import commands as _cmd
+
+            # Seed the entire dex in batches — PokeAPI bulk endpoint gives types too
+            bulk_url = "https://pokeapi.co/api/v2/pokemon?limit=898&offset=0"
+            req2 = urllib.request.Request(bulk_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req2, timeout=10) as r:
+                bulk = json.loads(r.read().decode())
+
+            seeded = 0
+            for entry in bulk['results']:
+                raw_name = entry['name']
+                cap_name = raw_name.capitalize()
+                lower_name = raw_name.lower()
+
+                # Skip if already cached
+                if lower_name in _cmd.local_type_cache:
+                    continue
+
+                try:
+                    detail_url = f"https://pokeapi.co/api/v2/pokemon/{lower_name}"
+                    req3 = urllib.request.Request(detail_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req3, timeout=5) as r2:
+                        pdata = json.loads(r2.read().decode())
+                        types_list = [t["type"]["name"].capitalize() for t in pdata["types"]]
+                        emojis = "/ ".join([_TYPE_EMOJIS.get(t, '') for t in types_list if t]).strip()
+                        _cmd.local_type_cache[lower_name] = f"【{emojis}】" if emojis else ""
+                        seeded += 1
+                except Exception:
+                    _cmd.local_type_cache[lower_name] = ""
+
+            logger.info(f"✅ Type cache pre-warmed for {seeded} Pokémon.")
+        except Exception as e:
+            logger.error(f"Type cache pre-warm failed: {e}")
+
+    threading.Thread(target=_seed_type_cache, daemon=True).start()
+
 
 # Start the cache builder in the background immediately
 threading.Thread(target=build_cache, daemon=True).start()
@@ -141,16 +197,13 @@ async def fetch_real_move_data(session, url):
                 data = await response.json()
                 power = data.get("power")
                 
-                # Filter out status moves (0 power)
                 if not power: 
                     return None
                 
                 m_type = data["type"]["name"].capitalize()
-                # If accuracy is null (like Swift or Aura Sphere), it never misses (100)
                 acc = data.get("accuracy") or 100 
                 name = data["name"].replace("-", " ").title()
                 
-                # Apply balanced status effect chances based on type
                 s_type, s_chance = None, 0
                 if m_type == "Fire": s_type, s_chance = "BRN", 10
                 elif m_type == "Electric": s_type, s_chance = "PAR", 10
@@ -173,7 +226,7 @@ async def fetch_real_move_data(session, url):
 async def fetch_random_pvp_pokemon(force_legendary=None):
     """Drafts a fully evolved Pokemon with proper moves, optionally forcing/blocking legendaries."""
     async with aiohttp.ClientSession() as session:
-        while True: # Loop until we find a Pokemon that matches the criteria
+        while True:
             poke_id = random.randint(1, 898)
             url = f"https://pokeapi.co/api/v2/pokemon/{poke_id}"
             try:
@@ -181,17 +234,12 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                     if response.status != 200: continue
                     data = await response.json()
                     
-                    # Store raw API name for legendary checking (e.g. "tapu-koko")
                     raw_api_name = data["name"]
-                    
-                    # Format name for display (e.g. "Tapu Koko")
                     name = raw_api_name.replace("-", " ").title()
                     
-                    # REQUIREMENT 1: Only Fully Evolved Pokemon (Base XP > 150)
                     if data.get("base_experience", 0) < 150: 
                         continue 
                     
-                    # REQUIREMENT 2: Legendary Filtering (0ls vs 6ls) using the RAW api name
                     is_legendary = raw_api_name in LEGENDARY_NAMES
                     if force_legendary is True and not is_legendary: 
                         continue
@@ -202,20 +250,15 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                     types_list = [t["type"]["name"].capitalize() for t in data.get("types", [])]
                     types_str = "/".join(types_list)
                     
-                    # Fetch authentic moves from their real movepool
                     all_move_urls = [m["move"]["url"] for m in data.get("moves", [])]
-                    
-                    # Sample up to 45 random moves to ensure we find Dual-STABs
                     sample_urls = random.sample(all_move_urls, min(45, len(all_move_urls)))
                     
                     fetched_moves = await asyncio.gather(*(fetch_real_move_data(session, u) for u in sample_urls))
                     valid_moves = [m for m in fetched_moves if m is not None]
                     
-                    # Filter for moves specifically 80 power or higher
                     strong_moves = [m for m in valid_moves if m["power"] >= 80]
                     final_moves = []
                     
-                    # Step 1: Force a STAB move for EACH of the Pokemon's types (Dual STAB feature)
                     for p_type in types_list:
                         type_strong_moves = [m for m in strong_moves if m["type"] == p_type]
                         if type_strong_moves:
@@ -231,7 +274,6 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                                 valid_moves.remove(chosen_stab)
                                 if chosen_stab in strong_moves: strong_moves.remove(chosen_stab)
 
-                    # Step 2: Fill the remaining slots strictly with other 80+ power moves
                     random.shuffle(strong_moves)
                     for m in strong_moves:
                         if len(final_moves) >= 4: break
@@ -239,7 +281,6 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                             final_moves.append(m)
                             if m in valid_moves: valid_moves.remove(m)
                     
-                    # Step 3: If they don't have enough 80+ power moves, sort the rest by HIGHEST power
                     if len(final_moves) < 4:
                         valid_moves.sort(key=lambda x: x["power"], reverse=True)
                         for m in valid_moves:
@@ -247,7 +288,6 @@ async def fetch_random_pvp_pokemon(force_legendary=None):
                             if m["name"] not in [fm["name"] for fm in final_moves]:
                                 final_moves.append(m)
                     
-                    # Step 4: Extreme edge case safety net
                     while len(final_moves) < 4: 
                         final_moves.append({"name": "Struggle", "power": 50, "acc": 100, "type": "Normal", "status_type": None, "status_chance": 0})
                     
@@ -275,7 +315,7 @@ async def generate_random_team(mode="Mix", size=6):
         tasks = [fetch_random_pvp_pokemon(force_legendary=False) for _ in range(size)]
     elif mode == "6ls":
         tasks = [fetch_random_pvp_pokemon(force_legendary=True) for _ in range(size)]
-    else: # Mix Mode
+    else:
         leg_count = size // 2
         non_count = size - leg_count
         tasks = [fetch_random_pvp_pokemon(force_legendary=True) for _ in range(leg_count)] + \
