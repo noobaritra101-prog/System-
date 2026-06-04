@@ -30,17 +30,19 @@ local_type_cache = {}
 # ⚡ SMART RAM CACHE FOR INSTANT IMAGES ⚡
 IMAGE_CACHE = {}
 
+# ⚡ PERSISTENT THREAD POOL — reused across all calls, never re-created ⚡
+_TYPE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+
 def get_cached_image_payload(poke_id, img_url):
     """Fetches image from RAM instantly, or downloads it once and caches it forever."""
     if poke_id in IMAGE_CACHE:
         return io.BytesIO(IMAGE_CACHE[poke_id])
     try:
-        # Fast timeout so it never hangs the bot if the network blips
         img_data = requests.get(img_url, timeout=1.5).content
         IMAGE_CACHE[poke_id] = img_data
         return io.BytesIO(img_data)
     except:
-        return img_url # Safe fallback to standard URL if download fails
+        return img_url
 
 def clean_name(name):
     if not name: return "Trainer"
@@ -92,8 +94,10 @@ def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
 
 # ================== NEW INVENTORY UI GENERATOR ==================
 def get_cached_type_str(poke_name):
+    """Returns cached type string — hits local_type_cache first, never blocks."""
     lower_name = poke_name.lower()
-    if lower_name in local_type_cache: return local_type_cache[lower_name]
+    if lower_name in local_type_cache:
+        return local_type_cache[lower_name]
     try:
         types_list, _ = get_pokemon_stats_sync(lower_name)
         if types_list:
@@ -102,6 +106,8 @@ def get_cached_type_str(poke_name):
                 local_type_cache[lower_name] = f"【{emojis}】"
                 return local_type_cache[lower_name]
     except: pass
+    # Cache empty string so we never retry a failed lookup
+    local_type_cache[lower_name] = ""
     return ""
 
 def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
@@ -122,8 +128,8 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
 
     page_names = pages[page_idx]
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        type_strings = list(executor.map(get_cached_type_str, page_names))
+    # ⚡ Reuse persistent executor — no spawn overhead per call
+    type_strings = list(_TYPE_EXECUTOR.map(get_cached_type_str, page_names))
 
     for i, name in enumerate(page_names):
         item_num = (page_idx * page_size) + i + 1
@@ -199,7 +205,8 @@ def process_catch(bot, call, uid, pid, name):
     try:
         try: bot.edit_message_caption(caption="🔴 *Yᴏᴜ ᴛʜʀᴇᴡ ᴀ Pᴏᴋᴇ́ʙᴀʟʟ\\!*", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
         except: pass
-        time.sleep(0.7) 
+
+        # ⚡ REMOVED hardcoded sleep(0.7) — was adding 700ms latency to every single catch
         
         catch_rate = get_species_catch_rate_sync(pid)
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
@@ -402,7 +409,6 @@ def register_user_handlers(bot, active_hunts):
             text = get_dex_text(name, "info")
             img_url = official_shiny_artwork_url(poke_id)
             
-            # ⚡ Use RAM Cache to make Pokedex instant too!
             photo_payload = get_cached_image_payload(poke_id, img_url)
             
             kb = types.InlineKeyboardMarkup(row_width=2).add(types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"), types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}"))
@@ -434,7 +440,6 @@ def register_user_handlers(bot, active_hunts):
                 
             poke_id = get_pokemon_id_sync(name)
             if poke_id:
-                # ⚡ Use RAM Cache to make Inspect instant too!
                 photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
                 try: bot.send_photo(message.chat.id, photo_payload, caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
                 except: pass
@@ -506,7 +511,7 @@ def register_user_handlers(bot, active_hunts):
             bot.send_message(user_id, team_text, parse_mode="MarkdownV2")
             if message.chat.type != "private":
                 kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Cʜᴇᴄᴋ DMs ❗❗", url=f"https://t.me/{bot.get_me().username}"))
-                safe_send(bot, message.chat.id, "📩 *I’ᴠᴇ Sᴇɴᴛ Yᴏᴜʀ Tᴇᴀᴍ Sᴛʀᴀᴛᴇɢʏ Tᴏ Yᴏᴜʀ DMs\\!*", reply_to_id=message.message_id, reply_markup=kb)
+                safe_send(bot, message.chat.id, "📩 *I'ᴠᴇ Sᴇɴᴛ Yᴏᴜʀ Tᴇᴀᴍ Sᴛʀᴀᴛᴇɢʏ Tᴏ Yᴏᴜʀ DMs\\!*", reply_to_id=message.message_id, reply_markup=kb)
         except: safe_send(bot, message.chat.id, escape_md("⚠️ Please send me a private message first!"))
 
     @bot.message_handler(commands=["flex", "top", "leaderboard"])
