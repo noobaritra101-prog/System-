@@ -33,7 +33,11 @@ MEGA_POKEMON = [
     (652, "Chesnaught-Mega", 652), (655, "Delphox-Mega", 655), (658, "Greninja-Mega", 658), (687, "Malamar-Mega", 687), 
     (689, "Barbaracle-Mega", 689), (701, "Hawlucha-Mega", 701), (718, "Zygarde-Mega", 718), (719, "Diancie-Mega", 719),
     (768, "Golisopod-Mega", 768), (780, "Drampa-Mega", 780), (801, "Magearna-Mega", 801), (807, "Zeraora-Mega", 807),
-    (870, "Falinks-Mega", 870)
+    (870, "Falinks-Mega", 870), (36, "Clefable-Mega", 36),
+(478, "Froslass-Mega", 478),
+(668, "Pyroar-Mega", 668),
+(670, "Floette-Eternal-Mega", 670),
+(691, "Dragalge-Mega", 691),
 ]
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
