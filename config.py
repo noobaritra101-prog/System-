@@ -7,8 +7,8 @@ OWNER_ID = 5716292610
 LOG_GROUP_ID = -1002790195961
 FLEE_TIMEOUT = 120
 
-# POSTGRESQL URL
-DATABASE_URL = "postgresql://postgres.cywehetfjxedufhpktfz:ncXUOSyHOdgyenTb@aws-1-ap-northeast-1.pooler.supabase.com:6543/postgres"
+# JSON DATABASE FILE
+DATA_FILE = "data.json"
 
 REGIONS = ["Kanto", "Johto", "Hoenn", "Sinnoh", "Unova", "Kalos", "Alola", "Galar"]
 
