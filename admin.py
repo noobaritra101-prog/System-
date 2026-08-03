@@ -26,6 +26,17 @@ LAST_BROADCAST_MSGS = []
 # 🛡️ In-memory list of additional admins/co-owners
 CO_OWNERS = set()
 
+def escape_code(text):
+    """
+    Escape text meant to go INSIDE a single/triple backtick code span.
+    MarkdownV2 code spans only need '\\' and '`' escaped - unlike escape_md()
+    (meant for regular text), which escapes *, _, [, ], (, ), ., ! etc. Using
+    escape_md() inside a code span makes those backslashes show up literally,
+    which is why logs/errors/output used to look cluttered with stray '\'.
+    """
+    text = str(text)
+    return text.replace("\\", "\\\\").replace("`", "\\`")
+
 def play_loading_animation(bot, chat_id, message_id):
     frames = [
         "▰▰▱▱▱▱▱▱▱▱ 20%",
@@ -151,7 +162,7 @@ def send_logs(bot, message, edit_msg_id=None):
     except Exception:
         log_text = "Nᴏ ʟᴏɢ ғɪʟᴇ ғᴏᴜɴᴅ (bot.log)."
 
-    text = f"📄 *Sʏsᴛᴇᴍ Lᴏɢs:*\n`{escape_md(log_text[-3000:])}`"
+    text = f"📄 *Sʏsᴛᴇᴍ Lᴏɢs:*\n`{escape_code(log_text[-3000:])}`"
     kb = types.InlineKeyboardMarkup()
     kb.row(
         types.InlineKeyboardButton("🌀 Rᴇғʀᴇsʜ", callback_data="log_refresh"),
@@ -238,47 +249,6 @@ def handle_admin_callback(bot, call, active_hunts=None):
             bot.send_message(call.message.chat.id, escape_md("❌ Extraction Failed."))
         return True
 
-    # ================== OWNERSHIP TRANSFER CALLBACK ==================
-    elif call.data.startswith("transfer_"):
-        if not is_owner(bot, call): return True
-        parts = call.data.split("_")
-        action = parts[1]
-        target_id = int(parts[2])
-            
-        if action == "N":
-            try:
-                bot.edit_message_text("❌ *Oᴡɴᴇʀsʜɪᴘ ᴛʀᴀɴsғᴇʀ ᴄᴀɴᴄᴇʟʟᴇᴅ\\.*", call.message.chat.id, call.message.message_id, parse_mode="MarkdownV2")
-                bot.answer_callback_query(call.id, "Transfer Cancelled.")
-            except: pass
-            return True
-            
-        if action == "Y":
-            try: bot.answer_callback_query(call.id, "Promoting to Admin...", show_alert=False)
-            except: pass
-            
-            CO_OWNERS.add(target_id)
-            try: db.add_admin(target_id) 
-            except: pass
-            
-            try:
-                bot.edit_message_text(
-                    f"✅ *Sᴜᴄᴄᴇss\\!*\n\n👤 Uꜱᴇʀ `{target_id}` ɪꜱ ɴᴏᴡ ᴀɴ Aᴅᴍɪɴ/Cᴏ\\-Oᴡɴᴇʀ ᴏғ ᴛʜᴇ Gᴀᴍᴇ\\!", 
-                    call.message.chat.id, 
-                    call.message.message_id, 
-                    parse_mode="MarkdownV2"
-                )
-            except: pass
-            
-            try:
-                bot.send_message(
-                    target_id, 
-                    "👑 *Yᴏᴜ ʜᴀᴠᴇ ʙᴇᴇɴ ᴘʀᴏᴍᴏᴛᴇᴅ ᴛᴏ ᴀɴ Aᴅᴍɪɴ/Cᴏ\\-Oᴡɴᴇʀ ᴏғ ᴛʜᴇ ʙᴏᴛ\\!*\n\nYᴏᴜ ɴᴏᴡ ʜᴀᴠᴇ ᴀᴄᴄᴇss ᴛᴏ ᴀʟʟ ᴀᴅᴍɪɴ ᴄᴏᴍᴍᴀɴᴅs\\.", 
-                    parse_mode="MarkdownV2"
-                )
-            except: pass
-                
-        return True
-        
     return False
 
 EXECUTE_MODULES = {
@@ -345,78 +315,7 @@ def register_admin_handlers(bot, active_hunts):
                 parse_mode="MarkdownV2"
             )
         except Exception as e:
-            bot.edit_message_text(f"❌ *Tʀᴀɴsғᴇʀ Fᴀɪʟᴇᴅ:*\n`{escape_md(str(e))}`", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
-
-
-    # ================== ADMIN PROMOTION COMMANDS ==================
-    @bot.message_handler(commands=["transfer_ownership", "addadmin"])
-    def cmd_transfer_ownership(message):
-        if not is_owner(bot, message): return
-
-        target_id = None
-        target_name = "New Admin"
-        
-        if message.reply_to_message:
-            target_id = message.reply_to_message.from_user.id
-            target_name = message.reply_to_message.from_user.first_name
-        else:
-            parts = message.text.split()
-            if len(parts) > 1 and parts[1].isdigit():
-                target_id = int(parts[1])
-                try:
-                    chat_info = bot.get_chat(target_id)
-                    target_name = chat_info.first_name if chat_info.first_name else "Unknown Trainer"
-                except: pass
-            else:
-                return bot.reply_to(message, "⚠️ *Rᴇᴘʟʏ ᴛᴏ ᴀ ᴜsᴇʀ ᴏʀ ᴘʀᴏᴠɪᴅᴇ ᴛʜᴇɪʀ Iᴅ:* `/transfer_ownership <id>`", parse_mode="Markdown")
-
-        if target_id == OWNER_ID or target_id in CO_OWNERS:
-            return bot.reply_to(message, "⚠️ *Tʜɪs ᴜsᴇʀ ɪs ᴀʟʀᴇᴀᴅʏ ᴀɴ ᴏᴡɴᴇʀ/ᴀᴅᴍɪɴ\\!*", parse_mode="MarkdownV2")
-
-        text = (
-            "━━━━━━━━━━━━━━━━━━━\n"
-            "👑 *Oᴡɴᴇʀsʜɪᴘ Tʀᴀɴsғᴇʀ*\n"
-            "━━━━━━━━━━━━━━━━━━━\n\n"
-            "⚠️ *Aʀᴇ ʏᴏᴜ sᴜʀᴇ ʏᴏᴜ ᴡᴀɴᴛ ᴛᴏ ᴛʀᴀɴsғᴇʀ ᴏᴡɴᴇʀsʜɪᴘ?*\n\n"
-            f"👤 *Nᴇᴡ Oᴡɴᴇʀ* : {escape_md(target_name)}\n"
-            f"🆔 *ID* : `{target_id}`\n\n"
-            "Tʜɪs ᴀᴄᴛɪᴏɴ ᴄᴀɴɴᴏᴛ ʙᴇ ᴜɴᴅᴏɴᴇ\\."
-        )
-        
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.add(
-            types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"transfer_Y_{target_id}"),
-            types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"transfer_N_{target_id}")
-        )
-        bot.send_message(message.chat.id, text, reply_markup=kb, parse_mode="MarkdownV2")
-
-    @bot.message_handler(commands=["take_ownership", "demote", "removeadmin"])
-    def cmd_take_ownership(message):
-        if not is_owner(bot, message): return
-
-        target_id = None
-        
-        if message.reply_to_message:
-            target_id = message.reply_to_message.from_user.id
-        else:
-            parts = message.text.split()
-            if len(parts) > 1 and parts[1].isdigit():
-                target_id = int(parts[1])
-            else:
-                return bot.reply_to(message, "⚠️ *Rᴇᴘʟʏ ᴛᴏ ᴀ ᴜsᴇʀ ᴏʀ ᴘʀᴏᴠɪᴅᴇ ᴛʜᴇɪʀ Iᴅ:* `/take_ownership <id>`", parse_mode="MarkdownV2")
-
-        if target_id == OWNER_ID:
-            return bot.reply_to(message, "⚠️ *Yᴏᴜ ᴄᴀɴɴᴏᴛ ᴅᴇᴍᴏᴛᴇ ᴛʜᴇ ᴍᴀɪɴ Bᴏᴛ Oᴡɴᴇʀ\\!*", parse_mode="MarkdownV2")
-
-        if target_id not in CO_OWNERS:
-            return bot.reply_to(message, "⚠️ *Tʜɪs ᴜsᴇʀ ɪs ɴᴏᴛ ᴀɴ ᴀᴅᴍɪɴ\\!*", parse_mode="MarkdownV2")
-
-        # 🥷 Silent Demotion Action
-        CO_OWNERS.discard(target_id)
-        try: db.remove_admin(target_id) 
-        except: pass
-
-        bot.reply_to(message, f"🥷 *Sɪʟᴇɴᴛ Dᴇᴍᴏᴛɪᴏɴ\\!*\n\n👤 Uꜱᴇʀ `{target_id}` ɪꜱ ɴᴏ ʟᴏɴɢᴇʀ ᴀɴ Aᴅᴍɪɴ/Cᴏ\\-Oᴡɴᴇʀ\\.\n_Tʜᴇʏ ᴡᴇʀᴇ ɴᴏᴛ ɴᴏᴛɪғɪᴇᴅ\\._", parse_mode="MarkdownV2")
+            bot.edit_message_text(f"❌ *Tʀᴀɴsғᴇʀ Fᴀɪʟᴇᴅ:*\n`{escape_code(str(e))}`", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
 
     # ================== 🏅 GYM ADMIN TOOLS ==================
     @bot.message_handler(commands=["upload", "setimage"])
@@ -493,12 +392,12 @@ def register_admin_handlers(bot, active_hunts):
         msg = bot.reply_to(message, "🔄 *Pᴜʟʟɪɴɢ Lᴀᴛᴇsᴛ Gɪᴛ Uᴘᴅᴀᴛᴇs\\.\\.\\.*", parse_mode="MarkdownV2")
         try:
             result = subprocess.run(["git", "pull"], capture_output=True, text=True)
-            output = escape_md(result.stdout[-1000:])
+            output = escape_code(result.stdout[-1000:])
             bot.edit_message_text(f"✅ *Uᴘᴅᴀᴛᴇ Sᴜᴄᴄᴇssғᴜʟ\\!*\n\n`{output}`\n\n🔄 _Rᴇsᴛᴀʀᴛɪɴɢ Bᴏᴛ\\.\\.\\._", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
             time.sleep(1)
             os.execl(sys.executable, sys.executable, *sys.argv)
         except Exception as e:
-            bot.edit_message_text(f"❌ *Uᴘᴅᴀᴛᴇ Fᴀɪʟᴇᴅ:*\n`{escape_md(str(e))}`", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
+            bot.edit_message_text(f"❌ *Uᴘᴅᴀᴛᴇ Fᴀɪʟᴇᴅ:*\n`{escape_code(str(e))}`", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["log", "logs"])
     def command_log(message):
@@ -720,6 +619,8 @@ def register_admin_handlers(bot, active_hunts):
         args = message.text.split(maxsplit=1)
         if len(args) < 2: return bot.reply_to(message, "⚠️ *Format:* `/give <pokemon_name>`", parse_mode="MarkdownV2")
         pokemon_name = args[1].strip().title()
+        if not get_pokemon_id_sync(pokemon_name):
+            return bot.reply_to(message, f"❌ *{escape_md(pokemon_name)}* is not a real Pokémon\\.", parse_mode="MarkdownV2")
         db.add_caught_pokemon(message.reply_to_message.from_user.id, pokemon_name, "Gift")
         bot.reply_to(message, f"🎁 Successfully gave *{escape_md(pokemon_name)}* to [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", parse_mode="MarkdownV2")
 
@@ -730,6 +631,8 @@ def register_admin_handlers(bot, active_hunts):
         args = message.text.split(maxsplit=1)
         if len(args) < 2: return bot.reply_to(message, "⚠️ *Format:* `/take <pokemon_name>`", parse_mode="MarkdownV2")
         pokemon_name = args[1].strip().title()
+        if not get_pokemon_id_sync(pokemon_name):
+            return bot.reply_to(message, f"❌ *{escape_md(pokemon_name)}* is not a real Pokémon\\.", parse_mode="MarkdownV2")
         if db.delete_pokemon(message.reply_to_message.from_user.id, pokemon_name): bot.reply_to(message, f"🗑️ Successfully took *{escape_md(pokemon_name)}* from [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id})\\!", parse_mode="MarkdownV2")
         else: bot.reply_to(message, f"❌ [{escape_md(clean_name(message.reply_to_message.from_user.first_name))}](tg://user?id={message.reply_to_message.from_user.id}) doesn't own a *{escape_md(pokemon_name)}*\\.", parse_mode="MarkdownV2")
 
