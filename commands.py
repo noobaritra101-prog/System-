@@ -211,9 +211,8 @@ def process_catch(bot, call, uid, pid, name):
         catch_rate = get_species_catch_rate_sync(pid)
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
             poke_name_capped = name.title()
-            db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
-            caught = [p for p in db.get_user_pokemon(uid) if p["name"].lower() == poke_name_capped.lower()]
-            iv_pct = caught[-1]["iv_percent"] if caught else 0.0
+            caught_record = db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
+            iv_pct = caught_record["iv_percent"] if caught_record else 0.0
             try: tasks.check_and_update_catch(uid, poke_name_capped)
             except: pass
             

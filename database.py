@@ -200,22 +200,31 @@ def get_all_users():
 
 # ================== POKEMON MANAGEMENT ==================
 def add_caught_pokemon(user_id, name, region, source="Wild"):
+    """Adds a caught Pokémon with a fresh random IV spread and returns the created
+    record (id, name, region, ivs, iv_percent) so callers don't need to re-scan
+    the whole pokemons list just to find what was caught."""
     with _lock:
         pid = data["next_pokemon_id"]
         data["next_pokemon_id"] = pid + 1
-        data["pokemons"].append({
-            "id": pid, "user_id": user_id, "name": name, "region": region, "ivs": _random_ivs()
-        })
+        ivs = _random_ivs()
+        record = {"id": pid, "user_id": user_id, "name": name, "region": region, "ivs": ivs}
+        data["pokemons"].append(record)
         _save()
+        return {"id": pid, "name": name, "region": region, "ivs": ivs, "iv_percent": iv_percentage(ivs)}
 
 
 def get_pokemon_ivs(user_id, name):
-    """Returns the IV dict for the first (oldest) matching catch, or None."""
+    """Returns the IV dict for the oldest matching catch, or None.
+    ⚡ Filters this user's catches first instead of sorting the entire
+    (all-users) pokemons list — sorting the global list here was blocking
+    the shared lock for a long time on accounts with a large collection."""
     with _lock:
-        for p in sorted(data["pokemons"], key=lambda x: x["id"]):
-            if p["user_id"] == user_id and p["name"].lower() == name.lower():
-                return dict(p.get("ivs") or {})
-        return None
+        name_lower = name.lower()
+        matches = [p for p in data["pokemons"] if p["user_id"] == user_id and p["name"].lower() == name_lower]
+        if not matches:
+            return None
+        oldest = min(matches, key=lambda p: p["id"])
+        return dict(oldest.get("ivs") or {})
 
 
 def get_user_pokemon(user_id):
@@ -243,17 +252,18 @@ def list_user_pokemon_names(user_id):
 
 
 def delete_pokemon(user_id, name):
+    """⚡ Filters this user's catches first instead of sorting the entire
+    (all-users) pokemons list, for the same reason as get_pokemon_ivs above."""
     with _lock:
-        match = None
-        for p in sorted(data["pokemons"], key=lambda x: x["id"]):
-            if p["user_id"] == user_id and p["name"].lower() == name.lower():
-                match = p
-                break
-        if match:
-            data["pokemons"].remove(match)
-            _save()
-            return True
-        return False
+        name_lower = name.lower()
+        matches = [p for p in data["pokemons"] if p["user_id"] == user_id and p["name"].lower() == name_lower]
+        if not matches:
+            return False
+        oldest = min(matches, key=lambda p: p["id"])
+        data["pokemons"].remove(oldest)
+        _save()
+        return True
+
 
 
 # ================== LEADERBOARD ==================
