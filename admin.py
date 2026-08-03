@@ -333,29 +333,8 @@ def register_admin_handlers(bot, active_hunts):
         db.add_user_if_new(target_uid)
         
         try:
-            poke_count = 0
-            with db.get_conn() as conn:
-                with conn.cursor() as cur:
-                    # 🛡️ Dual-syntax block! Handles both SQLite (?) and Supabase Postgres (%s) safely
-                    try:
-                        # Postgres Syntax Block
-                        cur.execute("UPDATE pokemons SET user_id = %s WHERE user_id = %s", (target_uid, source_uid))
-                        poke_count = cur.rowcount
-                        try: cur.execute("UPDATE battle_stats SET user_id = %s WHERE user_id = %s", (target_uid, source_uid))
-                        except: pass
-                        try: cur.execute("UPDATE tasks SET user_id = %s WHERE user_id = %s", (target_uid, source_uid))
-                        except: pass
-                    except:
-                        # Fallback: Rollback the Postgres failure and try SQLite Syntax
-                        conn.rollback()
-                        cur.execute("UPDATE pokemons SET user_id = ? WHERE user_id = ?", (target_uid, source_uid))
-                        poke_count = cur.rowcount
-                        try: cur.execute("UPDATE battle_stats SET user_id = ? WHERE user_id = ?", (target_uid, source_uid))
-                        except: pass
-                        try: cur.execute("UPDATE tasks SET user_id = ? WHERE user_id = ?", (target_uid, source_uid))
-                        except: pass
-                conn.commit()
-                
+            poke_count = db.transfer_user_data(source_uid, target_uid)
+
             bot.edit_message_text(
                 f"✅ *Tʀᴀɴsғᴇʀ Cᴏᴍᴘʟᴇᴛᴇ\\!*\n\n"
                 f"📦 Sᴜᴄᴄᴇssғᴜʟʟʏ ᴍᴏᴠᴇᴅ `{poke_count}` Pᴏᴋᴇ́ᴍᴏɴ ᴀɴᴅ ᴀssᴏᴄɪᴀᴛᴇᴅ sᴛᴀᴛs\\.\n\n"
@@ -474,17 +453,14 @@ def register_admin_handlers(bot, active_hunts):
         if not is_owner(bot, message): return
         
         try:
-            with db.get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT leader_name FROM gym_images")
-                    rows = cur.fetchall()
-                    
-            if not rows:
+            leader_names = db.list_gym_leader_names()
+
+            if not leader_names:
                 return bot.reply_to(message, escape_md("⚠️ No Gym Leader images have been uploaded to the database yet."), parse_mode="MarkdownV2")
                 
             text = "🖼 *Uᴘʟᴏᴀᴅᴇᴅ Gʏᴍ Iᴍᴀɢᴇs*\n━━━━━━━━━━━━━━\n"
-            for r in rows:
-                text += f"\\- {escape_md(r[0])}\n"
+            for name in leader_names:
+                text += f"\\- {escape_md(name)}\n"
                 
             bot.reply_to(message, text, parse_mode="MarkdownV2")
         except Exception as e:
@@ -641,63 +617,98 @@ def register_admin_handlers(bot, active_hunts):
         elif module == "server" and action == "status":
             msg = bot.reply_to(message, "⚡ *Iɴɪᴛɪᴀʟɪᴢɪɴɢ Mᴏᴅᴜʟᴇ\\.\\.\\.*", parse_mode="MarkdownV2")
             play_loading_animation(bot, message.chat.id, msg.message_id)
-            bot.edit_message_text("🟢 *Sᴇʀᴠᴇʀ Oɴʟɪɴᴇ\\!*\n_Sᴜᴘᴀʙᴀsᴇ DB Cᴏɴɴᴇᴄᴛᴇᴅ_ ✅", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
+            bot.edit_message_text("🟢 *Sᴇʀᴠᴇʀ Oɴʟɪɴᴇ\\!*\n_JSON Dᴀᴛᴀʙᴀsᴇ Cᴏɴɴᴇᴄᴛᴇᴅ_ ✅", message.chat.id, msg.message_id, parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["restore"])
     def cmd_restore(message):
         if not is_owner(bot, message): return
-        bot.reply_to(message, escape_md("📥 Send me the old SQLite (.db) file to migrate it into the cloud PostgreSQL database. Max size: 20MB."), parse_mode="MarkdownV2")
+        bot.reply_to(message, escape_md("📥 Send me an old SQLite (.db) file to migrate it into the JSON database. Max size: 20MB.\n\nFor a JSON backup (from /export), use /import instead."), parse_mode="MarkdownV2")
+
+    @bot.message_handler(commands=["import"])
+    def cmd_import(message):
+        if not is_owner(bot, message): return
+        bot.reply_to(message, escape_md("📥 Send me the .json database backup file to load. ⚠️ This will REPLACE all current data."), parse_mode="MarkdownV2")
 
     @bot.message_handler(content_types=["document"])
     def handle_restore_file(message):
         if not is_owner(bot, message): return
-        if not message.document.file_name.endswith((".db", ".sqlite", ".db3")): return
-        
-        status_msg = bot.reply_to(message, escape_md("🔄 Downloading local SQLite file..."))
-        try:
-            file_info = bot.get_file(message.document.file_id)
-            data = bot.download_file(file_info.file_path)
-            temp_file = f"temp_migrate_{int(time.time())}.db"
-            with open(temp_file, "wb") as f: f.write(data)
-            
-            bot.edit_message_text(escape_md("📦 Extracting data from SQLite..."), chat_id=message.chat.id, message_id=status_msg.message_id)
-            conn = sqlite3.connect(temp_file)
-            cur = conn.cursor()
-            
-            cur.execute("SELECT user_id, tries_left, region, last_reset FROM users")
-            users_data = [(r[0], r[1], r[2], datetime.datetime.strptime(r[3], "%Y-%m-%d").date()) for r in cur.fetchall()]
-            
-            cur.execute("SELECT user_id, name, region FROM pokemons")
-            pokemons_data = cur.fetchall()
-            
-            cur.execute("SELECT group_id FROM groups")
-            groups_data = cur.fetchall()
-            conn.close()
-            
-            bot.edit_message_text(escape_md(f"☁️ Injecting {len(users_data)} Users, {len(pokemons_data)} Pokémons into Supabase PostgreSQL..."), chat_id=message.chat.id, message_id=status_msg.message_id)
-            db.restore_sqlite_data(users_data, pokemons_data, groups_data)
-            
-            os.remove(temp_file) 
-            bot.edit_message_text(escape_md("✅ Migration Complete! Your local data is now securely in the cloud."), chat_id=message.chat.id, message_id=status_msg.message_id)
-        except Exception as e:
-            logger.error(f"Restore error: {e}")
-            bot.edit_message_text(escape_md(f"❌ Error during migration: {str(e)}"), chat_id=message.chat.id, message_id=status_msg.message_id)
+        filename = message.document.file_name or ""
+
+        if filename.endswith((".db", ".sqlite", ".db3")):
+            status_msg = bot.reply_to(message, escape_md("🔄 Downloading local SQLite file..."))
+            try:
+                file_info = bot.get_file(message.document.file_id)
+                file_bytes = bot.download_file(file_info.file_path)
+                temp_file = f"temp_migrate_{int(time.time())}.db"
+                with open(temp_file, "wb") as f: f.write(file_bytes)
+
+                bot.edit_message_text(escape_md("📦 Extracting data from SQLite..."), chat_id=message.chat.id, message_id=status_msg.message_id)
+                conn = sqlite3.connect(temp_file)
+                cur = conn.cursor()
+
+                cur.execute("SELECT user_id, tries_left, region, last_reset FROM users")
+                users_data = [(r[0], r[1], r[2], datetime.datetime.strptime(r[3], "%Y-%m-%d").date()) for r in cur.fetchall()]
+
+                cur.execute("SELECT user_id, name, region FROM pokemons")
+                pokemons_data = cur.fetchall()
+
+                cur.execute("SELECT group_id FROM groups")
+                groups_data = cur.fetchall()
+                conn.close()
+
+                bot.edit_message_text(escape_md(f"💾 Merging {len(users_data)} Users, {len(pokemons_data)} Pokémons into the JSON database..."), chat_id=message.chat.id, message_id=status_msg.message_id)
+                db.restore_sqlite_data(users_data, pokemons_data, groups_data)
+
+                os.remove(temp_file)
+                bot.edit_message_text(escape_md("✅ Migration Complete! Your local data is now in the JSON database."), chat_id=message.chat.id, message_id=status_msg.message_id)
+            except Exception as e:
+                logger.error(f"Restore error: {e}")
+                bot.edit_message_text(escape_md(f"❌ Error during migration: {str(e)}"), chat_id=message.chat.id, message_id=status_msg.message_id)
+            return
+
+        if filename.endswith(".json"):
+            status_msg = bot.reply_to(message, escape_md("📥 Downloading JSON backup..."))
+            try:
+                file_info = bot.get_file(message.document.file_id)
+                file_bytes = bot.download_file(file_info.file_path)
+                backup = json.loads(file_bytes.decode("utf-8"))
+
+                if not isinstance(backup, dict) or "users" not in backup or "pokemons" not in backup:
+                    return bot.edit_message_text(escape_md("❌ That doesn't look like a valid database backup file."), chat_id=message.chat.id, message_id=status_msg.message_id)
+
+                bot.edit_message_text(escape_md("💾 Loading backup into the database..."), chat_id=message.chat.id, message_id=status_msg.message_id)
+                counts = db.import_backup(backup)
+
+                bot.edit_message_text(
+                    escape_md(
+                        f"✅ Import Complete!\n"
+                        f"👤 Users: {counts['users']}\n"
+                        f"🎒 Pokémon: {counts['pokemons']}\n"
+                        f"👥 Groups: {counts['groups']}\n"
+                        f"⚔️ Battle Stats: {counts['battle_stats']}"
+                    ),
+                    chat_id=message.chat.id, message_id=status_msg.message_id
+                )
+            except Exception as e:
+                logger.error(f"Import error: {e}")
+                bot.edit_message_text(escape_md(f"❌ Import failed: {str(e)}"), chat_id=message.chat.id, message_id=status_msg.message_id)
+            return
 
     @bot.message_handler(commands=["backup"])
     def cmd_backup(message):
         if not is_owner(bot, message): return
-        bot.reply_to(message, escape_md("☁️ You are on a cloud database now! Backups are handled automatically via Supabase."), parse_mode="MarkdownV2")
+        bot.reply_to(message, escape_md("💾 Data is stored locally in a JSON file. Use /export to download a backup anytime."), parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["export"])
     def cmd_export(message):
         if not is_owner(bot, message): return
-        status_msg = bot.reply_to(message, escape_md("🔄 Extracting data from PostgreSQL..."), parse_mode="MarkdownV2")
+        status_msg = bot.reply_to(message, escape_md("🔄 Extracting data from the database..."), parse_mode="MarkdownV2")
         try:
             data = db.export_all_data()
             json_data = json.dumps(data, default=str, indent=4)
             backup_file = io.BytesIO(json_data.encode('utf-8'))
             backup_file.name = f"database_backup_{int(time.time())}.json"
-            bot.send_document(message.chat.id, backup_file, caption=escape_md("📦 Here is your complete database backup!"), parse_mode="MarkdownV2")
+            bot.send_document(message.chat.id, backup_file, caption=escape_md("📦 Here is your complete database backup! Use /import to restore it later."), parse_mode="MarkdownV2")
             bot.delete_message(message.chat.id, status_msg.message_id)
         except Exception as e:
             bot.edit_message_text(escape_md(f"❌ Export failed: {e}"), chat_id=message.chat.id, message_id=status_msg.message_id, parse_mode="MarkdownV2")
