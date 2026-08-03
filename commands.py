@@ -212,6 +212,8 @@ def process_catch(bot, call, uid, pid, name):
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
             poke_name_capped = name.title()
             db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
+            caught = [p for p in db.get_user_pokemon(uid) if p["name"].lower() == poke_name_capped.lower()]
+            iv_pct = caught[-1]["iv_percent"] if caught else 0.0
             try: tasks.check_and_update_catch(uid, poke_name_capped)
             except: pass
             
@@ -219,11 +221,11 @@ def process_catch(bot, call, uid, pid, name):
                 try: 
                     c_name = clean_name(call.from_user.first_name)
                     p_name = to_small_caps(poke_name_capped)
-                    log_msg = f"🟢 【Cᴀᴛᴄʜ】 [{escape_md(c_name)}](tg://user?id={uid}) ᴄᴀᴜɢʜᴛ ✨ Sʜɪɴʏ {escape_md(p_name)}"
+                    log_msg = f"🟢 【Cᴀᴛᴄʜ】 [{escape_md(c_name)}](tg://user?id={uid}) ᴄᴀᴜɢʜᴛ ✨ Sʜɪɴʏ {escape_md(p_name)} \\(IV: {iv_pct}%\\)"
                     bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
                 except: pass
             
-            try: bot.edit_message_caption(caption=f"✨ *Gᴏᴛᴄʜᴀ\\!* Sʜɪɴʏ *{escape_md(to_small_caps(poke_name_capped))}* ᴡᴀs ᴄᴀᴜɢʜᴛ\\!\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\.", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
+            try: bot.edit_message_caption(caption=f"✨ *Gᴏᴛᴄʜᴀ\\!* Sʜɪɴʏ *{escape_md(to_small_caps(poke_name_capped))}* ᴡᴀs ᴄᴀᴜɢʜᴛ\\!\n🧬 *IV:* {iv_pct}%\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\.", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
             except: pass
         else:
             try: bot.edit_message_caption(caption=f"💨 *Oʜ ɴᴏ\\!* Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(name.title()))} ʙʀᴏᴋᴇ ғʀᴇᴇ ᴀɴᴅ ғʟᴇᴅ\\!", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
@@ -441,7 +443,14 @@ def register_user_handlers(bot, active_hunts):
             poke_id = get_pokemon_id_sync(name)
             if poke_id:
                 photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
-                try: bot.send_photo(message.chat.id, photo_payload, caption=f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)", parse_mode="MarkdownV2")
+                ivs = db.get_pokemon_ivs(message.from_user.id, name)
+                caption = f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)"
+                if ivs:
+                    total_pct = db.iv_percentage(ivs)
+                    caption += (f"\n🧬 *IV: {total_pct}%*\n"
+                                f"❤️ HP: {ivs.get('hp', 0)}/31  ⚔️ Atk: {ivs.get('atk', 0)}/31  🛡️ Def: {ivs.get('def', 0)}/31\n"
+                                f"✨ SpA: {ivs.get('spa', 0)}/31  💠 SpD: {ivs.get('spd', 0)}/31  ⚡ Spe: {ivs.get('spe', 0)}/31")
+                try: bot.send_photo(message.chat.id, photo_payload, caption=caption, parse_mode="MarkdownV2")
                 except: pass
         threading.Thread(target=process).start()
 
