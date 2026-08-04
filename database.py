@@ -22,9 +22,28 @@ _lock = threading.RLock()
 
 IV_STATS = ["hp", "atk", "def", "spa", "spd", "spe"]  # HP, Attack, Defense, Sp.Atk, Sp.Def, Speed
 
+# nature_name -> (boosted_stat_key, lowered_stat_key); (None, None) for the 5 neutral natures.
+# HP is never boosted/lowered by nature (matches the mainline games).
+NATURES = {
+    "Hardy": (None, None), "Lonely": ("atk", "def"), "Brave": ("atk", "spe"), "Adamant": ("atk", "spa"), "Naughty": ("atk", "spd"),
+    "Bold": ("def", "atk"), "Docile": (None, None), "Relaxed": ("def", "spe"), "Impish": ("def", "spa"), "Lax": ("def", "spd"),
+    "Timid": ("spe", "atk"), "Hasty": ("spe", "def"), "Serious": (None, None), "Jolly": ("spe", "spa"), "Naive": ("spe", "spd"),
+    "Modest": ("spa", "atk"), "Mild": ("spa", "def"), "Quiet": ("spa", "spe"), "Bashful": (None, None), "Rash": ("spa", "spd"),
+    "Calm": ("spd", "atk"), "Gentle": ("spd", "def"), "Sassy": ("spd", "spe"), "Careful": ("spd", "spa"), "Quirky": (None, None),
+}
+
 
 def _random_ivs():
     return {stat: random.randint(0, 31) for stat in IV_STATS}
+
+
+def _random_nature():
+    return random.choice(list(NATURES.keys()))
+
+
+def nature_effect(nature):
+    """Returns (boosted_stat_key, lowered_stat_key) for a nature name, or (None, None) if unknown/neutral."""
+    return NATURES.get(nature, (None, None))
 
 
 def iv_percentage(ivs):
@@ -33,9 +52,21 @@ def iv_percentage(ivs):
         return 0.0
     return round(sum(ivs.get(s, 0) for s in IV_STATS) / (31 * 6) * 100, 2)
 
+
+def calc_level_100_stat(base, iv, stat_key, nature, ev=0):
+    """Standard mainline-game stat formula, fixed at level 100 (EVs are always 0 in this bot)."""
+    level = 100
+    if stat_key == "hp":
+        return ((2 * base + iv + ev // 4) * level) // 100 + level + 10
+    boost, lower = nature_effect(nature)
+    mult = 1.1 if boost == stat_key else (0.9 if lower == stat_key else 1.0)
+    raw = ((2 * base + iv + ev // 4) * level) // 100 + 5
+    return int(raw * mult)
+
+
 _EMPTY = {
     "users": {},          # str(user_id) -> {tries_left, region, last_reset}
-    "pokemons": [],        # [{id, user_id, name, region}]
+    "pokemons": [],        # [{id, user_id, name, region, ivs, nature}]
     "next_pokemon_id": 1,
     "groups": [],           # [group_id, ...]
     "pvp_settings": {},    # str(user_id) -> {mode, size, can_switch, status_effects}
@@ -73,14 +104,21 @@ def _load():
 
 
 def _backfill_ivs():
-    """One-time migration: give every existing Pokémon (caught before IVs existed) a random IV spread."""
+    """One-time migration: give every existing Pokémon (caught before IVs/nature existed)
+    a random IV spread and a random nature."""
     backfilled = 0
     for p in data["pokemons"]:
+        changed = False
         if "ivs" not in p or not p["ivs"]:
             p["ivs"] = _random_ivs()
+            changed = True
+        if "nature" not in p or not p["nature"]:
+            p["nature"] = _random_nature()
+            changed = True
+        if changed:
             backfilled += 1
     if backfilled:
-        logger.info(f"🎲 Backfilled random IVs for {backfilled} existing Pokémon.")
+        logger.info(f"🎲 Backfilled random IVs/Nature for {backfilled} existing Pokémon.")
 
 
 def _save():
@@ -200,18 +238,19 @@ def get_all_users():
 
 # ================== POKEMON MANAGEMENT ==================
 def add_caught_pokemon(user_id, name, region, source="Wild"):
-    """Adds a caught Pokémon with a fresh random IV spread and returns the created
-    record (id, name, region, ivs, iv_percent) so callers don't need to re-scan
+    """Adds a caught Pokémon with a fresh random IV spread + nature and returns the created
+    record (id, name, region, ivs, nature, iv_percent) so callers don't need to re-scan
     the whole pokemons list just to find what was caught."""
     try:
         with _lock:
             pid = data["next_pokemon_id"]
             data["next_pokemon_id"] = pid + 1
             ivs = _random_ivs()
-            record = {"id": pid, "user_id": user_id, "name": name, "region": region, "ivs": ivs}
+            nature = _random_nature()
+            record = {"id": pid, "user_id": user_id, "name": name, "region": region, "ivs": ivs, "nature": nature}
             data["pokemons"].append(record)
             _save()
-            return {"id": pid, "name": name, "region": region, "ivs": ivs, "iv_percent": iv_percentage(ivs)}
+            return {"id": pid, "name": name, "region": region, "ivs": ivs, "nature": nature, "iv_percent": iv_percentage(ivs)}
     except Exception:
         logger.exception(f"❌ add_caught_pokemon failed for user_id={user_id} name={name}")
         return None
@@ -240,6 +279,25 @@ def get_pokemon_ivs(user_id, name):
             return dict(oldest.get("ivs") or {})
     except Exception:
         logger.exception(f"❌ get_pokemon_ivs failed for user_id={user_id} name={name}")
+        return None
+
+
+def get_pokemon_details(user_id, name):
+    """Returns {'ivs': {...}, 'nature': str} for the oldest matching catch, or None.
+    Used by /inspect, which needs both IVs and nature together."""
+    try:
+        with _lock:
+            name_lower = (name or "").lower()
+            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
+            if not matches:
+                return None
+            oldest = min(matches, key=lambda p: p.get("id", 0))
+            return {
+                "ivs": dict(oldest.get("ivs") or {}),
+                "nature": oldest.get("nature") or "Hardy",
+            }
+    except Exception:
+        logger.exception(f"❌ get_pokemon_details failed for user_id={user_id} name={name}")
         return None
 
 

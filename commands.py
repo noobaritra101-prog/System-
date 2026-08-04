@@ -15,7 +15,7 @@ import trade
 from config import LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 from api_utils import (escape_md, fetch_random_pokemon_id_and_name_sync, official_shiny_artwork_url, 
                        get_species_catch_rate_sync, get_pokemon_stats_sync, get_pokemon_id_sync, 
-                       REGION_DEX, LEGENDARY_NAMES, pokemon_name_to_id_cache)
+                       get_pokemon_moveset_sync, REGION_DEX, LEGENDARY_NAMES, pokemon_name_to_id_cache)
 
 TYPE_EMOJIS = {
     'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
@@ -250,6 +250,82 @@ def get_dex_text(name, page="info"):
         stats_str = "\n".join([f"🔸 *{escape_md(k)}:* {v}" for k, v in stats.items()])
         return (f"📊 *Base Stats: {escape_md(name.capitalize())}*\n━━━━━━━━━━━━━━\n{stats_str}\n━━━━━━━━━━━━━━\n📈 *Total:* {sum(stats.values())}")
 
+# ================== /inspect: 4-page paginated view (Info / Stats / Move set / IV & EV) ==================
+INSPECT_PAGES = [("i", "ℹ️ Info"), ("s", "📊 Stats"), ("m", "⚔️ Move set"), ("v", "🧬 IV & EV")]
+IV_ORDER = ["hp", "atk", "def", "spa", "spd", "spe"]
+STAT_KEY_MAP = {"Hp": "hp", "Attack": "atk", "Defense": "def", "Special attack": "spa", "Special defense": "spd", "Speed": "spe"}
+STAT_LABELS = {"hp": "HP", "atk": "Attack", "def": "Defense", "spa": "Sp. Attack", "spd": "Sp. Defense", "spe": "Speed"}
+
+def build_inspect_keyboard(user_id, name, active_page):
+    kb = types.InlineKeyboardMarkup(row_width=4)
+    row = []
+    for code, label in INSPECT_PAGES:
+        if code == active_page:
+            row.append(types.InlineKeyboardButton(f"✅ {label}", callback_data="ignore"))
+        else:
+            row.append(types.InlineKeyboardButton(label, callback_data=f"insp_{code}_{user_id}_{name[:20]}"))
+    kb.add(*row)
+    return kb
+
+def build_inspect_page(user_id, name, page_code="i"):
+    """Returns (caption, keyboard) for one page of /inspect, or (None, None) if the
+    Pokémon/species data can't be resolved."""
+    poke_id = get_pokemon_id_sync(name)
+    if not poke_id: return None, None
+    types_list, base_stats = get_pokemon_stats_sync(name)
+    if not base_stats: return None, None
+
+    details = db.get_pokemon_details(user_id, name)
+    if not details: return None, None
+    ivs, nature = details["ivs"], details["nature"]
+
+    actual = {}
+    for label_key, short_key in STAT_KEY_MAP.items():
+        base = base_stats.get(label_key, 0)
+        actual[short_key] = db.calc_level_100_stat(base, ivs.get(short_key, 0), short_key, nature)
+
+    header = f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)\n\n"
+
+    if page_code == "s":
+        boost, lower = db.nature_effect(nature)
+        lines = []
+        for key in IV_ORDER:
+            suffix = " \\(\\+\\)" if key == boost else (" \\(\\-\\)" if key == lower else "")
+            lines.append(f"{escape_md(STAT_LABELS[key])}: {actual[key]}{suffix}")
+        caption = header + "\n".join(lines)
+
+    elif page_code == "m":
+        moves = get_pokemon_moveset_sync(name)
+        if not moves:
+            caption = header + escape_md("⚠️ Couldn't load move data right now — try again shortly.")
+        else:
+            blocks = []
+            for m in moves:
+                emoji = TYPE_EMOJIS.get(m["type"], "")
+                blocks.append(f"*{escape_md(m['name'])}* \\[{escape_md(m['type'])} {emoji}\\]\nPower: {m['power']}, Accuracy: {m['acc']} \\({escape_md(m['category'])}\\)")
+            caption = header + "\n\n".join(blocks)
+
+    elif page_code == "v":
+        total_iv = sum(ivs.get(k, 0) for k in IV_ORDER)
+        rows = [(STAT_LABELS[k], ivs.get(k, 0)) for k in IV_ORDER]
+        table = "Points         IV |  EV\n" + ("—" * 23) + "\n"
+        for label, val in rows:
+            table += f"{label:<14} {val:>2} |   0\n"
+        table += ("—" * 23) + "\n"
+        table += f"{'Total':<14} {total_iv:>2} |   0"
+        caption = header + f"```\n{table}\n```"
+
+    else:  # info
+        types_str = " ".join([f"\\[{escape_md(t)} {TYPE_EMOJIS.get(t, '')}\\]" for t in types_list])
+        caption = (header + f"Lv\\. 100 \\| Nature: {escape_md(nature)} ✨\n"
+                   f"Types: {types_str}\n"
+                   f"Exp\\. 1,000,000\nTo Next Lv\\. 0\nEXP ██████████")
+
+    kb = build_inspect_keyboard(user_id, name, page_code)
+    return caption, kb
+
+
+
 def send_leaderboard(bot, chat_id, user_id, message_id=None, mode="catch"):
     if mode == "catch":
         top_players = db.get_top_trainers(5)
@@ -441,24 +517,46 @@ def register_user_handlers(bot, active_hunts):
                 if name not in [n.lower() for n in user_pokemon]: 
                     text, kb = generate_did_you_mean(name_raw, user_pokemon, "dym_ins", message.from_user.id)
                     return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
-                    
+
                 poke_id = get_pokemon_id_sync(name)
-                if poke_id:
-                    photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
-                    ivs = db.get_pokemon_ivs(message.from_user.id, name)
-                    caption = f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)"
-                    if ivs:
-                        total_pct = escape_md(str(db.iv_percentage(ivs)))
-                        caption += (f"\n🧬 *IV: {total_pct}%*\n"
-                                    f"❤️ HP: {ivs.get('hp', 0)}/31  ⚔️ Atk: {ivs.get('atk', 0)}/31  🛡️ Def: {ivs.get('def', 0)}/31\n"
-                                    f"✨ SpA: {ivs.get('spa', 0)}/31  💠 SpD: {ivs.get('spd', 0)}/31  ⚡ Spe: {ivs.get('spe', 0)}/31")
-                    try: bot.send_photo(message.chat.id, photo_payload, caption=caption, parse_mode="MarkdownV2")
-                    except Exception:
-                        logger.exception(f"/inspect send_photo failed for uid={message.from_user.id} name={name}")
-                        safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't load that Pokémon's image right now."), reply_to_id=message.message_id)
+                if not poke_id:
+                    return safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't find that Pokémon's species data."), reply_to_id=message.message_id)
+
+                caption, kb = build_inspect_page(message.from_user.id, name, "i")
+                if caption is None:
+                    return safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't load that Pokémon right now."), reply_to_id=message.message_id)
+
+                photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
+                try: bot.send_photo(message.chat.id, photo_payload, caption=caption, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"/inspect send_photo failed for uid={message.from_user.id} name={name}")
+                    safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't load that Pokémon's image right now."), reply_to_id=message.message_id)
             except Exception:
                 logger.exception(f"❌ /inspect failed entirely for uid={message.from_user.id}")
                 safe_send(bot, message.chat.id, escape_md("⚠️ Something went wrong inspecting that Pokémon. Try again in a moment."), reply_to_id=message.message_id)
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("insp_"))
+    def cq_inspect_page(call):
+        def process():
+            try:
+                _, page_code, uid_str, name = call.data.split("_", 3)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
+
+                caption, kb = build_inspect_page(call.from_user.id, name, page_code)
+                if caption is None:
+                    return bot.answer_callback_query(call.id, "⚠️ Couldn't load that page.", show_alert=True)
+
+                try:
+                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_inspect_page edit_message_caption failed: {call.data}")
+                bot.answer_callback_query(call.id)
+            except Exception:
+                logger.exception(f"❌ cq_inspect_page failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
         threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["release"])

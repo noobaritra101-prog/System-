@@ -189,6 +189,83 @@ def get_pokemon_stats_sync(pokemon_name):
     except: 
         return None, None
 
+_MOVESET_CACHE = {}
+
+def _fetch_move_detail_sync(url):
+    """Fetches power/accuracy/type/category for a single move. Returns None for
+    status moves (no power) so they get filtered out of the display moveset."""
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4) as response:
+            data = json.loads(response.read().decode())
+            power = data.get("power")
+            if not power:
+                return None
+            return {
+                "name": data["name"].replace("-", " ").title(),
+                "power": power,
+                "acc": data.get("accuracy") or 100,
+                "type": data["type"]["name"].capitalize(),
+                "category": ((data.get("damage_class") or {}).get("name") or "physical").capitalize(),
+            }
+    except:
+        return None
+
+def get_pokemon_moveset_sync(pokemon_name):
+    """Returns up to 4 strong, STAB-favoring moves for a species (one PokeAPI round-trip
+    per move sampled, so the result is cached in-memory after the first lookup)."""
+    name_lower = pokemon_name.lower()
+    if name_lower in _MOVESET_CACHE:
+        return _MOVESET_CACHE[name_lower]
+    try:
+        url = f"https://pokeapi.co/api/v2/pokemon/{name_lower}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+
+        types_list = [t["type"]["name"].capitalize() for t in data.get("types", [])]
+        all_move_urls = [m["move"]["url"] for m in data.get("moves", [])]
+        if not all_move_urls:
+            return None
+        sample_urls = random.sample(all_move_urls, min(20, len(all_move_urls)))
+
+        valid_moves = [m for m in (_fetch_move_detail_sync(u) for u in sample_urls) if m]
+
+        strong_moves = [m for m in valid_moves if m["power"] >= 80]
+        final_moves = []
+
+        for p_type in types_list:
+            type_strong = [m for m in strong_moves if m["type"] == p_type]
+            if type_strong:
+                chosen = max(type_strong, key=lambda x: x["power"])
+                final_moves.append(chosen)
+                strong_moves.remove(chosen)
+                if chosen in valid_moves: valid_moves.remove(chosen)
+
+        strong_moves.sort(key=lambda x: x["power"], reverse=True)
+        for m in strong_moves:
+            if len(final_moves) >= 4: break
+            if m["name"] not in [fm["name"] for fm in final_moves]:
+                final_moves.append(m)
+
+        if len(final_moves) < 4:
+            valid_moves.sort(key=lambda x: x["power"], reverse=True)
+            for m in valid_moves:
+                if len(final_moves) >= 4: break
+                if m["name"] not in [fm["name"] for fm in final_moves]:
+                    final_moves.append(m)
+
+        while len(final_moves) < 4:
+            final_moves.append({"name": "Struggle", "power": 50, "acc": 100, "type": "Normal", "category": "Physical"})
+
+        final_moves = final_moves[:4]
+        _MOVESET_CACHE[name_lower] = final_moves
+        return final_moves
+    except Exception as e:
+        logger.error(f"get_pokemon_moveset_sync failed for {pokemon_name}: {e}")
+        return None
+
+
 async def fetch_real_move_data(session, url):
     """Fetches authentic power, accuracy, and type for a specific move."""
     try:
