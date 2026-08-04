@@ -178,6 +178,51 @@ def get_species_catch_rate_sync(poke_id):
     except: 
         return 127
 
+_EVOLUTION_CACHE = {}
+
+def get_pokemon_evolution_sync(pokemon_name):
+    """Returns {'from': name|None, 'into': [{'name', 'min_level'}, ...]} describing
+    the given species' place in its evolution chain, or None on failure."""
+    name_lower = pokemon_name.lower()
+    if name_lower in _EVOLUTION_CACHE:
+        return _EVOLUTION_CACHE[name_lower]
+    try:
+        species_url = f"https://pokeapi.co/api/v2/pokemon-species/{name_lower}"
+        req = urllib.request.Request(species_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            species_data = json.loads(response.read().decode())
+        chain_url = species_data["evolution_chain"]["url"]
+        req = urllib.request.Request(chain_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            chain_data = json.loads(response.read().decode())["chain"]
+
+        def find_node(node, target, parent=None):
+            if node["species"]["name"] == target:
+                return node, parent
+            for child in node.get("evolves_to", []):
+                found, p = find_node(child, target, node)
+                if found:
+                    return found, p
+            return None, None
+
+        node, parent = find_node(chain_data, name_lower)
+        if node is None:
+            result = None
+        else:
+            evolves_from = parent["species"]["name"].capitalize() if parent else None
+            into = []
+            for child in node.get("evolves_to", []):
+                details = (child.get("evolution_details") or [{}])[0]
+                into.append({
+                    "name": child["species"]["name"].capitalize(),
+                    "min_level": details.get("min_level"),
+                })
+            result = {"from": evolves_from, "into": into}
+        _EVOLUTION_CACHE[name_lower] = result
+        return result
+    except:
+        return None
+
 def get_pokemon_stats_sync(pokemon_name):
     try:
         url = f"https://pokeapi.co/api/v2/pokemon/{pokemon_name.lower()}"
