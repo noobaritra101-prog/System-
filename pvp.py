@@ -55,44 +55,65 @@ def safe_answer(bot, call_id, text="", show_alert=False):
     try: bot.answer_callback_query(call_id, text, show_alert=show_alert)
     except Exception: pass
 
-def _threaded_edit(bot, text, chat_id, message_id, reply_markup, retry_after):
-    time.sleep(retry_after)
-    try: bot.edit_message_text(text, chat_id, message_id, reply_markup=reply_markup, parse_mode="MarkdownV2")
-    except: pass
+_edit_lock = threading.Lock()
+_edit_generation = {}  # message_id -> generation counter, so a stale retry can't clobber a newer render
 
-def safe_edit(bot, text, chat_id, message_id, reply_markup=None):
+def _bump_generation(message_id):
+    with _edit_lock:
+        gen = _edit_generation.get(message_id, 0) + 1
+        _edit_generation[message_id] = gen
+        return gen
+
+def _is_current(message_id, generation):
+    with _edit_lock:
+        return _edit_generation.get(message_id) == generation
+
+def clear_edit_tracking(message_id):
+    """Call when a battle/message is done, so the generation dict doesn't grow forever."""
+    with _edit_lock:
+        _edit_generation.pop(message_id, None)
+
+def _threaded_edit(bot, text, chat_id, message_id, reply_markup, retry_after, generation):
+    time.sleep(retry_after)
+    if not _is_current(message_id, generation):
+        return  # a newer render already went out while we were waiting — drop this stale one
+    _do_edit(bot, text, chat_id, message_id, reply_markup, generation)
+
+def _do_edit(bot, text, chat_id, message_id, reply_markup, generation):
     try:
         bot.edit_message_text(text, chat_id, message_id, reply_markup=reply_markup, parse_mode="MarkdownV2")
     except Exception as e:
         err_str = str(e).lower()
         if "message is not modified" in err_str: return
-        
+
         if "429" in err_str or "too many requests" in err_str:
-            retry_after = 3 
-            if hasattr(e, 'result_json') and 'parameters' in e.result_json:
+            retry_after = 3
+            if hasattr(e, 'result_json') and e.result_json and 'parameters' in e.result_json:
                 retry_after = e.result_json['parameters'].get('retry_after', 3)
             elif "retry after" in err_str:
                 try: retry_after = int(err_str.split("retry after ")[1].split()[0])
                 except: pass
-                
+
             logger.warning(f"Telegram Limit Hit (429). Threading background UI retry in {retry_after}s...")
-            threading.Thread(target=_threaded_edit, args=(bot, text, chat_id, message_id, reply_markup, retry_after)).start()
+            # Keep retrying (with the latest retry_after) instead of giving up after one attempt.
+            threading.Thread(
+                target=_threaded_edit,
+                args=(bot, text, chat_id, message_id, reply_markup, retry_after, generation),
+                daemon=True,
+            ).start()
         else:
             logger.error(f"UI Update error: {e}")
+
+def safe_edit(bot, text, chat_id, message_id, reply_markup=None):
+    # Every call supersedes any retry threads still in flight for this message,
+    # so a slow 429 retry can never overwrite a more recent battle state.
+    generation = _bump_generation(message_id)
+    _do_edit(bot, text, chat_id, message_id, reply_markup, generation)
 
 # --- HELPERS ---
 def clean_name(name):
     if not name: return "Trainer"
     return name.replace('\n', ' ').replace('\r', '').replace('*', '').replace('_', '').strip()
-
-def to_small_caps(text):
-    small_caps_map = {
-        'a': 'ᴀ', 'b': 'ʙ', 'c': 'ᴄ', 'd': 'ᴅ', 'e': 'ᴇ', 'f': 'ғ', 'g': 'ɢ',
-        'h': 'ʜ', 'i': 'ɪ', 'j': 'ᴊ', 'k': 'ᴋ', 'l': 'ʟ', 'm': 'ᴍ', 'n': 'ɴ',
-        'o': 'ᴏ', 'p': 'ᴘ', 'q': 'ǫ', 'r': 'ʀ', 's': 's', 't': 'ᴛ', 'u': 'ᴜ',
-        'v': 'ᴠ', 'w': 'ᴡ', 'x': 'x', 'y': 'ʏ', 'z': 'ᴢ'
-    }
-    return "".join(char if char.isupper() else small_caps_map.get(char.lower(), char) for char in text)
 
 def get_faster_player(b):
     p1_spd = b["p1_team"][b["p1_idx"]]["spd"]
@@ -113,6 +134,7 @@ def challenge_timeout(bot, chat_id, message_id):
 
 def end_battle(battle_id, bot=None, chat_id=None):
     b = pvp_battles.pop(battle_id, None)
+    clear_edit_tracking(battle_id)
     if b:
         if "timer" in b and b["timer"]: b["timer"].cancel()
         if bot and "tracked_msgs" in b:
@@ -134,6 +156,7 @@ def battle_timeout(bot, chat_id, battle_id):
         winner_id = b["p2_id"] if turn == "p1" else b["p1_id"]
         
         pvp_battles.pop(battle_id, None)
+        clear_edit_tracking(battle_id)
         
         try: db.update_battle_stats(loser_id, is_win=False)
         except Exception as e: logger.error(f"Stat Save Error: {e}")
@@ -362,7 +385,7 @@ def render_pvp_ui(bot, chat_id, battle_id):
         if b["state"] == "switch_menu":
             ui_text += f"\n🔄 *Wʜɪᴄʜ Pᴏᴋᴇ́ᴍᴏɴ Wɪʟʟ Yᴏᴜ Sᴡɪᴛᴄʜ Tᴏ?*\n"
         else:
-            ui_text += f"\n💀 *Cʜᴏᴏsᴇ A Pᴏᴋᴇ́ᴍᴏɴ Tᴏ Sᴇɴᴅ Oᴜᴛ\\!*\n"
+            ui_text += f"\n *Cʜᴏᴏsᴇ A Pᴏᴋᴇ́ᴍᴏɴ Tᴏ Sᴇɴᴅ Oᴜᴛ\\!*\n"
             
         btns = [types.InlineKeyboardButton(f"{i+1}" if p['hp'] > 0 else f"✖️ {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
         
@@ -398,7 +421,7 @@ def handle_myteam_command(bot, message):
             break
     
     if not battle_to_show:
-        return bot.reply_to(message, escape_md("❌ You are not currently in a PvP battle."), parse_mode="MarkdownV2")
+        return bot.reply_to(message, escape_md("You are not currently in a PvP battle."), parse_mode="MarkdownV2")
         
     lines = ["🎒 *Yᴏᴜʀ Cᴜʀʀᴇɴᴛ PᴠP Tᴇᴀᴍ:*\n"]
     for i, p in enumerate(battle_to_show[turn + '_team']):
@@ -936,7 +959,7 @@ def handle_pvp_callback(bot, call):
                         poke_id = get_pokemon_id_sync(search_name)
                         if poke_id:
                             img_url = official_shiny_artwork_url(poke_id)
-                            cap_text = f"{icon} {to_small_caps(old_name)}... {to_small_caps(action_verb)} ɪɴᴛᴏ {to_small_caps(new_name)}!"
+                            cap_text = f"{icon} {old_name}... {action_verb} into {new_name}!"
                             caption = f"*{escape_md(cap_text)}*"
                             try: bot.send_photo(call.message.chat.id, img_url, caption=caption, parse_mode="MarkdownV2", reply_to_message_id=battle_id)
                             except Exception as e:
