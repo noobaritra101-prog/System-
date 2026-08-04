@@ -265,8 +265,8 @@ def build_inspect_keyboard(user_id, name, active_page):
     kb.row(*row1)
     kb.row(*row2)
     kb.row(
-        types.InlineKeyboardButton("🪸 Relearner", callback_data="ignore" if active_page == "r" else f"insp_r_{user_id}_{name[:20]}"),
-        types.InlineKeyboardButton("♻️ Release", callback_data=f"insprel_{user_id}_{name[:32]}")
+        types.InlineKeyboardButton("Relearner", callback_data="ignore" if active_page == "r" else f"insp_r_{user_id}_{name[:20]}"),
+        types.InlineKeyboardButton("Release", callback_data=f"insprel_{user_id}_{name[:32]}")
     )
     return kb
 
@@ -332,17 +332,19 @@ def build_inspect_page(user_id, name, page_code="i"):
 
 
 # ================== MOVE RELEARNER (part of /inspect) ==================
-RELEARN_PAGE_SIZE = 3
+RELEARN_PAGE_SIZE = 8
 
 def build_relearner_page(user_id, name, list_page=0):
     """Returns (caption, keyboard) for one page of the Move Relearner list — up to
-    RELEARN_PAGE_SIZE moves, numbered, with Prev/Next pagination."""
+    RELEARN_PAGE_SIZE moves, numbered, with Previous/Next pagination and a Back button.
+    Keyboard is deliberately minimal: number buttons, Previous/Next, Back — no other nav."""
     moves = get_pokemon_relearn_moves_sync(name)
-    header = f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)\n\n🪸 *Mᴏᴠᴇ Rᴇʟᴇᴀʀɴᴇʀ*\n\n"
+    header = f"*{escape_md(name.capitalize())}* \\(Shiny\\)\n\nMove Relearner\n\n"
 
     if not moves:
-        caption = header + escape_md("⚠️ Couldn't load learnable moves right now — try again shortly.")
-        return caption, build_inspect_keyboard(user_id, name, "r")
+        caption = header + escape_md("Couldn't load learnable moves right now — try again shortly.")
+        kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Back", callback_data=f"insp_i_{user_id}_{name[:20]}"))
+        return caption, kb
 
     pages = [moves[i:i + RELEARN_PAGE_SIZE] for i in range(0, len(moves), RELEARN_PAGE_SIZE)]
     if list_page < 0: list_page = 0
@@ -353,19 +355,24 @@ def build_relearner_page(user_id, name, list_page=0):
     for i, m in enumerate(page_moves, start=1):
         emoji = TYPE_EMOJIS.get(m["type"], "")
         blocks.append(f"{i}\\. {escape_md(m['name'])} \\[{emoji}\\]  \\[{escape_md(m['category'])}\\]\nPower: {m['power']}        Accuracy: {m['acc']}")
-    caption = header + "\n\n".join(blocks) + f"\n\n📃 Pᴀɢᴇ【{list_page + 1} / {len(pages)}】"
+    caption = header + "\n\n".join(blocks)
+    if len(pages) > 1:
+        caption += f"\n\nPage {list_page + 1} / {len(pages)}"
 
-    kb = build_inspect_keyboard(user_id, name, "r")
-    kb.row(*[types.InlineKeyboardButton(str(i + 1), callback_data=f"rels_{list_page}_{i}_{user_id}_{name[:16]}") for i in range(len(page_moves))])
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    num_buttons = [types.InlineKeyboardButton(str(i + 1), callback_data=f"rels_{list_page}_{i}_{user_id}_{name[:16]}") for i in range(len(page_moves))]
+    for i in range(0, len(num_buttons), 3):
+        kb.row(*num_buttons[i:i + 3])
 
     nav_row = []
     if list_page > 0:
-        nav_row.append(types.InlineKeyboardButton("◀️ Prev", callback_data=f"relp_{list_page - 1}_{user_id}_{name[:16]}"))
+        nav_row.append(types.InlineKeyboardButton("Previous", callback_data=f"relp_{list_page - 1}_{user_id}_{name[:16]}"))
     if list_page < len(pages) - 1:
-        nav_row.append(types.InlineKeyboardButton("Next ▶️", callback_data=f"relp_{list_page + 1}_{user_id}_{name[:16]}"))
+        nav_row.append(types.InlineKeyboardButton("Next", callback_data=f"relp_{list_page + 1}_{user_id}_{name[:16]}"))
     if nav_row:
         kb.row(*nav_row)
 
+    kb.row(types.InlineKeyboardButton("Back", callback_data=f"insp_i_{user_id}_{name[:20]}"))
     return caption, kb
 
 
@@ -383,18 +390,20 @@ def build_relearn_slot_page(user_id, name, list_page, move_idx):
     if not current_moves: return None, None
 
     n_emoji = TYPE_EMOJIS.get(new_move["type"], "")
-    header = (f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)\n\n"
-              f"🪸 *Lᴇᴀʀɴ {escape_md(new_move['name'])}* \\[{n_emoji}\\]?\n\n"
-              f"Sᴇʟᴇᴄᴛ ᴀ ᴄᴜʀʀᴇɴᴛ ᴍᴏᴠᴇ ᴛᴏ ғᴏʀɢᴇᴛ:\n\n")
+    header = (f"*{escape_md(name.capitalize())}* \\(Shiny\\)\n\n"
+              f"Learn {escape_md(new_move['name'])} \\[{n_emoji}\\]?\n\n"
+              f"Select a current move to forget:\n\n")
     lines = []
     for i, m in enumerate(current_moves, start=1):
         m_emoji = TYPE_EMOJIS.get(m.get("type", "Normal"), "")
         lines.append(f"{i}\\. {escape_md(m['name'])} \\[{m_emoji}\\]  Power: {m['power']}, Accuracy: {m['acc']}")
     caption = header + "\n".join(lines)
 
-    kb = types.InlineKeyboardMarkup(row_width=4)
-    kb.row(*[types.InlineKeyboardButton(str(i + 1), callback_data=f"relr_{list_page}_{move_idx}_{i}_{user_id}_{name[:12]}") for i in range(len(current_moves))])
-    kb.row(types.InlineKeyboardButton("❌ Cancel", callback_data=f"relp_{list_page}_{user_id}_{name[:16]}"))
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    num_buttons = [types.InlineKeyboardButton(str(i + 1), callback_data=f"relr_{list_page}_{move_idx}_{i}_{user_id}_{name[:12]}") for i in range(len(current_moves))]
+    for i in range(0, len(num_buttons), 3):
+        kb.row(*num_buttons[i:i + 3])
+    kb.row(types.InlineKeyboardButton("Back", callback_data=f"relp_{list_page}_{user_id}_{name[:16]}"))
     return caption, kb
 
 
@@ -720,15 +729,15 @@ def register_user_handlers(bot, active_hunts):
                 if str(call.from_user.id) != uid_str:
                     return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
 
-                small_name = to_small_caps(name.capitalize())
-                caption = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
-                           f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
-                           f"*{escape_md(small_name)}?*\n\n"
-                           f"*Tʜɪs Aᴄᴛɪᴏɴ Cᴀɴɴᴏᴛ Bᴇ Uɴᴅᴏɴᴇ\\.*")
+                name_disp = name.capitalize()
+                caption = (f"⚠️ *Confirm Release*\n\n"
+                           f"Are you sure you want to release\n"
+                           f"*{escape_md(name_disp)}*?\n\n"
+                           f"This action cannot be undone\\.")
                 kb = types.InlineKeyboardMarkup(row_width=2)
                 kb.add(
-                    types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"insprelc_Y_{call.from_user.id}_{name[:32]}"),
-                    types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"insprelc_N_{call.from_user.id}_{name[:32]}")
+                    types.InlineKeyboardButton("Confirm", callback_data=f"insprelc_Y_{call.from_user.id}_{name[:32]}"),
+                    types.InlineKeyboardButton("Cancel", callback_data=f"insprelc_N_{call.from_user.id}_{name[:32]}")
                 )
                 try:
                     bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -760,8 +769,8 @@ def register_user_handlers(bot, active_hunts):
                     return bot.answer_callback_query(call.id, "❌ Release cancelled.")
 
                 ok = db.delete_pokemon(call.from_user.id, name)
-                small_name = to_small_caps(name.capitalize())
-                caption = f"👋 *{escape_md(small_name)} Wᴀs Rᴇʟᴇᴀsᴇᴅ\\.*" if ok else escape_md("⚠️ Couldn't release that Pokémon.")
+                name_disp = name.capitalize()
+                caption = f"*{escape_md(name_disp)} was released\\.*" if ok else escape_md("Couldn't release that Pokémon.")
                 try:
                     bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None, parse_mode="MarkdownV2")
                 except Exception:
@@ -787,16 +796,15 @@ def register_user_handlers(bot, active_hunts):
                 text, kb = generate_did_you_mean(poke_name_raw, user_pokemon, "dym_rel", message.from_user.id)
                 return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
                 
-            small_name = to_small_caps(poke_name)
-            text = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
-                    f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
-                    f"*{escape_md(small_name)}?*\n\n"
-                    f"*Tʜɪs Aᴄᴛɪᴏɴ Cᴀɴɴᴏᴛ Bᴇ Uɴᴅᴏɴᴇ\\.*")
+            text = (f"⚠️ *Confirm Release*\n\n"
+                    f"Are you sure you want to release\n"
+                    f"*{escape_md(poke_name)}*?\n\n"
+                    f"This action cannot be undone\\.")
             
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(
-                types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"relc_Y_{message.from_user.id}_{poke_name[:32]}"),
-                types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"relc_N_{message.from_user.id}_{poke_name[:32]}")
+                types.InlineKeyboardButton("Confirm", callback_data=f"relc_Y_{message.from_user.id}_{poke_name[:32]}"),
+                types.InlineKeyboardButton("Cancel", callback_data=f"relc_N_{message.from_user.id}_{poke_name[:32]}")
             )
             safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
         threading.Thread(target=process).start()
