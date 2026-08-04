@@ -14,6 +14,7 @@ import trade
 import commands 
 import admin 
 import gym  # 🏅 NEW: Import the Gym module!
+import backup
 
 from api_utils import escape_md
 
@@ -241,7 +242,9 @@ def cb_handler(call):
 
 # ================== RUN ==================
 if __name__ == "__main__":
+    backup.restore_database_on_startup(bot)  # restore data.json from log group if missing
     db.init_db()
+    backup.start_auto_backup(bot)            # backup every 20 min: send, pin, delete previous
     logger.info("Bot is starting...")
     bot.delete_webhook()
     bot.infinity_polling(skip_pending=True)
