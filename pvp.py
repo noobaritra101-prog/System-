@@ -313,8 +313,11 @@ def render_pvp_ui(bot, chat_id, battle_id):
     log_content = b['log'].strip() if b['log'] else "The battle begins\\!"
     
     # ⚡ UPDATED FORMAT: Safely wrap status brackets so escape_md prints them out correctly as [PSN ☠️]
-    act_status = f"\n \\[{STATUS_EMOJIS.get(active_poke['status'], '')}\\]" if active_poke.get('status') else ""
-    def_status = f"\n \\[{STATUS_EMOJIS.get(def_poke['status'], '')}\\]" if def_poke.get('status') else ""
+    # Built as plain text — escape_md() below (applied once, at insertion) handles all escaping.
+    # Previously this pre-escaped the brackets AND got escape_md()'d again at insertion,
+    # double-escaping them into visible stray backslashes like "\[PAR\]" in the rendered message.
+    act_status = f"\n [{STATUS_EMOJIS.get(active_poke['status'], '')}]" if active_poke.get('status') else ""
+    def_status = f"\n [{STATUS_EMOJIS.get(def_poke['status'], '')}]" if def_poke.get('status') else ""
     
     act_mega = get_form_icon(active_poke['name'], active_poke.get("is_mega"))
     def_mega = get_form_icon(def_poke['name'], def_poke.get("is_mega"))
@@ -366,8 +369,8 @@ def render_pvp_ui(bot, chat_id, battle_id):
             
             kb.row(types.InlineKeyboardButton(btn_lbl, callback_data=f"pvp_mega_{battle_id}_{turn}"))
             
-        kb.row(types.InlineKeyboardButton(" Switch", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
-               types.InlineKeyboardButton(" Run", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
+        kb.row(types.InlineKeyboardButton("Switch", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
+               types.InlineKeyboardButton("Run", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
                
     elif b["state"] == "mega_xy_choice":
         ui_text += f" Choose a Mega Evolution form:\n"
@@ -404,13 +407,13 @@ def render_pvp_ui(bot, chat_id, battle_id):
             if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
             else: kb.add(btns[i])
         
-        kb.row(types.InlineKeyboardButton(" View Team", callback_data=f"pvp_viewteam_{battle_id}_{turn}"))
+        kb.row(types.InlineKeyboardButton("📋 View Team", callback_data=f"pvp_viewteam_{battle_id}_{turn}"))
         if b["state"] == "switch_menu": 
             kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
             
     elif b["state"] == "run_confirm":
-        ui_text += f" *⚠ Are you sure you want to flee the battle?*\n"
-        kb.row(types.InlineKeyboardButton("Confirm Flee", callback_data=f"pvp_run_{battle_id}_{turn}"),
+        ui_text += f" *⚠️ Are you sure you want to flee the battle?*\n"
+        kb.row(types.InlineKeyboardButton("✅ Confirm Flee", callback_data=f"pvp_run_{battle_id}_{turn}"),
                types.InlineKeyboardButton("Cancel", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
     safe_edit(bot, ui_text, chat_id, battle_id, reply_markup=kb)
@@ -462,7 +465,7 @@ def handle_myteam_command(bot, message):
         bot.reply_to(message, escape_md("✅ Detailed team sent to your DMs! It will auto-delete when the battle ends."), parse_mode="MarkdownV2")
     except Exception as e:
         logger.error(f"Myteam DM error: {e}")
-        bot.reply_to(message, escape_md("❌ Please start the bot in DM first to receive your team list!"), parse_mode="MarkdownV2")
+        bot.reply_to(message, escape_md("Please start the bot in DM first to receive your team list!"), parse_mode="MarkdownV2")
 
 def handle_pvp_command(bot, message):
     if not message.reply_to_message: 
@@ -471,14 +474,14 @@ def handle_pvp_command(bot, message):
     target = message.reply_to_message
     
     if target.from_user.is_bot or target.sender_chat:
-        err_msg = "❌ *Invalid Target\\!*\n*You Can Only Challenge Real Trainers\\.*"
+        err_msg = "*Invalid Target\\!*\n*You Can Only Challenge Real Trainers\\.*"
         return bot.reply_to(message, err_msg, parse_mode="MarkdownV2")
         
     p1_id = message.from_user.id
     p2_id = target.from_user.id
     
     if p1_id == p2_id: 
-        return bot.reply_to(message, escape_md("❌ You can't challenge yourself!"))
+        return bot.reply_to(message, escape_md("You can't challenge yourself!"))
         
     if not db.get_user(p1_id):
         return bot.reply_to(message, escape_md("⚠️ You need to /start the bot first!"))
@@ -494,7 +497,7 @@ def handle_pvp_command(bot, message):
         return bot.reply_to(message, err_msg, reply_markup=kb, parse_mode="MarkdownV2")
     
     if is_in_battle(p1_id) or is_in_battle(p2_id): 
-        err_msg = "❌ *Challenge Failed\\!*\n*One Of The Trainers Is Already In A Battle\\.*"
+        err_msg = "*Challenge Failed\\!*\n*One Of The Trainers Is Already In A Battle\\.*"
         return bot.reply_to(message, err_msg, parse_mode="MarkdownV2")
 
     to_remove = []
@@ -502,13 +505,13 @@ def handle_pvp_command(bot, message):
         if p1_id in [c["p1_id"], c["p2_id"]]:
             c["timer"].cancel()
             to_remove.append(mid)
-            err_msg = "❌ *Challenge Cancelled\\!*\n*A New Challenge Was Started\\.*"
+            err_msg = "*Challenge Cancelled\\!*\n*A New Challenge Was Started\\.*"
             safe_edit(bot, err_msg, c["chat_id"], mid)
             
     for mid in to_remove: pending_challenges.pop(mid, None)
 
     if is_in_pending_challenge(p2_id): 
-        err_msg = "❌ *Challenge Failed\\!*\n*One Of The Trainers Is Already In A Battle\\.*"
+        err_msg = "*Challenge Failed\\!*\n*One Of The Trainers Is Already In A Battle\\.*"
         return bot.reply_to(message, err_msg, parse_mode="MarkdownV2")
 
     mode, size, can_switch, status_effects = db.get_pvp_settings(p1_id)
@@ -571,19 +574,19 @@ def handle_pvp_callback(bot, call):
 
         elif action == "decline":
             p1_id, p2_id = int(parts[2]), int(parts[3])
-            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "❌ Not your challenge!", show_alert=True)
+            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "Not your challenge!", show_alert=True)
             
             battle_id = call.message.message_id
             chal_data = pending_challenges.pop(battle_id, None)
             
             if chal_data: chal_data["timer"].cancel()
-            safe_edit(bot, "❌ *Challenge Declined\\.*", call.message.chat.id, battle_id)
+            safe_edit(bot, "*Challenge Declined\\.*", call.message.chat.id, battle_id)
             safe_answer(bot, call.id, "Challenge declined.")
             return
 
         if action == "accept":
             p1_id, p2_id = int(parts[2]), int(parts[3])
-            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "❌ Not your challenge!", show_alert=True)
+            if call.from_user.id != p2_id: return safe_answer(bot, call.id, "Not your challenge!", show_alert=True)
             
             battle_id = call.message.message_id
             chal_data = pending_challenges.pop(battle_id, None)
@@ -609,7 +612,7 @@ def handle_pvp_callback(bot, call):
                     # 🛡️ FIX: Safety check if PokeAPI completely timed out and returned None
                     if not t1_draft or not t2_draft:
                         logger.error("PvP Fetch Error: generate_random_team returned None.")
-                        safe_edit(bot, "❌ *Api timeout\\. The server could not generate teams fast enough\\. Please try again\\.*", call.message.chat.id, battle_id)
+                        safe_edit(bot, "*Api timeout\\. The server could not generate teams fast enough\\. Please try again\\.*", call.message.chat.id, battle_id)
                         return
 
                     t1_final, t2_final = [], []
@@ -682,7 +685,7 @@ def handle_pvp_callback(bot, call):
                     render_pvp_ui(bot, call.message.chat.id, battle_id)
                 except Exception as e:
                     logger.error(f"PvP Fetch Error:\n{traceback.format_exc()}")
-                    safe_edit(bot, "❌ *Failed to load Pokémon data\\. Please try challenging again\\.*", call.message.chat.id, battle_id)
+                    safe_edit(bot, "*Failed to load Pokémon data\\. Please try challenging again\\.*", call.message.chat.id, battle_id)
                     
             threading.Thread(target=setup).start()
             return
@@ -701,8 +704,8 @@ def handle_pvp_callback(bot, call):
                     return safe_answer(bot, call.id, "🔄 Syncing battle state...", show_alert=False)
 
             if call.from_user.id != b[button_turn + "_id"]: 
-                if action == "viewteam": return safe_answer(bot, call.id, "❌ Cannot view opponent's team!", show_alert=True)
-                return safe_answer(bot, call.id, "❌ Not your buttons!", show_alert=True)
+                if action == "viewteam": return safe_answer(bot, call.id, "Cannot view opponent's team!", show_alert=True)
+                return safe_answer(bot, call.id, "Not your buttons!", show_alert=True)
 
             if actual_turn == "processing": 
                 if time.time() - b.get("processing_start", 0) > 0.8:
