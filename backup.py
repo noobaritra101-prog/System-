@@ -65,6 +65,7 @@ def backup_database(bot):
                 f,
                 visible_file_name=DATA_FILE,
                 caption="🗄️ Auto-backup",
+                parse_mode=None,  # bot-wide default is MarkdownV2; caption isn't escaped, so opt out
             )
 
         bot.pin_chat_message(LOG_GROUP_ID, sent.message_id, disable_notification=True)
