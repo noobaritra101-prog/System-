@@ -251,20 +251,19 @@ def get_dex_text(name, page="info"):
         return (f"📊 *Base Stats: {escape_md(name.capitalize())}*\n━━━━━━━━━━━━━━\n{stats_str}\n━━━━━━━━━━━━━━\n📈 *Total:* {sum(stats.values())}")
 
 # ================== /inspect: 4-page paginated view (Info / Stats / Move set / IV & EV) ==================
-INSPECT_PAGES = [("i", "ℹ️ Info"), ("s", "📊 Stats"), ("m", "⚔️ Move set"), ("v", "🧬 IV & EV")]
+INSPECT_PAGES = [("i", "Info"), ("s", "Stats"), ("v", "IV & EV"), ("m", "Move Set")]
 IV_ORDER = ["hp", "atk", "def", "spa", "spd", "spe"]
 STAT_KEY_MAP = {"Hp": "hp", "Attack": "atk", "Defense": "def", "Special attack": "spa", "Special defense": "spd", "Speed": "spe"}
 STAT_LABELS = {"hp": "HP", "atk": "Attack", "def": "Defense", "spa": "Sp. Attack", "spd": "Sp. Defense", "spe": "Speed"}
 
 def build_inspect_keyboard(user_id, name, active_page):
-    kb = types.InlineKeyboardMarkup(row_width=4)
-    row = []
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    row1, row2 = [], []
     for code, label in INSPECT_PAGES:
-        if code == active_page:
-            row.append(types.InlineKeyboardButton(f"✅ {label}", callback_data="ignore"))
-        else:
-            row.append(types.InlineKeyboardButton(label, callback_data=f"insp_{code}_{user_id}_{name[:20]}"))
-    kb.add(*row)
+        btn = types.InlineKeyboardButton(label, callback_data="ignore" if code == active_page else f"insp_{code}_{user_id}_{name[:20]}")
+        (row1 if code != "m" else row2).append(btn)
+    kb.row(*row1)
+    kb.row(*row2)
     return kb
 
 def build_inspect_page(user_id, name, page_code="i"):
