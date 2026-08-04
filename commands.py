@@ -15,7 +15,7 @@ import trade
 from config import LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 from api_utils import (escape_md, fetch_random_pokemon_id_and_name_sync, official_shiny_artwork_url, 
                        get_species_catch_rate_sync, get_pokemon_stats_sync, get_pokemon_id_sync, 
-                       get_pokemon_moveset_sync, REGION_DEX, LEGENDARY_NAMES, pokemon_name_to_id_cache)
+                       get_pokemon_moveset_sync, get_pokemon_relearn_moves_sync, REGION_DEX, LEGENDARY_NAMES, pokemon_name_to_id_cache)
 
 TYPE_EMOJIS = {
     'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
@@ -264,6 +264,10 @@ def build_inspect_keyboard(user_id, name, active_page):
         (row1 if code != "m" else row2).append(btn)
     kb.row(*row1)
     kb.row(*row2)
+    kb.row(
+        types.InlineKeyboardButton("🪸 Relearner", callback_data="ignore" if active_page == "r" else f"insp_r_{user_id}_{name[:20]}"),
+        types.InlineKeyboardButton("♻️ Release", callback_data=f"insprel_{user_id}_{name[:32]}")
+    )
     return kb
 
 def build_inspect_page(user_id, name, page_code="i"):
@@ -273,6 +277,9 @@ def build_inspect_page(user_id, name, page_code="i"):
     if not poke_id: return None, None
     types_list, base_stats = get_pokemon_stats_sync(name)
     if not base_stats: return None, None
+
+    if page_code == "r":
+        return build_relearner_page(user_id, name, 0)
 
     details = db.get_pokemon_details(user_id, name)
     if not details: return None, None
@@ -294,7 +301,7 @@ def build_inspect_page(user_id, name, page_code="i"):
         caption = header + "\n".join(lines)
 
     elif page_code == "m":
-        moves = get_pokemon_moveset_sync(name)
+        moves = db.get_pokemon_custom_moves(user_id, name) or get_pokemon_moveset_sync(name)
         if not moves:
             caption = header + escape_md("⚠️ Couldn't load move data right now — try again shortly.")
         else:
@@ -323,6 +330,72 @@ def build_inspect_page(user_id, name, page_code="i"):
     kb = build_inspect_keyboard(user_id, name, page_code)
     return caption, kb
 
+
+# ================== MOVE RELEARNER (part of /inspect) ==================
+RELEARN_PAGE_SIZE = 3
+
+def build_relearner_page(user_id, name, list_page=0):
+    """Returns (caption, keyboard) for one page of the Move Relearner list — up to
+    RELEARN_PAGE_SIZE moves, numbered, with Prev/Next pagination."""
+    moves = get_pokemon_relearn_moves_sync(name)
+    header = f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)\n\n🪸 *Mᴏᴠᴇ Rᴇʟᴇᴀʀɴᴇʀ*\n\n"
+
+    if not moves:
+        caption = header + escape_md("⚠️ Couldn't load learnable moves right now — try again shortly.")
+        return caption, build_inspect_keyboard(user_id, name, "r")
+
+    pages = [moves[i:i + RELEARN_PAGE_SIZE] for i in range(0, len(moves), RELEARN_PAGE_SIZE)]
+    if list_page < 0: list_page = 0
+    if list_page >= len(pages): list_page = len(pages) - 1
+    page_moves = pages[list_page]
+
+    blocks = []
+    for i, m in enumerate(page_moves, start=1):
+        emoji = TYPE_EMOJIS.get(m["type"], "")
+        blocks.append(f"{i}\\. {escape_md(m['name'])} \\[{emoji}\\]  \\[{escape_md(m['category'])}\\]\nPower: {m['power']}        Accuracy: {m['acc']}")
+    caption = header + "\n\n".join(blocks) + f"\n\n📃 Pᴀɢᴇ【{list_page + 1} / {len(pages)}】"
+
+    kb = build_inspect_keyboard(user_id, name, "r")
+    kb.row(*[types.InlineKeyboardButton(str(i + 1), callback_data=f"rels_{list_page}_{i}_{user_id}_{name[:16]}") for i in range(len(page_moves))])
+
+    nav_row = []
+    if list_page > 0:
+        nav_row.append(types.InlineKeyboardButton("◀️ Prev", callback_data=f"relp_{list_page - 1}_{user_id}_{name[:16]}"))
+    if list_page < len(pages) - 1:
+        nav_row.append(types.InlineKeyboardButton("Next ▶️", callback_data=f"relp_{list_page + 1}_{user_id}_{name[:16]}"))
+    if nav_row:
+        kb.row(*nav_row)
+
+    return caption, kb
+
+
+def build_relearn_slot_page(user_id, name, list_page, move_idx):
+    """Returns (caption, keyboard) for the 'pick which current move to forget' screen,
+    after a move has been chosen from the relearner list."""
+    moves = get_pokemon_relearn_moves_sync(name)
+    pages = [moves[i:i + RELEARN_PAGE_SIZE] for i in range(0, len(moves), RELEARN_PAGE_SIZE)]
+    if not pages or list_page < 0 or list_page >= len(pages): return None, None
+    page_moves = pages[list_page]
+    if move_idx < 0 or move_idx >= len(page_moves): return None, None
+    new_move = page_moves[move_idx]
+
+    current_moves = db.get_pokemon_custom_moves(user_id, name) or get_pokemon_moveset_sync(name)
+    if not current_moves: return None, None
+
+    n_emoji = TYPE_EMOJIS.get(new_move["type"], "")
+    header = (f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)\n\n"
+              f"🪸 *Lᴇᴀʀɴ {escape_md(new_move['name'])}* \\[{n_emoji}\\]?\n\n"
+              f"Sᴇʟᴇᴄᴛ ᴀ ᴄᴜʀʀᴇɴᴛ ᴍᴏᴠᴇ ᴛᴏ ғᴏʀɢᴇᴛ:\n\n")
+    lines = []
+    for i, m in enumerate(current_moves, start=1):
+        m_emoji = TYPE_EMOJIS.get(m.get("type", "Normal"), "")
+        lines.append(f"{i}\\. {escape_md(m['name'])} \\[{m_emoji}\\]  Power: {m['power']}, Accuracy: {m['acc']}")
+    caption = header + "\n".join(lines)
+
+    kb = types.InlineKeyboardMarkup(row_width=4)
+    kb.row(*[types.InlineKeyboardButton(str(i + 1), callback_data=f"relr_{list_page}_{move_idx}_{i}_{user_id}_{name[:12]}") for i in range(len(current_moves))])
+    kb.row(types.InlineKeyboardButton("❌ Cancel", callback_data=f"relp_{list_page}_{user_id}_{name[:16]}"))
+    return caption, kb
 
 
 def send_leaderboard(bot, chat_id, user_id, message_id=None, mode="catch"):
@@ -554,6 +627,148 @@ def register_user_handlers(bot, active_hunts):
                 bot.answer_callback_query(call.id)
             except Exception:
                 logger.exception(f"❌ cq_inspect_page failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("relp_"))
+    def cq_relearner_page(call):
+        def process():
+            try:
+                _, page_str, uid_str, name = call.data.split("_", 3)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
+
+                caption, kb = build_relearner_page(call.from_user.id, name, int(page_str))
+                try:
+                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_relearner_page edit_message_caption failed: {call.data}")
+                bot.answer_callback_query(call.id)
+            except Exception:
+                logger.exception(f"❌ cq_relearner_page failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("rels_"))
+    def cq_relearner_select(call):
+        def process():
+            try:
+                _, page_str, idx_str, uid_str, name = call.data.split("_", 4)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
+
+                caption, kb = build_relearn_slot_page(call.from_user.id, name, int(page_str), int(idx_str))
+                if caption is None:
+                    return bot.answer_callback_query(call.id, "⚠️ That move is no longer available.", show_alert=True)
+
+                try:
+                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_relearner_select edit_message_caption failed: {call.data}")
+                bot.answer_callback_query(call.id)
+            except Exception:
+                logger.exception(f"❌ cq_relearner_select failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("relr_"))
+    def cq_relearner_replace(call):
+        def process():
+            try:
+                _, page_str, idx_str, slot_str, uid_str, name = call.data.split("_", 5)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
+
+                list_page, move_idx, slot = int(page_str), int(idx_str), int(slot_str)
+                moves = get_pokemon_relearn_moves_sync(name)
+                pages = [moves[i:i + RELEARN_PAGE_SIZE] for i in range(0, len(moves), RELEARN_PAGE_SIZE)]
+                if not pages or list_page < 0 or list_page >= len(pages) or move_idx < 0 or move_idx >= len(pages[list_page]):
+                    return bot.answer_callback_query(call.id, "⚠️ That move is no longer available.", show_alert=True)
+                new_move = pages[list_page][move_idx]
+
+                base_moves = db.get_pokemon_custom_moves(call.from_user.id, name) or get_pokemon_moveset_sync(name)
+                if not base_moves or slot < 0 or slot >= len(base_moves):
+                    return bot.answer_callback_query(call.id, "⚠️ Couldn't update that move.", show_alert=True)
+
+                old_move_name = base_moves[slot]["name"]
+                updated = db.set_pokemon_move_slot(call.from_user.id, name, base_moves, slot, new_move)
+                if not updated:
+                    return bot.answer_callback_query(call.id, "⚠️ Couldn't save that move.", show_alert=True)
+
+                caption, kb = build_relearner_page(call.from_user.id, name, list_page)
+                note = f"✅ *Fᴏʀɢᴏᴛ {escape_md(old_move_name)}, ʟᴇᴀʀɴᴇᴅ {escape_md(new_move['name'])}\\!*\n\n"
+                caption = note + caption
+                try:
+                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_relearner_replace edit_message_caption failed: {call.data}")
+                bot.answer_callback_query(call.id, "✅ Move updated!")
+            except Exception:
+                logger.exception(f"❌ cq_relearner_replace failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("insprel_"))
+    def cq_inspect_release_prompt(call):
+        def process():
+            try:
+                _, uid_str, name = call.data.split("_", 2)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
+
+                small_name = to_small_caps(name.capitalize())
+                caption = (f"⚠️ *Cᴏɴғɪʀᴍ Rᴇʟᴇᴀsᴇ*\n\n"
+                           f"*Aʀᴇ Yᴏᴜ Sᴜʀᴇ Yᴏᴜ Wᴀɴᴛ Tᴏ Rᴇʟᴇᴀsᴇ*\n"
+                           f"*{escape_md(small_name)}?*\n\n"
+                           f"*Tʜɪs Aᴄᴛɪᴏɴ Cᴀɴɴᴏᴛ Bᴇ Uɴᴅᴏɴᴇ\\.*")
+                kb = types.InlineKeyboardMarkup(row_width=2)
+                kb.add(
+                    types.InlineKeyboardButton("✅ Cᴏɴғɪʀᴍ", callback_data=f"insprelc_Y_{call.from_user.id}_{name[:32]}"),
+                    types.InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ", callback_data=f"insprelc_N_{call.from_user.id}_{name[:32]}")
+                )
+                try:
+                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_inspect_release_prompt edit_message_caption failed: {call.data}")
+                bot.answer_callback_query(call.id)
+            except Exception:
+                logger.exception(f"❌ cq_inspect_release_prompt failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("insprelc_"))
+    def cq_inspect_release_confirm(call):
+        def process():
+            try:
+                _, decision, uid_str, name = call.data.split("_", 3)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
+
+                if decision == "N":
+                    caption, kb = build_inspect_page(call.from_user.id, name, "i")
+                    if caption is None:
+                        return bot.answer_callback_query(call.id, "⚠️ Couldn't load that Pokémon.", show_alert=True)
+                    try:
+                        bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                    except Exception:
+                        logger.exception(f"cq_inspect_release_confirm(N) edit_message_caption failed: {call.data}")
+                    return bot.answer_callback_query(call.id, "❌ Release cancelled.")
+
+                ok = db.delete_pokemon(call.from_user.id, name)
+                small_name = to_small_caps(name.capitalize())
+                caption = f"👋 *{escape_md(small_name)} Wᴀs Rᴇʟᴇᴀsᴇᴅ\\.*" if ok else escape_md("⚠️ Couldn't release that Pokémon.")
+                try:
+                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_inspect_release_confirm(Y) edit_message_caption failed: {call.data}")
+                bot.answer_callback_query(call.id, "✅ Released." if ok else "⚠️ Failed.")
+            except Exception:
+                logger.exception(f"❌ cq_inspect_release_confirm failed entirely: {call.data}")
                 try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
                 except: pass
         threading.Thread(target=process).start()

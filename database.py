@@ -333,6 +333,47 @@ def list_user_pokemon_names(user_id):
         return []
 
 
+def get_pokemon_custom_moves(user_id, name):
+    """Returns the persisted, relearner-customized moveset (list of move dicts) for the
+    oldest matching catch, or None if that Pokémon still uses its default species moveset."""
+    try:
+        with _lock:
+            name_lower = (name or "").lower()
+            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
+            if not matches:
+                return None
+            oldest = min(matches, key=lambda p: p.get("id", 0))
+            moves = oldest.get("moves")
+            return [dict(m) for m in moves] if moves else None
+    except Exception:
+        logger.exception(f"❌ get_pokemon_custom_moves failed for user_id={user_id} name={name}")
+        return None
+
+
+def set_pokemon_move_slot(user_id, name, base_moves, slot_index, new_move):
+    """Replaces one move slot (0-based) in a user's Pokémon's moveset via the Move Relearner
+    and persists the full 4-move list. `base_moves` seeds the moveset the first time this
+    Pokémon is relearned (its current default species moves); afterwards the already-saved
+    custom moveset is reused as the base. Returns the updated 4-move list, or None on failure."""
+    try:
+        with _lock:
+            name_lower = (name or "").lower()
+            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
+            if not matches:
+                return None
+            oldest = min(matches, key=lambda p: p.get("id", 0))
+            current = oldest.get("moves") or [dict(m) for m in (base_moves or [])]
+            if slot_index < 0 or slot_index >= len(current):
+                return None
+            current[slot_index] = dict(new_move)
+            oldest["moves"] = current
+            _save()
+            return [dict(m) for m in current]
+    except Exception:
+        logger.exception(f"❌ set_pokemon_move_slot failed for user_id={user_id} name={name}")
+        return None
+
+
 def delete_pokemon(user_id, name):
     """⚡ Filters this user's catches first instead of sorting the entire
     (all-users) pokemons list, for the same reason as get_pokemon_ivs above."""

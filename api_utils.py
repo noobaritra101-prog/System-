@@ -6,6 +6,7 @@ import random
 import re
 import asyncio
 import threading
+import concurrent.futures
 from config import logger, MEGA_POKEMON
 
 pokemon_cache = {}
@@ -264,6 +265,46 @@ def get_pokemon_moveset_sync(pokemon_name):
     except Exception as e:
         logger.error(f"get_pokemon_moveset_sync failed for {pokemon_name}: {e}")
         return None
+
+
+_RELEARN_CACHE = {}
+
+def get_pokemon_relearn_moves_sync(pokemon_name):
+    """Returns the FULL list of damaging moves a species can learn (name/power/acc/type/
+    category), sorted strongest-first, for the /inspect Move Relearner. Every move's detail
+    has to be fetched once, so the result is cached in-memory per species after first lookup —
+    subsequent relearner page/select/replace callbacks reuse the exact same cached list, so a
+    given (page, index) always resolves back to the same move."""
+    name_lower = pokemon_name.lower()
+    if name_lower in _RELEARN_CACHE:
+        return _RELEARN_CACHE[name_lower]
+    try:
+        url = f"https://pokeapi.co/api/v2/pokemon/{name_lower}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+
+        all_move_urls = [m["move"]["url"] for m in data.get("moves", [])]
+        if not all_move_urls:
+            _RELEARN_CACHE[name_lower] = []
+            return []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+            results = list(ex.map(_fetch_move_detail_sync, all_move_urls))
+
+        seen = set()
+        unique_moves = []
+        for m in results:
+            if m and m["name"] not in seen:
+                seen.add(m["name"])
+                unique_moves.append(m)
+
+        unique_moves.sort(key=lambda x: x["power"], reverse=True)
+        _RELEARN_CACHE[name_lower] = unique_moves
+        return unique_moves
+    except Exception as e:
+        logger.error(f"get_pokemon_relearn_moves_sync failed for {pokemon_name}: {e}")
+        return []
 
 
 async def fetch_real_move_data(session, url):
