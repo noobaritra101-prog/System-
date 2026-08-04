@@ -366,8 +366,8 @@ def render_pvp_ui(bot, chat_id, battle_id):
             
             kb.row(types.InlineKeyboardButton(btn_lbl, callback_data=f"pvp_mega_{battle_id}_{turn}"))
             
-        kb.row(types.InlineKeyboardButton("🔄 Switch", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
-               types.InlineKeyboardButton("🏃 Run", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
+        kb.row(types.InlineKeyboardButton(" Switch", callback_data=f"pvp_swmenu_{battle_id}_{turn}"),
+               types.InlineKeyboardButton(" Run", callback_data=f"pvp_confirmrun_{battle_id}_{turn}"))
                
     elif b["state"] == "mega_xy_choice":
         ui_text += f" Choose a Mega Evolution form:\n"
@@ -393,20 +393,25 @@ def render_pvp_ui(bot, chat_id, battle_id):
         else:
             ui_text += f"\n *Choose A Pokémon To Send Out\\!*\n"
             
-        btns = [types.InlineKeyboardButton(f"{i+1}" if p['hp'] > 0 else f"✖️ {i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}") for i, p in enumerate(b[turn + "_team"])]
+        btns = []
+        for i, p in enumerate(b[turn + "_team"]):
+            if p['hp'] > 0:
+                btns.append(types.InlineKeyboardButton(f"{i+1}", callback_data=f"pvp_dosw_{battle_id}_{turn}_{i}"))
+            else:
+                btns.append(types.InlineKeyboardButton("—", callback_data=f"pvp_noop_{battle_id}_{turn}"))
         
         for i in range(0, len(btns), 2):
             if i + 1 < len(btns): kb.add(btns[i], btns[i+1])
             else: kb.add(btns[i])
         
-        kb.row(types.InlineKeyboardButton("📋 View Team", callback_data=f"pvp_viewteam_{battle_id}_{turn}"))
+        kb.row(types.InlineKeyboardButton(" View Team", callback_data=f"pvp_viewteam_{battle_id}_{turn}"))
         if b["state"] == "switch_menu": 
             kb.row(types.InlineKeyboardButton("🔙 Back", callback_data=f"pvp_back_{battle_id}_{turn}"))
             
     elif b["state"] == "run_confirm":
-        ui_text += f" *⚠️ Are you sure you want to flee the battle?*\n"
-        kb.row(types.InlineKeyboardButton("✅ Confirm Flee", callback_data=f"pvp_run_{battle_id}_{turn}"),
-               types.InlineKeyboardButton("❌ Cancel", callback_data=f"pvp_back_{battle_id}_{turn}"))
+        ui_text += f" *⚠ Are you sure you want to flee the battle?*\n"
+        kb.row(types.InlineKeyboardButton("Confirm Flee", callback_data=f"pvp_run_{battle_id}_{turn}"),
+               types.InlineKeyboardButton("Cancel", callback_data=f"pvp_back_{battle_id}_{turn}"))
 
     safe_edit(bot, ui_text, chat_id, battle_id, reply_markup=kb)
 
@@ -525,7 +530,9 @@ def handle_pvp_callback(bot, call):
         parts = call.data.split("_")
         action = parts[1]
         
-        if action == "settings":
+        if action == "noop":
+            return safe_answer(bot, call.id, "")
+        elif action == "settings":
             chal = pending_challenges.get(call.message.message_id)
             if chal and call.from_user.id == chal["p1_id"]: render_settings_ui(bot, call.message.chat.id, call.message.message_id, chal)
             return
