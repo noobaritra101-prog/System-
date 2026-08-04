@@ -33,6 +33,17 @@ NATURES = {
 }
 
 
+# ================== /mypokemon LIST SETTINGS ==================
+# Defaults for a user who hasn't touched /sort, /display or /pagesize yet.
+DEFAULT_LIST_SETTINGS = {
+    "sort_by": "order_caught",
+    "sort_dir": "asc",
+    "display": "none",
+    "show_numbering": True,
+    "page_size": 20,
+}
+
+
 def _random_ivs():
     return {stat: random.randint(0, 31) for stat in IV_STATS}
 
@@ -331,6 +342,65 @@ def list_user_pokemon_names(user_id):
     except Exception:
         logger.exception(f"❌ list_user_pokemon_names failed for user_id={user_id}")
         return []
+
+
+def list_user_pokemon_full(user_id):
+    """Per-catch records (id/name/ivs/iv_percent/nature) for a user, oldest first —
+    the raw data /mypokemon needs before applying the user's /sort, /display and
+    /pagesize settings."""
+    try:
+        with _lock:
+            rows = [p for p in data["pokemons"] if _user_matches(p, user_id)]
+            rows.sort(key=lambda p: p.get("id", 0))
+            return [
+                {
+                    "id": p.get("id", 0),
+                    "name": p.get("name"),
+                    "ivs": dict(p.get("ivs") or {}),
+                    "iv_percent": iv_percentage(p.get("ivs")),
+                    "nature": p.get("nature") or "Hardy",
+                }
+                for p in rows
+            ]
+    except Exception:
+        logger.exception(f"❌ list_user_pokemon_full failed for user_id={user_id}")
+        return []
+
+
+# ================== /mypokemon LIST SETTINGS (accessors) ==================
+def get_list_settings(user_id):
+    """Returns this user's /sort, /display and /pagesize preferences, backfilling
+    any keys missing (schema evolution / never-set-before users) with defaults."""
+    uid = str(user_id)
+    with _lock:
+        u = data["users"].get(uid)
+        if not u:
+            return dict(DEFAULT_LIST_SETTINGS)
+        settings = u.setdefault("list_settings", {})
+        changed = False
+        for k, v in DEFAULT_LIST_SETTINGS.items():
+            if k not in settings:
+                settings[k] = v
+                changed = True
+        if changed:
+            _save()
+        return dict(settings)
+
+
+def update_list_settings(user_id, **kwargs):
+    """Updates one or more of this user's list-view settings (sort_by, sort_dir,
+    display, show_numbering, page_size) and returns the merged, saved settings."""
+    uid = str(user_id)
+    with _lock:
+        u = data["users"].get(uid)
+        if not u:
+            return None
+        settings = u.setdefault("list_settings", dict(DEFAULT_LIST_SETTINGS))
+        for k, v in DEFAULT_LIST_SETTINGS.items():
+            settings.setdefault(k, v)
+        settings.update(kwargs)
+        _save()
+        return dict(settings)
 
 
 def get_pokemon_custom_moves(user_id, name):

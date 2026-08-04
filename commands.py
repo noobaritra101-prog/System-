@@ -33,6 +33,196 @@ IMAGE_CACHE = {}
 # ⚡ PERSISTENT THREAD POOL — reused across all calls, never re-created ⚡
 _TYPE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
+# ================== /mypokemon SORT / DISPLAY / PAGESIZE ==================
+# (number, settings_key, label) — number is what's shown on the menu buttons.
+SORT_OPTIONS = [
+    (1, "order_caught", "Order caught"),
+    (2, "dex_number", "Pokedex number"),
+    (3, "level", "Level"),
+    (4, "iv_points", "IV points"),
+    (5, "ev_points", "EV points"),
+    (6, "name", "Name"),
+    (7, "nature", "Nature"),
+    (8, "type", "Type"),
+    (9, "catch_rate", "Catch rate"),
+    (10, "stat_hp", "HP points"),
+    (11, "stat_atk", "Attack points"),
+    (12, "stat_def", "Defense points"),
+    (13, "stat_spa", "Sp Attack points"),
+    (14, "stat_spd", "Sp Defense points"),
+    (15, "stat_spe", "Speed points"),
+    (16, "stat_total", "Total stats points"),
+]
+DISPLAY_OPTIONS = [
+    (1, "none", "None"),
+    (2, "level", "Level"),
+    (3, "iv_points", "IV points"),
+    (4, "ev_points", "EV points"),
+    (5, "nature", "Nature"),
+    (6, "type", "Type"),
+    (7, "type_symbol", "Type symbol"),
+    (8, "catch_rate", "Catch rate"),
+    (9, "stat_hp", "HP points"),
+    (10, "stat_atk", "Attack points"),
+    (11, "stat_def", "Defense points"),
+    (12, "stat_spa", "Sp Attack points"),
+    (13, "stat_spd", "Sp Defense points"),
+    (14, "stat_spe", "Speed points"),
+    (15, "stat_total", "Total stats points"),
+]
+PAGE_SIZES = [10, 15, 20, 25]
+
+SORT_BY_NUM = {str(num): key for num, key, _ in SORT_OPTIONS}
+SORT_LABELS = {key: label for _, key, label in SORT_OPTIONS}
+DISPLAY_BY_NUM = {str(num): key for num, key, _ in DISPLAY_OPTIONS}
+DISPLAY_LABELS = {key: label for _, key, label in DISPLAY_OPTIONS}
+
+_STAT_SORT_KEYS = {
+    "stat_hp": "hp", "stat_atk": "atk", "stat_def": "def",
+    "stat_spa": "spa", "stat_spd": "spd", "stat_spe": "spe",
+}
+_STAT_ORDER = ["hp", "atk", "def", "spa", "spd", "spe"]
+_REVERSE_STAT_MAP = {"hp": "Hp", "atk": "Attack", "def": "Defense", "spa": "Special attack", "spd": "Special defense", "spe": "Speed"}
+
+# name.lower() -> {"dex": int, "types": [...], "catch_rate": int, "stats": {label: base}}
+_SPECIES_CACHE = {}
+_EMPTY_SPECIES_INFO = {"dex": 0, "types": [], "catch_rate": 0, "stats": {}}
+
+_NEEDS_SPECIES_SORT = {"dex_number", "type", "catch_rate"}
+_NEEDS_SPECIES_DISPLAY = {"type", "type_symbol", "catch_rate"}
+
+
+def get_species_info(name):
+    """Returns (and caches) {dex, types, catch_rate, stats} for a species name.
+    Safe to call from multiple threads — worst case a couple of callers both do the
+    (cheap, already-cached-downstream) lookup once and the last write wins."""
+    lname = (name or "").lower()
+    if lname in _SPECIES_CACHE:
+        return _SPECIES_CACHE[lname]
+    info = dict(_EMPTY_SPECIES_INFO)
+    try:
+        poke_id = get_pokemon_id_sync(lname)
+        if poke_id:
+            info["dex"] = poke_id
+            types_list, stats = get_pokemon_stats_sync(lname)
+            info["types"] = types_list or []
+            info["stats"] = stats or {}
+            info["catch_rate"] = get_species_catch_rate_sync(poke_id) or 0
+    except Exception:
+        pass
+    _SPECIES_CACHE[lname] = info
+    return info
+
+
+def _stat_points(entry, info, short_key):
+    base = info["stats"].get(_REVERSE_STAT_MAP.get(short_key, ""))
+    if base is None:
+        return 0
+    return db.calc_level_100_stat(base, entry["ivs"].get(short_key, 0), short_key, entry["nature"])
+
+
+def _stat_total(entry, info):
+    return sum(_stat_points(entry, info, k) for k in _STAT_ORDER)
+
+
+def _prewarm_species_cache(entries):
+    """Resolves species data (dex/type/catch-rate/base-stats) for every unique
+    species name in one pass, in parallel, so sorting/displaying by any of those
+    fields doesn't hammer PokeAPI once per owned Pokémon."""
+    unique_names = list({e["name"].lower() for e in entries if e.get("name")})
+    if unique_names:
+        list(_TYPE_EXECUTOR.map(get_species_info, unique_names))
+
+
+def sort_pokemon_entries(entries, sort_by, sort_dir):
+    if sort_by in _NEEDS_SPECIES_SORT or sort_by.startswith("stat_"):
+        _prewarm_species_cache(entries)
+
+    def key_fn(e):
+        info = _SPECIES_CACHE.get(e["name"].lower(), _EMPTY_SPECIES_INFO)
+        if sort_by == "dex_number": return info["dex"]
+        if sort_by == "level": return 100
+        if sort_by == "iv_points": return e["iv_percent"]
+        if sort_by == "ev_points": return 0
+        if sort_by == "name": return e["name"].lower()
+        if sort_by == "nature": return e["nature"].lower()
+        if sort_by == "type": return info["types"][0].lower() if info["types"] else ""
+        if sort_by == "catch_rate": return info["catch_rate"]
+        if sort_by == "stat_total": return _stat_total(e, info)
+        if sort_by in _STAT_SORT_KEYS: return _stat_points(e, info, _STAT_SORT_KEYS[sort_by])
+        return e["id"]  # order_caught / fallback
+
+    entries.sort(key=key_fn, reverse=(sort_dir == "desc"))
+    return entries
+
+
+def build_display_suffix(entry, info, display):
+    if display == "none": return ""
+    if display == "level": return " (Lv 100)"
+    if display == "iv_points": return f" ({entry['iv_percent']}%)"
+    if display == "ev_points": return " (0 EVs)"
+    if display == "nature": return f" [{entry['nature']}]"
+    if display == "type":
+        return f" [{'/'.join(info['types'])}]" if info["types"] else " [Unknown]"
+    if display == "type_symbol":
+        emojis = "/".join(TYPE_EMOJIS.get(t, '') for t in info["types"]).strip()
+        return f" {emojis}" if emojis else ""
+    if display == "catch_rate": return f" (CR {info['catch_rate']})"
+    if display == "stat_total": return f" ({_stat_total(entry, info)})"
+    if display in _STAT_SORT_KEYS: return f" ({_stat_points(entry, info, _STAT_SORT_KEYS[display])})"
+    return ""
+
+
+def build_sort_menu(uid):
+    settings = db.get_list_settings(uid)
+    sort_by, sort_dir = settings.get("sort_by", "order_caught"), settings.get("sort_dir", "asc")
+
+    text = "📊 *Hᴏᴡ ᴡᴏᴜʟᴅ ʏᴏᴜ ʟɪᴋᴇ ᴛᴏ sᴏʀᴛ ʏᴏᴜʀ ᴘᴏᴋᴇ́ᴍᴏɴ?*\n\n"
+    text += "\n".join(f"{num}\\. {escape_md(label)}" for num, key, label in SORT_OPTIONS if num <= 9)
+    text += "\n\n*Sᴏʀᴛ ʙʏ ᴘᴏᴋᴇ́ᴍᴏɴ sᴛᴀᴛ ᴘᴏɪɴᴛs:*\n" + escape_md("—" * 21) + "\n"
+    text += "\n".join(f"{num}\\. {escape_md(label)}" for num, key, label in SORT_OPTIONS if num > 9)
+    text += (f"\n\n📌 *Currently sorting by:* {escape_md(SORT_LABELS.get(sort_by, 'Order caught'))}\n"
+             f"↕️ *Direction:* {escape_md('Descending' if sort_dir == 'desc' else 'Ascending')}")
+
+    kb = types.InlineKeyboardMarkup(row_width=4)
+    row = []
+    for num, key, label in SORT_OPTIONS:
+        row.append(types.InlineKeyboardButton(str(num), callback_data=f"srt_{uid}_{num}"))
+        if len(row) == 4: kb.row(*row); row = []
+    if row: kb.row(*row)
+    kb.row(types.InlineKeyboardButton("🔃 Change Direction", callback_data=f"srtdir_{uid}"))
+    return text, kb
+
+
+def build_display_menu(uid):
+    settings = db.get_list_settings(uid)
+    display, show_numbering = settings.get("display", "none"), settings.get("show_numbering", True)
+
+    text = "🖼️ *Wʜɪᴄʜ ᴘᴏᴋᴇ́ᴍᴏɴ ᴅᴇᴛᴀɪʟ ᴡᴏᴜʟᴅ ʏᴏᴜ ʟɪᴋᴇ ᴛᴏ ᴅɪsᴘʟᴀʏ?*\n\n"
+    text += "\n".join(f"{num}\\. {escape_md(label)}" for num, key, label in DISPLAY_OPTIONS if num <= 8)
+    text += "\n\n*Dɪsᴘʟᴀʏ ᴘᴏᴋᴇ́ᴍᴏɴ sᴛᴀᴛ ᴘᴏɪɴᴛs:*\n" + escape_md("—" * 21) + "\n"
+    text += "\n".join(f"{num}\\. {escape_md(label)}" for num, key, label in DISPLAY_OPTIONS if num > 8)
+    text += (f"\n\n📌 *Currently displaying:* {escape_md(DISPLAY_LABELS.get(display, 'None'))}\n"
+             f"🔢 *Show pokemon numbering:* {escape_md('Yes' if show_numbering else 'No')}")
+
+    kb = types.InlineKeyboardMarkup(row_width=4)
+    row = []
+    for num, key, label in DISPLAY_OPTIONS:
+        row.append(types.InlineKeyboardButton(str(num), callback_data=f"dsp_{uid}_{num}"))
+        if len(row) == 4: kb.row(*row); row = []
+    if row: kb.row(*row)
+    kb.row(types.InlineKeyboardButton("🔢 Toggle Numbering", callback_data=f"dspnum_{uid}"))
+    return text, kb
+
+
+def build_pagesize_menu(uid):
+    settings = db.get_list_settings(uid)
+    page_size = settings.get("page_size", 20)
+    text = f"📄 *Hᴏᴡ ᴍᴀɴʏ ᴘᴏᴋᴇ́ᴍᴏɴ ᴡᴏᴜʟᴅ ʏᴏᴜ ʟɪᴋᴇ ᴛᴏ sᴇᴇ ᴘᴇʀ ᴘᴀɢᴇ?*\n\n📌 *Current page size:* {page_size}"
+    kb = types.InlineKeyboardMarkup(row_width=4)
+    kb.row(*[types.InlineKeyboardButton(str(s), callback_data=f"pgsz_{uid}_{s}") for s in PAGE_SIZES])
+    return text, kb
+
 def get_cached_image_payload(poke_id, img_url):
     """Fetches image from RAM instantly, or downloads it once and caches it forever."""
     if poke_id in IMAGE_CACHE:
@@ -111,13 +301,23 @@ def get_cached_type_str(poke_name):
     return ""
 
 def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
-    names = db.list_user_pokemon_names(uid)
-    if not names: return escape_md("🎒 No Pokémon found."), None
+    entries = db.list_user_pokemon_full(uid)
+    if not entries: return escape_md("🎒 No Pokémon found."), None
 
-    total_poke = len(names)
-    page_size = 20
-    pages = [names[i:i + page_size] for i in range(0, len(names), page_size)]
-    
+    settings = db.get_list_settings(uid)
+    sort_by = settings.get("sort_by", "order_caught")
+    sort_dir = settings.get("sort_dir", "asc")
+    display = settings.get("display", "none")
+    show_numbering = settings.get("show_numbering", True)
+    page_size = settings.get("page_size", 20)
+
+    if display in _NEEDS_SPECIES_DISPLAY or display.startswith("stat_"):
+        _prewarm_species_cache(entries)
+    entries = sort_pokemon_entries(entries, sort_by, sort_dir)
+
+    total_poke = len(entries)
+    pages = [entries[i:i + page_size] for i in range(0, len(entries), page_size)] or [[]]
+
     if page_idx < 0: page_idx = 0
     if page_idx >= len(pages): page_idx = len(pages) - 1
 
@@ -126,16 +326,21 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
     
     text = f"{title}\n━━━━━━━━━━━━━━━━\n📃 Pᴀɢᴇ【{page_idx + 1} / {len(pages)}】\n\n"
 
-    page_names = pages[page_idx]
-    
-    # ⚡ Reuse persistent executor — no spawn overhead per call
-    type_strings = list(_TYPE_EXECUTOR.map(get_cached_type_str, page_names))
+    page_entries = pages[page_idx]
+    for i, entry in enumerate(page_entries):
+        info = _SPECIES_CACHE.get(entry["name"].lower(), _EMPTY_SPECIES_INFO)
+        suffix = build_display_suffix(entry, info, display)
+        if show_numbering:
+            item_num = (page_idx * page_size) + i + 1
+            text += f"`{item_num:02d}.` {escape_md(entry['name'])}{escape_md(suffix)}\n"
+        else:
+            text += f"{escape_md(entry['name'])}{escape_md(suffix)}\n"
 
-    for i, name in enumerate(page_names):
-        item_num = (page_idx * page_size) + i + 1
-        text += f"`{item_num:02d}.` {escape_md(name)}{escape_md(type_strings[i])}\n"
-
-    text += f"\n📦 Tᴏᴛᴀʟ Pᴏᴋᴇ́ᴍᴏɴ — {total_poke}\n━━━━━━━━━━━━━━━━"
+    sort_arrow = "↓" if sort_dir == "desc" else "↑"
+    text += (f"\n📦 Tᴏᴛᴀʟ Pᴏᴋᴇ́ᴍᴏɴ — {total_poke}\n"
+             f"/sort by: {escape_md(SORT_LABELS.get(sort_by, 'Order caught'))} {sort_arrow}\n"
+             f"/display: {escape_md(DISPLAY_LABELS.get(display, 'None'))}\n"
+             f"/pagesize: {page_size}\n━━━━━━━━━━━━━━━━")
 
     kb = types.InlineKeyboardMarkup(row_width=2)
     if len(pages) > 1:
@@ -582,6 +787,132 @@ def register_user_handlers(bot, active_hunts):
             if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."))
             text, kb = generate_pokemon_list_ui(message.from_user.id, 0, action_prefix="mypoke", is_admin=False)
             safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+        threading.Thread(target=process).start()
+
+    @bot.message_handler(commands=["sort"])
+    def cmd_sort(message):
+        def process():
+            if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+            text, kb = build_sort_menu(message.from_user.id)
+            safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("srtdir_"))
+    def cq_sort_direction(call):
+        def process():
+            try:
+                _, uid_str = call.data.split("_", 1)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your menu.", show_alert=True)
+                current = db.get_list_settings(call.from_user.id)
+                new_dir = "asc" if current.get("sort_dir") == "desc" else "desc"
+                db.update_list_settings(call.from_user.id, sort_dir=new_dir)
+                text, kb = build_sort_menu(call.from_user.id)
+                try: bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception: logger.exception(f"cq_sort_direction edit failed: {call.data}")
+                bot.answer_callback_query(call.id, "✅ Direction changed.")
+            except Exception:
+                logger.exception(f"❌ cq_sort_direction failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("srt_"))
+    def cq_sort_select(call):
+        def process():
+            try:
+                _, uid_str, num_str = call.data.split("_", 2)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your menu.", show_alert=True)
+                sort_by = SORT_BY_NUM.get(num_str)
+                if not sort_by:
+                    return bot.answer_callback_query(call.id, "⚠️ Invalid option.", show_alert=True)
+                db.update_list_settings(call.from_user.id, sort_by=sort_by)
+                text, kb = build_sort_menu(call.from_user.id)
+                try: bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception: logger.exception(f"cq_sort_select edit failed: {call.data}")
+                bot.answer_callback_query(call.id, "✅ Sort updated.")
+            except Exception:
+                logger.exception(f"❌ cq_sort_select failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.message_handler(commands=["display"])
+    def cmd_display(message):
+        def process():
+            if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+            text, kb = build_display_menu(message.from_user.id)
+            safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dspnum_"))
+    def cq_display_numbering(call):
+        def process():
+            try:
+                _, uid_str = call.data.split("_", 1)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your menu.", show_alert=True)
+                current = db.get_list_settings(call.from_user.id)
+                db.update_list_settings(call.from_user.id, show_numbering=not current.get("show_numbering", True))
+                text, kb = build_display_menu(call.from_user.id)
+                try: bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception: logger.exception(f"cq_display_numbering edit failed: {call.data}")
+                bot.answer_callback_query(call.id, "✅ Numbering toggled.")
+            except Exception:
+                logger.exception(f"❌ cq_display_numbering failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dsp_"))
+    def cq_display_select(call):
+        def process():
+            try:
+                _, uid_str, num_str = call.data.split("_", 2)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your menu.", show_alert=True)
+                display = DISPLAY_BY_NUM.get(num_str)
+                if not display:
+                    return bot.answer_callback_query(call.id, "⚠️ Invalid option.", show_alert=True)
+                db.update_list_settings(call.from_user.id, display=display)
+                text, kb = build_display_menu(call.from_user.id)
+                try: bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception: logger.exception(f"cq_display_select edit failed: {call.data}")
+                bot.answer_callback_query(call.id, "✅ Display updated.")
+            except Exception:
+                logger.exception(f"❌ cq_display_select failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.message_handler(commands=["pagesize"])
+    def cmd_pagesize(message):
+        def process():
+            if not db.get_user(message.from_user.id): return safe_send(bot, message.chat.id, escape_md("⚠️ Please /start the bot first."), reply_to_id=message.message_id)
+            text, kb = build_pagesize_menu(message.from_user.id)
+            safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("pgsz_"))
+    def cq_pagesize_select(call):
+        def process():
+            try:
+                _, uid_str, size_str = call.data.split("_", 2)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your menu.", show_alert=True)
+                size = int(size_str)
+                if size not in PAGE_SIZES:
+                    return bot.answer_callback_query(call.id, "⚠️ Invalid page size.", show_alert=True)
+                db.update_list_settings(call.from_user.id, page_size=size)
+                text, kb = build_pagesize_menu(call.from_user.id)
+                try: bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception: logger.exception(f"cq_pagesize_select edit failed: {call.data}")
+                bot.answer_callback_query(call.id, "✅ Page size updated.")
+            except Exception:
+                logger.exception(f"❌ cq_pagesize_select failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
         threading.Thread(target=process).start()
 
     @bot.message_handler(commands=["inspect"])
