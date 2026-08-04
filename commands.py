@@ -447,10 +447,9 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
     if not poke_id: return safe_send(bot, chat_id, escape_md("❌ Failed to find a Pokémon. Try again."), reply_to_id)
 
     img_url = official_shiny_artwork_url(base_id)
-    caption = f"A Wɪʟᴅ ✨ {escape_md(to_small_caps(name.title()))} Aᴘᴘᴇᴀʀᴇᴅ ɪɴ {escape_md(to_small_caps(region))}\\!\n\n🎒 Wʜᴀᴛ Wɪʟʟ Yᴏᴜ Dᴏ, Tʀᴀɪɴᴇʀ?"
+    caption = f"A wild ✨ {escape_md(name.title())} has appeared\\!"
     kb = types.InlineKeyboardMarkup().add(
-        types.InlineKeyboardButton("🎯 Cᴀᴛᴄʜ", callback_data=f"catch_{user_id}_{poke_id}_{name[:16]}"),
-        types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"run_{user_id}_{name[:16]}")
+        types.InlineKeyboardButton("Catch", callback_data=f"catch_{user_id}_{poke_id}_{name[:16]}")
     )
 
     photo_payload = get_cached_image_payload(base_id, img_url)
@@ -475,7 +474,7 @@ def process_catch(bot, call, uid, pid, name):
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
     try:
-        try: bot.edit_message_caption(caption="🔴 *Yᴏᴜ ᴛʜʀᴇᴡ ᴀ Pᴏᴋᴇ́ʙᴀʟʟ\\!*", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
+        try: bot.edit_message_caption(caption="🔴 *You threw a Poké Ball\\!*", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
         except: pass
 
         catch_rate = get_species_catch_rate_sync(pid)
@@ -484,21 +483,36 @@ def process_catch(bot, call, uid, pid, name):
             caught_record = db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
             iv_pct = caught_record["iv_percent"] if caught_record else 0.0
             iv_pct_str = escape_md(str(iv_pct))
+            identifier = caught_record["id"] if caught_record else poke_name_capped
             try: tasks.check_and_update_catch(uid, poke_name_capped)
             except Exception: logger.exception(f"check_and_update_catch failed for uid={uid}")
             
             if LOG_GROUP_ID:
                 try: 
                     c_name = clean_name(call.from_user.first_name)
-                    p_name = to_small_caps(poke_name_capped)
-                    log_msg = f"🟢 【Cᴀᴛᴄʜ】 [{escape_md(c_name)}](tg://user?id={uid}) ᴄᴀᴜɢʜᴛ ✨ Sʜɪɴʏ {escape_md(p_name)} \\(IV: {iv_pct_str}%\\)"
+                    log_msg = f"🟢 【Catch】 [{escape_md(c_name)}](tg://user?id={uid}) caught ✨ Shiny {escape_md(poke_name_capped)} \\(IV: {iv_pct_str}%\\)"
                     bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
                 except Exception: logger.exception("LOG_GROUP_ID catch log failed")
             
-            try: bot.edit_message_caption(caption=f"✨ *Gᴏᴛᴄʜᴀ\\!* Sʜɪɴʏ *{escape_md(to_small_caps(poke_name_capped))}* ᴡᴀs ᴄᴀᴜɢʜᴛ\\!\n🧬 *IV:* {iv_pct_str}%\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\.", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
+            try: bot.edit_message_caption(caption=f"✨ *Gotcha\\!* Shiny *{escape_md(poke_name_capped)}* was caught\\!", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
             except Exception: logger.exception(f"edit_message_caption (catch success) failed for uid={uid}")
+
+            caught_caption = f"You caught a wild *{escape_md(poke_name_capped)}*\\."
+            kb = types.InlineKeyboardMarkup().add(
+                types.InlineKeyboardButton("View stats", callback_data=f"insp_i_{uid}_{identifier}"),
+                types.InlineKeyboardButton("Release", callback_data=f"insprel_{uid}_{identifier}")
+            )
+            # Sent as a photo (reusing the encounter image) so the View stats
+            # button can edit its caption, matching the rest of the /inspect UI.
+            try:
+                photo_id = call.message.photo[-1].file_id if getattr(call.message, "photo", None) else None
+                if photo_id:
+                    bot.send_photo(chat_id, photo_id, caption=caught_caption, parse_mode="MarkdownV2", reply_markup=kb)
+                else:
+                    bot.send_message(chat_id, caught_caption, parse_mode="MarkdownV2", reply_markup=kb)
+            except Exception: logger.exception(f"send catch confirmation failed for uid={uid}")
         else:
-            try: bot.edit_message_caption(caption=f"💨 *Oʜ ɴᴏ\\!* Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(name.title()))} ʙʀᴏᴋᴇ ғʀᴇᴇ ᴀɴᴅ ғʟᴇᴅ\\!", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
+            try: bot.edit_message_caption(caption=f"💨 *Oh no\\!* The wild ✨ {escape_md(name.title())} broke free and fled\\!", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
             except Exception: logger.exception(f"edit_message_caption (flee) failed for uid={uid}")
     except Exception:
         logger.exception(f"❌ process_catch failed entirely for uid={uid} name={name}")
