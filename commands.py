@@ -34,7 +34,6 @@ IMAGE_CACHE = {}
 _TYPE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
 # ================== /mypokemon SORT / DISPLAY / PAGESIZE ==================
-# (number, settings_key, label) — number is what's shown on the menu buttons.
 SORT_OPTIONS = [
     (1, "order_caught", "Order caught"),
     (2, "dex_number", "Pokedex number"),
@@ -84,7 +83,6 @@ _STAT_SORT_KEYS = {
 _STAT_ORDER = ["hp", "atk", "def", "spa", "spd", "spe"]
 _REVERSE_STAT_MAP = {"hp": "Hp", "atk": "Attack", "def": "Defense", "spa": "Special attack", "spd": "Special defense", "spe": "Speed"}
 
-# name.lower() -> {"dex": int, "types": [...], "catch_rate": int, "stats": {label: base}}
 _SPECIES_CACHE = {}
 _EMPTY_SPECIES_INFO = {"dex": 0, "types": [], "catch_rate": 0, "stats": {}}
 
@@ -93,9 +91,6 @@ _NEEDS_SPECIES_DISPLAY = {"type", "type_symbol", "catch_rate"}
 
 
 def get_species_info(name):
-    """Returns (and caches) {dex, types, catch_rate, stats} for a species name.
-    Safe to call from multiple threads — worst case a couple of callers both do the
-    (cheap, already-cached-downstream) lookup once and the last write wins."""
     lname = (name or "").lower()
     if lname in _SPECIES_CACHE:
         return _SPECIES_CACHE[lname]
@@ -126,9 +121,6 @@ def _stat_total(entry, info):
 
 
 def _prewarm_species_cache(entries):
-    """Resolves species data (dex/type/catch-rate/base-stats) for every unique
-    species name in one pass, in parallel, so sorting/displaying by any of those
-    fields doesn't hammer PokeAPI once per owned Pokémon."""
     unique_names = list({e["name"].lower() for e in entries if e.get("name")})
     if unique_names:
         list(_TYPE_EXECUTOR.map(get_species_info, unique_names))
@@ -150,7 +142,7 @@ def sort_pokemon_entries(entries, sort_by, sort_dir):
         if sort_by == "catch_rate": return info["catch_rate"]
         if sort_by == "stat_total": return _stat_total(e, info)
         if sort_by in _STAT_SORT_KEYS: return _stat_points(e, info, _STAT_SORT_KEYS[sort_by])
-        return e["id"]  # order_caught / fallback
+        return e["id"]
 
     entries.sort(key=key_fn, reverse=(sort_dir == "desc"))
     return entries
@@ -223,7 +215,6 @@ def build_pagesize_menu(uid):
     return text, kb
 
 def get_cached_image_payload(poke_id, img_url):
-    """Fetches image from RAM instantly, or downloads it once and caches it forever."""
     if poke_id in IMAGE_CACHE:
         return io.BytesIO(IMAGE_CACHE[poke_id])
     try:
@@ -255,23 +246,39 @@ def safe_send(bot, chat_id, text, reply_to_id=None, reply_markup=None):
             except: pass
         return None
 
-# ================== DID YOU MEAN ENGINE ==================
+# ================== FIXED & UPGRADED DID YOU MEAN ENGINE ==================
 def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
-    valid_lower_map = {n.lower(): n for n in valid_list}
-    matches = difflib.get_close_matches(wrong_name.lower(), valid_lower_map.keys(), n=4, cutoff=0.65)
+    wrong_lower = (wrong_name or "").lower().strip()
+    valid_lower_map = {n.lower(): n for n in valid_list if n}
+
+    matched_names = []
+    # 1. Prefix and Substring match first
+    for l_name, orig_name in valid_lower_map.items():
+        if l_name.startswith(wrong_lower) or wrong_lower in l_name:
+            if orig_name not in matched_names:
+                matched_names.append(orig_name)
+
+    # 2. Difflib close matches for typos with lower cutoff
+    close_keys = difflib.get_close_matches(wrong_lower, valid_lower_map.keys(), n=6, cutoff=0.4)
+    for k in close_keys:
+        orig = valid_lower_map[k]
+        if orig not in matched_names:
+            matched_names.append(orig)
+
     wrong_name_smallcaps = to_small_caps(wrong_name.title())
     
-    if not matches:
+    if not matched_names:
         if action_prefix == "dym_dex": return f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*", None
         else: return f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*", None
+
+    matched_names = matched_names[:6]
 
     if action_prefix == "dym_dex": text = f"❌ *Nᴏ Pᴏᴋᴇ́ᴍᴏɴ Nᴀᴍᴇᴅ \"{escape_md(wrong_name_smallcaps)}\" Fᴏᴜɴᴅ\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
     else: text = f"❌ *Yᴏᴜ ᴅᴏɴ'ᴛ ᴏᴡɴ ᴀ \"{escape_md(wrong_name_smallcaps)}\"\\.*\n\n💡 *Dɪᴅ Yᴏᴜ Mᴇᴀɴ:*\n"
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     btns = []
-    for match in matches:
-        actual_name = valid_lower_map[match]
+    for actual_name in matched_names:
         display_name = to_small_caps(actual_name.title())
         text += f"• {escape_md(display_name)}\n"
         btns.append(types.InlineKeyboardButton(actual_name.title(), callback_data=f"{action_prefix}_{uid}_{actual_name[:20]}"))
@@ -281,23 +288,6 @@ def generate_did_you_mean(wrong_name, valid_list, action_prefix, uid):
         else: kb.add(btns[i])
     return text, kb
 
-# ================== NEW INVENTORY UI GENERATOR ==================
-def get_cached_type_str(poke_name):
-    """Returns cached type string — hits local_type_cache first, never blocks."""
-    lower_name = poke_name.lower()
-    if lower_name in local_type_cache:
-        return local_type_cache[lower_name]
-    try:
-        types_list, _ = get_pokemon_stats_sync(lower_name)
-        if types_list:
-            emojis = "/ ".join([TYPE_EMOJIS.get(t, '') for t in types_list if t]).strip()
-            if emojis: 
-                local_type_cache[lower_name] = f"【{emojis}】"
-                return local_type_cache[lower_name]
-    except: pass
-    # Cache empty string so we never retry a failed lookup
-    local_type_cache[lower_name] = ""
-    return ""
 
 def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
     entries = db.list_user_pokemon_full(uid)
@@ -362,6 +352,70 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
         )
     return text, kb
 
+
+# ================== MULTI-COPY INSPECT SELECTION UI ==================
+def generate_inspect_multi_ui(uid, name, page_idx=0):
+    """Generates selection menu when a user owns multiple copies of a species for /inspect."""
+    entries = db.get_user_pokemon_by_name(uid, name)
+    if not entries:
+        return None, None
+
+    settings = db.get_list_settings(uid)
+    sort_by = settings.get("sort_by", "order_caught")
+    sort_dir = settings.get("sort_dir", "asc")
+    display = settings.get("display", "none")
+    show_numbering = settings.get("show_numbering", True)
+    page_size = settings.get("page_size", 20)
+
+    if display in _NEEDS_SPECIES_DISPLAY or display.startswith("stat_"):
+        _prewarm_species_cache(entries)
+    entries = sort_pokemon_entries(entries, sort_by, sort_dir)
+
+    pages = [entries[i:i + page_size] for i in range(0, len(entries), page_size)] or [[]]
+
+    if page_idx < 0: page_idx = 0
+    if page_idx >= len(pages): page_idx = len(pages) - 1
+
+    disp_name = entries[0]["name"].capitalize() if entries else name.capitalize()
+    text = f"✨ *Select a {escape_md(disp_name)} to Inspect*\n"
+    text += f"━━━━━━━━━━━━━━━━\nPage {page_idx + 1}/{len(pages)}\n\n"
+
+    page_entries = pages[page_idx]
+    for i, entry in enumerate(page_entries):
+        info = _SPECIES_CACHE.get(entry["name"].lower(), _EMPTY_SPECIES_INFO)
+        suffix = build_display_suffix(entry, info, display)
+        if display == "none":
+            suffix = f" \\- {entry['nature']}"
+
+        item_num = (page_idx * page_size) + i + 1
+        if show_numbering:
+            text += f"{item_num}\\. {escape_md(entry['name'])}{escape_md(suffix)}\n"
+        else:
+            text += f"{escape_md(entry['name'])}{escape_md(suffix)}\n"
+
+    text += "\n*Check stats of which pokemon?*\n━━━━━━━━━━━━━━━━"
+
+    kb = types.InlineKeyboardMarkup(row_width=5)
+    
+    num_btns = []
+    for i, entry in enumerate(page_entries):
+        item_num = (page_idx * page_size) + i + 1
+        num_btns.append(types.InlineKeyboardButton(str(item_num), callback_data=f"inspsel_{uid}_{entry['id']}"))
+    
+    for i in range(0, len(num_btns), 5):
+        kb.row(*num_btns[i:i+5])
+
+    if len(pages) > 1:
+        p_prev1, p_next1 = max(0, page_idx - 1), min(len(pages) - 1, page_idx + 1)
+        kb.row(
+            types.InlineKeyboardButton("«", callback_data=f"insplst_{uid}_{name[:16]}_{p_prev1}"),
+            types.InlineKeyboardButton(f"« {page_idx + 1}/{len(pages)} »", callback_data="ignore"),
+            types.InlineKeyboardButton("»", callback_data=f"insplst_{uid}_{name[:16]}_{p_next1}")
+        )
+
+    return text, kb
+
+
 # ================== GAME LOGIC ==================
 def auto_flee(bot, message_id, chat_id, pokemon_name, active_hunts):
     active_hunts.pop(message_id, None)
@@ -390,7 +444,6 @@ def start_scout(bot, chat_id, user_id, active_hunts, reply_to_id=None):
         types.InlineKeyboardButton("🏃 Rᴜɴ", callback_data=f"run_{user_id}_{name[:16]}")
     )
 
-    # ⚡ Pull from RAM Cache if available, otherwise fetch and save it
     photo_payload = get_cached_image_payload(base_id, img_url)
 
     try:
@@ -416,8 +469,6 @@ def process_catch(bot, call, uid, pid, name):
         try: bot.edit_message_caption(caption="🔴 *Yᴏᴜ ᴛʜʀᴇᴡ ᴀ Pᴏᴋᴇ́ʙᴀʟʟ\\!*", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
         except: pass
 
-        # ⚡ REMOVED hardcoded sleep(0.7) — was adding 700ms latency to every single catch
-        
         catch_rate = get_species_catch_rate_sync(pid)
         if random.random() < max(0.05, min(0.95, catch_rate / 255.0)):
             poke_name_capped = name.title()
@@ -460,39 +511,39 @@ def get_dex_text(name, page="info"):
         stats_str = "\n".join([f"🔸 *{escape_md(k)}:* {v}" for k, v in stats.items()])
         return (f"📊 *Base Stats: {escape_md(name.capitalize())}*\n━━━━━━━━━━━━━━\n{stats_str}\n━━━━━━━━━━━━━━\n📈 *Total:* {sum(stats.values())}")
 
-# ================== /inspect: 4-page paginated view (Info / Stats / Move set / IV & EV) ==================
+# ================== /inspect ENGINE ==================
 INSPECT_PAGES = [("i", "Info"), ("s", "Stats"), ("v", "IV & EV"), ("m", "Move Set")]
 IV_ORDER = ["hp", "atk", "def", "spa", "spd", "spe"]
 STAT_KEY_MAP = {"Hp": "hp", "Attack": "atk", "Defense": "def", "Special attack": "spa", "Special defense": "spd", "Speed": "spe"}
 STAT_LABELS = {"hp": "HP", "atk": "Attack", "def": "Defense", "spa": "Sp. Attack", "spd": "Sp. Defense", "spe": "Speed"}
 
-def build_inspect_keyboard(user_id, name, active_page):
+def build_inspect_keyboard(user_id, identifier, active_page):
     kb = types.InlineKeyboardMarkup(row_width=3)
     row1, row2 = [], []
     for code, label in INSPECT_PAGES:
-        btn = types.InlineKeyboardButton(label, callback_data="ignore" if code == active_page else f"insp_{code}_{user_id}_{name[:20]}")
+        btn = types.InlineKeyboardButton(label, callback_data="ignore" if code == active_page else f"insp_{code}_{user_id}_{identifier}")
         (row1 if code != "m" else row2).append(btn)
     kb.row(*row1)
     kb.row(*row2)
     kb.row(
-        types.InlineKeyboardButton("Relearner", callback_data="ignore" if active_page == "r" else f"insp_r_{user_id}_{name[:20]}"),
-        types.InlineKeyboardButton("Release", callback_data=f"insprel_{user_id}_{name[:32]}")
+        types.InlineKeyboardButton("Relearner", callback_data="ignore" if active_page == "r" else f"insp_r_{user_id}_{identifier}"),
+        types.InlineKeyboardButton("Release", callback_data=f"insprel_{user_id}_{identifier}")
     )
     return kb
 
-def build_inspect_page(user_id, name, page_code="i"):
-    """Returns (caption, keyboard) for one page of /inspect, or (None, None) if the
-    Pokémon/species data can't be resolved."""
+def build_inspect_page(user_id, identifier, page_code="i"):
+    details = db.get_pokemon_details(user_id, identifier)
+    if not details: return None, None
+    
+    name = details["name"]
     poke_id = get_pokemon_id_sync(name)
     if not poke_id: return None, None
     types_list, base_stats = get_pokemon_stats_sync(name)
     if not base_stats: return None, None
 
     if page_code == "r":
-        return build_relearner_page(user_id, name, 0)
+        return build_relearner_page(user_id, identifier, 0)
 
-    details = db.get_pokemon_details(user_id, name)
-    if not details: return None, None
     ivs, nature = details["ivs"], details["nature"]
 
     actual = {}
@@ -511,7 +562,7 @@ def build_inspect_page(user_id, name, page_code="i"):
         caption = header + "\n".join(lines)
 
     elif page_code == "m":
-        moves = db.get_pokemon_custom_moves(user_id, name) or get_pokemon_moveset_sync(name)
+        moves = db.get_pokemon_custom_moves(user_id, identifier) or get_pokemon_moveset_sync(name)
         if not moves:
             caption = header + escape_md("⚠️ Couldn't load move data right now — try again shortly.")
         else:
@@ -537,23 +588,22 @@ def build_inspect_page(user_id, name, page_code="i"):
                    f"Types: {types_str}\n"
                    f"Exp\\. 1,000,000\nTo Next Lv\\. 0\nEXP ██████████")
 
-    kb = build_inspect_keyboard(user_id, name, page_code)
+    kb = build_inspect_keyboard(user_id, identifier, page_code)
     return caption, kb
 
 
-# ================== MOVE RELEARNER (part of /inspect) ==================
+# ================== MOVE RELEARNER ==================
 RELEARN_PAGE_SIZE = 8
 
-def build_relearner_page(user_id, name, list_page=0):
-    """Returns (caption, keyboard) for one page of the Move Relearner list — up to
-    RELEARN_PAGE_SIZE moves, numbered, with Previous/Next pagination and a Back button.
-    Keyboard is deliberately minimal: number buttons, Previous/Next, Back — no other nav."""
+def build_relearner_page(user_id, identifier, list_page=0):
+    details = db.get_pokemon_details(user_id, identifier)
+    name = details["name"] if details else str(identifier)
     moves = get_pokemon_relearn_moves_sync(name)
     header = f"*{escape_md(name.capitalize())}* \\(Shiny\\)\n\nMove Relearner\n\n"
 
     if not moves:
         caption = header + escape_md("Couldn't load learnable moves right now — try again shortly.")
-        kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Back", callback_data=f"insp_i_{user_id}_{name[:20]}"))
+        kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Back", callback_data=f"insp_i_{user_id}_{identifier}"))
         return caption, kb
 
     pages = [moves[i:i + RELEARN_PAGE_SIZE] for i in range(0, len(moves), RELEARN_PAGE_SIZE)]
@@ -570,25 +620,25 @@ def build_relearner_page(user_id, name, list_page=0):
         caption += f"\n\nPage {list_page + 1} / {len(pages)}"
 
     kb = types.InlineKeyboardMarkup(row_width=3)
-    num_buttons = [types.InlineKeyboardButton(str(i + 1), callback_data=f"rels_{list_page}_{i}_{user_id}_{name[:16]}") for i in range(len(page_moves))]
+    num_buttons = [types.InlineKeyboardButton(str(i + 1), callback_data=f"rels_{list_page}_{i}_{user_id}_{identifier}") for i in range(len(page_moves))]
     for i in range(0, len(num_buttons), 3):
         kb.row(*num_buttons[i:i + 3])
 
     nav_row = []
     if list_page > 0:
-        nav_row.append(types.InlineKeyboardButton("Previous", callback_data=f"relp_{list_page - 1}_{user_id}_{name[:16]}"))
+        nav_row.append(types.InlineKeyboardButton("Previous", callback_data=f"relp_{list_page - 1}_{user_id}_{identifier}"))
     if list_page < len(pages) - 1:
-        nav_row.append(types.InlineKeyboardButton("Next", callback_data=f"relp_{list_page + 1}_{user_id}_{name[:16]}"))
+        nav_row.append(types.InlineKeyboardButton("Next", callback_data=f"relp_{list_page + 1}_{user_id}_{identifier}"))
     if nav_row:
         kb.row(*nav_row)
 
-    kb.row(types.InlineKeyboardButton("Back", callback_data=f"insp_i_{user_id}_{name[:20]}"))
+    kb.row(types.InlineKeyboardButton("Back", callback_data=f"insp_i_{user_id}_{identifier}"))
     return caption, kb
 
 
-def build_relearn_slot_page(user_id, name, list_page, move_idx):
-    """Returns (caption, keyboard) for the 'pick which current move to forget' screen,
-    after a move has been chosen from the relearner list."""
+def build_relearn_slot_page(user_id, identifier, list_page, move_idx):
+    details = db.get_pokemon_details(user_id, identifier)
+    name = details["name"] if details else str(identifier)
     moves = get_pokemon_relearn_moves_sync(name)
     pages = [moves[i:i + RELEARN_PAGE_SIZE] for i in range(0, len(moves), RELEARN_PAGE_SIZE)]
     if not pages or list_page < 0 or list_page >= len(pages): return None, None
@@ -596,7 +646,7 @@ def build_relearn_slot_page(user_id, name, list_page, move_idx):
     if move_idx < 0 or move_idx >= len(page_moves): return None, None
     new_move = page_moves[move_idx]
 
-    current_moves = db.get_pokemon_custom_moves(user_id, name) or get_pokemon_moveset_sync(name)
+    current_moves = db.get_pokemon_custom_moves(user_id, identifier) or get_pokemon_moveset_sync(name)
     if not current_moves: return None, None
 
     n_emoji = TYPE_EMOJIS.get(new_move["type"], "")
@@ -610,10 +660,10 @@ def build_relearn_slot_page(user_id, name, list_page, move_idx):
     caption = header + "\n".join(lines)
 
     kb = types.InlineKeyboardMarkup(row_width=3)
-    num_buttons = [types.InlineKeyboardButton(str(i + 1), callback_data=f"relr_{list_page}_{move_idx}_{i}_{user_id}_{name[:12]}") for i in range(len(current_moves))]
+    num_buttons = [types.InlineKeyboardButton(str(i + 1), callback_data=f"relr_{list_page}_{move_idx}_{i - 1}_{user_id}_{identifier}") for i in range(1, len(current_moves) + 1)]
     for i in range(0, len(num_buttons), 3):
         kb.row(*num_buttons[i:i + 3])
-    kb.row(types.InlineKeyboardButton("Back", callback_data=f"relp_{list_page}_{user_id}_{name[:16]}"))
+    kb.row(types.InlineKeyboardButton("Back", callback_data=f"relp_{list_page}_{user_id}_{identifier}"))
     return caption, kb
 
 
@@ -635,7 +685,7 @@ def send_leaderboard(bot, chat_id, user_id, message_id=None, mode="catch"):
         except: name = "Trainer"
         text += f"{i+1}\\. *{escape_md(name)}* — {count} {score_label}\n"
     
-    text += f"\nYᴏᴜʀ Rᴀɴᴋ — *{user_rank}*"
+    text += f"\nYᴏᴜʀ RᴀɴKings — *{user_rank}*"
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     if mode == "catch": kb.add(types.InlineKeyboardButton("⚔️ Tᴏᴘ PᴠP Wɪɴɴᴇʀs", callback_data=f"flex_pvp_{user_id}"))
@@ -786,6 +836,67 @@ def register_user_handlers(bot, active_hunts):
             except: pass
         threading.Thread(target=process).start()
 
+    # ================== CALLBACK FOR DID YOU MEAN BUTTONS ==================
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("dym_"))
+    def cq_did_you_mean(call):
+        def process():
+            try:
+                parts = call.data.split("_", 3)
+                if len(parts) < 4:
+                    return bot.answer_callback_query(call.id)
+                
+                _, action, uid_str, name = parts
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your menu.", show_alert=True)
+
+                bot.answer_callback_query(call.id)
+
+                if action == "dex":
+                    poke_id = get_pokemon_id_sync(name)
+                    if poke_id:
+                        text = get_dex_text(name, "info")
+                        img_url = official_shiny_artwork_url(poke_id)
+                        photo_payload = get_cached_image_payload(poke_id, img_url)
+                        kb = types.InlineKeyboardMarkup(row_width=2).add(
+                            types.InlineKeyboardButton("✅ ℹ️ Info", callback_data="ignore"),
+                            types.InlineKeyboardButton("📊 Stats", callback_data=f"dex_stats_{name}")
+                        )
+                        try:
+                            bot.send_photo(call.message.chat.id, photo_payload, caption=text, reply_markup=kb, parse_mode="MarkdownV2")
+                        except Exception:
+                            safe_send(bot, call.message.chat.id, text, reply_markup=kb)
+
+                elif action == "ins":
+                    entries = db.get_user_pokemon_by_name(call.from_user.id, name)
+                    if not entries:
+                        safe_send(bot, call.message.chat.id, escape_md(f"❌ You don't own a {name.title()}."))
+                    elif len(entries) == 1:
+                        caption, kb = build_inspect_page(call.from_user.id, entries[0]["id"], "i")
+                        poke_id = get_pokemon_id_sync(entries[0]["name"])
+                        if caption and poke_id:
+                            photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
+                            bot.send_photo(call.message.chat.id, photo_payload, caption=caption, reply_markup=kb, parse_mode="MarkdownV2")
+                    else:
+                        text, kb = generate_inspect_multi_ui(call.from_user.id, name, 0)
+                        safe_send(bot, call.message.chat.id, text, reply_markup=kb)
+
+                elif action == "rel":
+                    poke_name = name.title()
+                    text = (f"⚠️ *Confirm Release*\n\n"
+                            f"Are you sure you want to release\n"
+                            f"*{escape_md(poke_name)}*?\n\n"
+                            f"This action cannot be undone\\.")
+                    kb = types.InlineKeyboardMarkup(row_width=2)
+                    kb.add(
+                        types.InlineKeyboardButton("Confirm", callback_data=f"relc_Y_{call.from_user.id}_{poke_name[:32]}"),
+                        types.InlineKeyboardButton("Cancel", callback_data=f"relc_N_{call.from_user.id}_{poke_name[:32]}")
+                    )
+                    safe_send(bot, call.message.chat.id, text, reply_markup=kb)
+
+            except Exception:
+                logger.exception(f"❌ cq_did_you_mean failed: {call.data}")
+        threading.Thread(target=process).start()
+
     @bot.message_handler(commands=["mypokemon", "mypokemons"])
     def cmd_mypokemon(message):
         def process():
@@ -920,6 +1031,7 @@ def register_user_handlers(bot, active_hunts):
                 except: pass
         threading.Thread(target=process).start()
 
+    # ================== /inspect COMMAND ==================
     @bot.message_handler(commands=["inspect"])
     def cmd_inspect(message):
         def process():
@@ -931,37 +1043,95 @@ def register_user_handlers(bot, active_hunts):
                 name = name_raw.lower()
                 
                 user_pokemon = db.list_user_pokemon_names(message.from_user.id)
-                if name not in [n.lower() for n in user_pokemon]: 
+                user_matches = db.get_user_pokemon_by_name(message.from_user.id, name)
+
+                # 0 copies -> Did You Mean
+                if not user_matches:
                     text, kb = generate_did_you_mean(name_raw, user_pokemon, "dym_ins", message.from_user.id)
                     return safe_send(bot, message.chat.id, text, reply_to_id=message.message_id, reply_markup=kb)
 
-                poke_id = get_pokemon_id_sync(name)
-                if not poke_id:
-                    return safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't find that Pokémon's species data."), reply_to_id=message.message_id)
+                # Exactly 1 copy -> Inspect directly
+                if len(user_matches) == 1:
+                    target_id = user_matches[0]["id"]
+                    caption, kb = build_inspect_page(message.from_user.id, target_id, "i")
+                    if caption is None:
+                        return safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't load that Pokémon right now."), reply_to_id=message.message_id)
 
-                caption, kb = build_inspect_page(message.from_user.id, name, "i")
-                if caption is None:
-                    return safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't load that Pokémon right now."), reply_to_id=message.message_id)
+                    poke_id = get_pokemon_id_sync(user_matches[0]["name"])
+                    if not poke_id:
+                        return safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't find species data."), reply_to_id=message.message_id)
 
-                photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
-                try: bot.send_photo(message.chat.id, photo_payload, caption=caption, reply_markup=kb, parse_mode="MarkdownV2")
-                except Exception:
-                    logger.exception(f"/inspect send_photo failed for uid={message.from_user.id} name={name}")
-                    safe_send(bot, message.chat.id, escape_md("⚠️ Couldn't load that Pokémon's image right now."), reply_to_id=message.message_id)
+                    photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
+                    try: bot.send_photo(message.chat.id, photo_payload, caption=caption, reply_markup=kb, parse_mode="MarkdownV2")
+                    except Exception:
+                        safe_send(bot, message.chat.id, caption, reply_markup=kb)
+
+                # Multiple copies -> Display selection list UI
+                else:
+                    text, kb = generate_inspect_multi_ui(message.from_user.id, name, 0)
+                    safe_send(bot, message.chat.id, text, reply_markup=kb, reply_to_id=message.message_id)
+
             except Exception:
                 logger.exception(f"❌ /inspect failed entirely for uid={message.from_user.id}")
                 safe_send(bot, message.chat.id, escape_md("⚠️ Something went wrong inspecting that Pokémon. Try again in a moment."), reply_to_id=message.message_id)
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("inspsel_"))
+    def cq_inspect_select(call):
+        def process():
+            try:
+                _, uid_str, poke_id_str = call.data.split("_", 2)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
+
+                caption, kb = build_inspect_page(call.from_user.id, poke_id_str, "i")
+                if not caption:
+                    return bot.answer_callback_query(call.id, "⚠️ Couldn't load that Pokémon.", show_alert=True)
+
+                bot.answer_callback_query(call.id)
+                details = db.get_pokemon_details(call.from_user.id, poke_id_str)
+                poke_id = get_pokemon_id_sync(details["name"]) if details else None
+
+                if poke_id:
+                    photo_payload = get_cached_image_payload(poke_id, official_shiny_artwork_url(poke_id))
+                    try:
+                        bot.send_photo(call.message.chat.id, photo_payload, caption=caption, reply_markup=kb, parse_mode="MarkdownV2")
+                    except Exception:
+                        safe_send(bot, call.message.chat.id, caption, reply_markup=kb)
+                else:
+                    safe_send(bot, call.message.chat.id, caption, reply_markup=kb)
+            except Exception:
+                logger.exception(f"❌ cq_inspect_select failed: {call.data}")
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("insplst_"))
+    def cq_inspect_list_page(call):
+        def process():
+            try:
+                _, uid_str, name, page_str = call.data.split("_", 3)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your menu.", show_alert=True)
+
+                text, kb = generate_inspect_multi_ui(call.from_user.id, name, int(page_str))
+                if text:
+                    try:
+                        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                    except Exception:
+                        pass
+                bot.answer_callback_query(call.id)
+            except Exception:
+                logger.exception(f"❌ cq_inspect_list_page failed: {call.data}")
         threading.Thread(target=process).start()
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith("insp_"))
     def cq_inspect_page(call):
         def process():
             try:
-                _, page_code, uid_str, name = call.data.split("_", 3)
+                _, page_code, uid_str, identifier = call.data.split("_", 3)
                 if str(call.from_user.id) != uid_str:
                     return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
 
-                caption, kb = build_inspect_page(call.from_user.id, name, page_code)
+                caption, kb = build_inspect_page(call.from_user.id, identifier, page_code)
                 if caption is None:
                     return bot.answer_callback_query(call.id, "⚠️ Couldn't load that page.", show_alert=True)
 
@@ -980,11 +1150,11 @@ def register_user_handlers(bot, active_hunts):
     def cq_relearner_page(call):
         def process():
             try:
-                _, page_str, uid_str, name = call.data.split("_", 3)
+                _, page_str, uid_str, identifier = call.data.split("_", 3)
                 if str(call.from_user.id) != uid_str:
                     return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
 
-                caption, kb = build_relearner_page(call.from_user.id, name, int(page_str))
+                caption, kb = build_relearner_page(call.from_user.id, identifier, int(page_str))
                 try:
                     bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
                 except Exception:
@@ -1000,11 +1170,11 @@ def register_user_handlers(bot, active_hunts):
     def cq_relearner_select(call):
         def process():
             try:
-                _, page_str, idx_str, uid_str, name = call.data.split("_", 4)
+                _, page_str, idx_str, uid_str, identifier = call.data.split("_", 4)
                 if str(call.from_user.id) != uid_str:
                     return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
 
-                caption, kb = build_relearn_slot_page(call.from_user.id, name, int(page_str), int(idx_str))
+                caption, kb = build_relearn_slot_page(call.from_user.id, identifier, int(page_str), int(idx_str))
                 if caption is None:
                     return bot.answer_callback_query(call.id, "⚠️ That move is no longer available.", show_alert=True)
 
@@ -1023,27 +1193,30 @@ def register_user_handlers(bot, active_hunts):
     def cq_relearner_replace(call):
         def process():
             try:
-                _, page_str, idx_str, slot_str, uid_str, name = call.data.split("_", 5)
+                _, page_str, idx_str, slot_str, uid_str, identifier = call.data.split("_", 5)
                 if str(call.from_user.id) != uid_str:
                     return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
 
                 list_page, move_idx, slot = int(page_str), int(idx_str), int(slot_str)
+                details = db.get_pokemon_details(call.from_user.id, identifier)
+                name = details["name"] if details else str(identifier)
+                
                 moves = get_pokemon_relearn_moves_sync(name)
                 pages = [moves[i:i + RELEARN_PAGE_SIZE] for i in range(0, len(moves), RELEARN_PAGE_SIZE)]
                 if not pages or list_page < 0 or list_page >= len(pages) or move_idx < 0 or move_idx >= len(pages[list_page]):
                     return bot.answer_callback_query(call.id, "⚠️ That move is no longer available.", show_alert=True)
                 new_move = pages[list_page][move_idx]
 
-                base_moves = db.get_pokemon_custom_moves(call.from_user.id, name) or get_pokemon_moveset_sync(name)
+                base_moves = db.get_pokemon_custom_moves(call.from_user.id, identifier) or get_pokemon_moveset_sync(name)
                 if not base_moves or slot < 0 or slot >= len(base_moves):
                     return bot.answer_callback_query(call.id, "⚠️ Couldn't update that move.", show_alert=True)
 
                 old_move_name = base_moves[slot]["name"]
-                updated = db.set_pokemon_move_slot(call.from_user.id, name, base_moves, slot, new_move)
+                updated = db.set_pokemon_move_slot(call.from_user.id, identifier, base_moves, slot, new_move)
                 if not updated:
                     return bot.answer_callback_query(call.id, "⚠️ Couldn't save that move.", show_alert=True)
 
-                caption, kb = build_relearner_page(call.from_user.id, name, list_page)
+                caption, kb = build_relearner_page(call.from_user.id, identifier, list_page)
                 note = f"✅ *Fᴏʀɢᴏᴛ {escape_md(old_move_name)}, ʟᴇᴀʀɴᴇᴅ {escape_md(new_move['name'])}\\!*\n\n"
                 caption = note + caption
                 try:
@@ -1061,19 +1234,21 @@ def register_user_handlers(bot, active_hunts):
     def cq_inspect_release_prompt(call):
         def process():
             try:
-                _, uid_str, name = call.data.split("_", 2)
+                _, uid_str, identifier = call.data.split("_", 2)
                 if str(call.from_user.id) != uid_str:
                     return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
 
-                name_disp = name.capitalize()
+                details = db.get_pokemon_details(call.from_user.id, identifier)
+                name_disp = details["name"].capitalize() if details else "Pokémon"
+                
                 caption = (f"⚠️ *Confirm Release*\n\n"
                            f"Are you sure you want to release\n"
                            f"*{escape_md(name_disp)}*?\n\n"
                            f"This action cannot be undone\\.")
                 kb = types.InlineKeyboardMarkup(row_width=2)
                 kb.add(
-                    types.InlineKeyboardButton("Confirm", callback_data=f"insprelc_Y_{call.from_user.id}_{name[:32]}"),
-                    types.InlineKeyboardButton("Cancel", callback_data=f"insprelc_N_{call.from_user.id}_{name[:32]}")
+                    types.InlineKeyboardButton("Confirm", callback_data=f"insprelc_Y_{call.from_user.id}_{identifier}"),
+                    types.InlineKeyboardButton("Cancel", callback_data=f"insprelc_N_{call.from_user.id}_{identifier}")
                 )
                 try:
                     bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
@@ -1090,12 +1265,12 @@ def register_user_handlers(bot, active_hunts):
     def cq_inspect_release_confirm(call):
         def process():
             try:
-                _, decision, uid_str, name = call.data.split("_", 3)
+                _, decision, uid_str, identifier = call.data.split("_", 3)
                 if str(call.from_user.id) != uid_str:
                     return bot.answer_callback_query(call.id, "❌ This isn't your inspection.", show_alert=True)
 
                 if decision == "N":
-                    caption, kb = build_inspect_page(call.from_user.id, name, "i")
+                    caption, kb = build_inspect_page(call.from_user.id, identifier, "i")
                     if caption is None:
                         return bot.answer_callback_query(call.id, "⚠️ Couldn't load that Pokémon.", show_alert=True)
                     try:
@@ -1104,8 +1279,10 @@ def register_user_handlers(bot, active_hunts):
                         logger.exception(f"cq_inspect_release_confirm(N) edit_message_caption failed: {call.data}")
                     return bot.answer_callback_query(call.id, "❌ Release cancelled.")
 
-                ok = db.delete_pokemon(call.from_user.id, name)
-                name_disp = name.capitalize()
+                details = db.get_pokemon_details(call.from_user.id, identifier)
+                name_disp = details["name"].capitalize() if details else "Pokémon"
+                
+                ok = db.delete_pokemon(call.from_user.id, identifier)
                 caption = f"*{escape_md(name_disp)} was released\\.*" if ok else escape_md("Couldn't release that Pokémon.")
                 try:
                     bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None, parse_mode="MarkdownV2")
