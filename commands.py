@@ -1391,8 +1391,15 @@ def register_user_handlers(bot, active_hunts):
                 if str(call.from_user.id) != uid_str:
                     return bot.answer_callback_query(call.id, "❌ This isn't your Pokémon.", show_alert=True)
 
+                # Buttons disappear immediately while the action is processed.
+                try:
+                    transitional = "🌟 *Evolving\\.\\.\\.*" if decision == "Y" else "❌ *Cancelling\\.\\.\\.*"
+                    bot.edit_message_caption(caption=transitional, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=None, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_evolve_confirm transitional edit_message_caption failed: {call.data}")
+
                 if decision == "N":
-                    caption, kb = build_inspect_page(call.from_user.id, identifier, "e")
+                    caption, kb = build_inspect_page(call.from_user.id, identifier, "s")
                     if caption is None:
                         return bot.answer_callback_query(call.id, "⚠️ Couldn't load that Pokémon.", show_alert=True)
                     try:
@@ -1405,7 +1412,7 @@ def register_user_handlers(bot, active_hunts):
                 if not ok:
                     return bot.answer_callback_query(call.id, "⚠️ Couldn't evolve that Pokémon.", show_alert=True)
 
-                caption, kb = build_inspect_page(call.from_user.id, identifier, "i")
+                caption, kb = build_inspect_page(call.from_user.id, identifier, "s")
                 if caption is None:
                     caption = f"✨ Evolved into *{escape_md(target_name.title())}*\\!"
                     kb = None
