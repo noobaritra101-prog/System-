@@ -142,7 +142,7 @@ def sort_pokemon_entries(entries, sort_by, sort_dir):
         info = _SPECIES_CACHE.get(e["name"].lower(), _EMPTY_SPECIES_INFO)
         if sort_by == "dex_number": return info["dex"]
         if sort_by == "level": return 100
-        if sort_by == "iv_points": return e["iv_percent"]
+        if sort_by == "iv_points": return sum(e["ivs"].get(k, 0) for k in _STAT_ORDER)
         if sort_by == "ev_points": return 0
         if sort_by == "name": return e["name"].lower()
         if sort_by == "nature": return e["nature"].lower()
@@ -159,14 +159,13 @@ def sort_pokemon_entries(entries, sort_by, sort_dir):
 def build_display_suffix(entry, info, display):
     if display == "none": return ""
     if display == "level": return " (Lv 100)"
-    if display == "iv_points": return f" ({entry['iv_percent']}%)"
+    if display == "iv_points": return f" ({sum(entry['ivs'].get(k, 0) for k in _STAT_ORDER)} IV)"
     if display == "ev_points": return " (0 EVs)"
     if display == "nature": return f" [{entry['nature']}]"
     if display == "type":
         return f" [{'/'.join(info['types'])}]" if info["types"] else " [Unknown]"
     if display == "type_symbol":
-        emojis = "/".join(TYPE_EMOJIS.get(t, '') for t in info["types"]).strip()
-        return f" {emojis}" if emojis else ""
+        return f" [{'/'.join(info['types'])}]" if info["types"] else ""
     if display == "catch_rate": return f" (CR {info['catch_rate']})"
     if display == "stat_total": return f" ({_stat_total(entry, info)})"
     if display in _STAT_SORT_KEYS: return f" ({_stat_points(entry, info, _STAT_SORT_KEYS[display])})"
@@ -177,12 +176,12 @@ def build_sort_menu(uid):
     settings = db.get_list_settings(uid)
     sort_by, sort_dir = settings.get("sort_by", "order_caught"), settings.get("sort_dir", "asc")
 
-    text = "📊 *Hᴏᴡ ᴡᴏᴜʟᴅ ʏᴏᴜ ʟɪᴋᴇ ᴛᴏ sᴏʀᴛ ʏᴏᴜʀ ᴘᴏᴋᴇ́ᴍᴏɴ?*\n\n"
+    text = "How would you like to sort your pokemon?\n\n"
     text += "\n".join(f"{num}\\. {escape_md(label)}" for num, key, label in SORT_OPTIONS if num <= 9)
-    text += "\n\n*Sᴏʀᴛ ʙʏ ᴘᴏᴋᴇ́ᴍᴏɴ sᴛᴀᴛ ᴘᴏɪɴᴛs:*\n" + escape_md("—" * 21) + "\n"
+    text += "\n\nSort by pokemon stat points:\n" + escape_md("—" * 21) + "\n"
     text += "\n".join(f"{num}\\. {escape_md(label)}" for num, key, label in SORT_OPTIONS if num > 9)
-    text += (f"\n\n📌 *Currently sorting by:* {escape_md(SORT_LABELS.get(sort_by, 'Order caught'))}\n"
-             f"↕️ *Direction:* {escape_md('Descending' if sort_dir == 'desc' else 'Ascending')}")
+    text += (f"\n\nCurrently sorting by: {escape_md(SORT_LABELS.get(sort_by, 'Order caught'))}\n"
+             f"Direction: {escape_md('Descending' if sort_dir == 'desc' else 'Ascending')}")
 
     kb = types.InlineKeyboardMarkup(row_width=4)
     row = []
@@ -190,7 +189,7 @@ def build_sort_menu(uid):
         row.append(types.InlineKeyboardButton(str(num), callback_data=f"srt_{uid}_{num}"))
         if len(row) == 4: kb.row(*row); row = []
     if row: kb.row(*row)
-    kb.row(types.InlineKeyboardButton("🔃 Change Direction", callback_data=f"srtdir_{uid}"))
+    kb.row(types.InlineKeyboardButton("Change Direction", callback_data=f"srtdir_{uid}"))
     return text, kb
 
 
@@ -198,12 +197,12 @@ def build_display_menu(uid):
     settings = db.get_list_settings(uid)
     display, show_numbering = settings.get("display", "none"), settings.get("show_numbering", True)
 
-    text = "🖼️ *Wʜɪᴄʜ ᴘᴏᴋᴇ́ᴍᴏɴ ᴅᴇᴛᴀɪʟ ᴡᴏᴜʟᴅ ʏᴏᴜ ʟɪᴋᴇ ᴛᴏ ᴅɪsᴘʟᴀʏ?*\n\n"
+    text = "Which pokemon detail would you like to display?\n\n"
     text += "\n".join(f"{num}\\. {escape_md(label)}" for num, key, label in DISPLAY_OPTIONS if num <= 8)
-    text += "\n\n*Dɪsᴘʟᴀʏ ᴘᴏᴋᴇ́ᴍᴏɴ sᴛᴀᴛ ᴘᴏɪɴᴛs:*\n" + escape_md("—" * 21) + "\n"
+    text += "\n\nDisplay pokemon stat points:\n" + escape_md("—" * 21) + "\n"
     text += "\n".join(f"{num}\\. {escape_md(label)}" for num, key, label in DISPLAY_OPTIONS if num > 8)
-    text += (f"\n\n📌 *Currently displaying:* {escape_md(DISPLAY_LABELS.get(display, 'None'))}\n"
-             f"🔢 *Show pokemon numbering:* {escape_md('Yes' if show_numbering else 'No')}")
+    text += (f"\n\nCurrently displaying: {escape_md(DISPLAY_LABELS.get(display, 'None'))}\n"
+             f"Show pokemon numbering: {escape_md('Yes' if show_numbering else 'No')}")
 
     kb = types.InlineKeyboardMarkup(row_width=4)
     row = []
@@ -211,14 +210,14 @@ def build_display_menu(uid):
         row.append(types.InlineKeyboardButton(str(num), callback_data=f"dsp_{uid}_{num}"))
         if len(row) == 4: kb.row(*row); row = []
     if row: kb.row(*row)
-    kb.row(types.InlineKeyboardButton("🔢 Toggle Numbering", callback_data=f"dspnum_{uid}"))
+    kb.row(types.InlineKeyboardButton("Toggle Numbering", callback_data=f"dspnum_{uid}"))
     return text, kb
 
 
 def build_pagesize_menu(uid):
     settings = db.get_list_settings(uid)
     page_size = settings.get("page_size", 20)
-    text = f"📄 *Hᴏᴡ ᴍᴀɴʏ ᴘᴏᴋᴇ́ᴍᴏɴ ᴡᴏᴜʟᴅ ʏᴏᴜ ʟɪᴋᴇ ᴛᴏ sᴇᴇ ᴘᴇʀ ᴘᴀɢᴇ?*\n\n📌 *Current page size:* {page_size}"
+    text = f"How many pokemon would you like to see per page?\n\nCurrent page size: {page_size}"
     kb = types.InlineKeyboardMarkup(row_width=4)
     kb.row(*[types.InlineKeyboardButton(str(s), callback_data=f"pgsz_{uid}_{s}") for s in PAGE_SIZES])
     return text, kb
@@ -302,7 +301,7 @@ def get_cached_type_str(poke_name):
 
 def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=False):
     entries = db.list_user_pokemon_full(uid)
-    if not entries: return escape_md("🎒 No Pokémon found."), None
+    if not entries: return escape_md("No Pokemon found."), None
 
     settings = db.get_list_settings(uid)
     sort_by = settings.get("sort_by", "order_caught")
@@ -321,10 +320,10 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
     if page_idx < 0: page_idx = 0
     if page_idx >= len(pages): page_idx = len(pages) - 1
 
-    if is_admin: title = f"🎒 𝗣𝗢𝗞𝗘𝗠𝗢𝗡 \\(𝗨𝗜𝗗: `{uid}`\\)"
-    else: title = "🎒 𝗬𝗢𝗨𝗥 𝗣𝗢𝗞𝗘𝗠𝗢𝗡"
-    
-    text = f"{title}\n━━━━━━━━━━━━━━━━\n📃 Pᴀɢᴇ【{page_idx + 1} / {len(pages)}】\n\n"
+    if is_admin: title = f"Pokemon \\(UID: {uid}\\)"
+    else: title = "Your Pokemon"
+
+    text = f"{title}\n━━━━━━━━━━━━━━━━\nPage {page_idx + 1}/{len(pages)}\n\n"
 
     page_entries = pages[page_idx]
     for i, entry in enumerate(page_entries):
@@ -332,29 +331,35 @@ def generate_pokemon_list_ui(uid, page_idx, action_prefix="mypoke", is_admin=Fal
         suffix = build_display_suffix(entry, info, display)
         if show_numbering:
             item_num = (page_idx * page_size) + i + 1
-            text += f"`{item_num:02d}.` {escape_md(entry['name'])}{escape_md(suffix)}\n"
+            text += f"{item_num}\\. {escape_md(entry['name'])}{escape_md(suffix)}\n"
         else:
             text += f"{escape_md(entry['name'])}{escape_md(suffix)}\n"
 
     sort_arrow = "↓" if sort_dir == "desc" else "↑"
-    text += (f"\n📦 Tᴏᴛᴀʟ Pᴏᴋᴇ́ᴍᴏɴ — {total_poke}\n"
+    text += (f"\nTotal Pokemon: {total_poke}\n"
              f"/sort by: {escape_md(SORT_LABELS.get(sort_by, 'Order caught'))} {sort_arrow}\n"
              f"/display: {escape_md(DISPLAY_LABELS.get(display, 'None'))}\n"
              f"/pagesize: {page_size}\n━━━━━━━━━━━━━━━━")
 
-    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb = None
     if len(pages) > 1:
         p_prev1, p_next1 = max(0, page_idx - 1), min(len(pages) - 1, page_idx + 1)
         p_prev5, p_next5 = max(0, page_idx - 5), min(len(pages) - 1, page_idx + 5)
+        p_prev10, p_next10 = max(0, page_idx - 10), min(len(pages) - 1, page_idx + 10)
+        kb = types.InlineKeyboardMarkup(row_width=3)
         kb.row(
-            types.InlineKeyboardButton("x1 ⏪", callback_data=f"{action_prefix}_{uid}_{p_prev1}"),
-            types.InlineKeyboardButton("x1 ⏩", callback_data=f"{action_prefix}_{uid}_{p_next1}")
+            types.InlineKeyboardButton("«", callback_data=f"{action_prefix}_{uid}_{p_prev1}"),
+            types.InlineKeyboardButton(f"{page_idx + 1}/{len(pages)}", callback_data="ignore"),
+            types.InlineKeyboardButton("»", callback_data=f"{action_prefix}_{uid}_{p_next1}")
         )
         kb.row(
-            types.InlineKeyboardButton("x5 ⏪", callback_data=f"{action_prefix}_{uid}_{p_prev5}"),
-            types.InlineKeyboardButton("x5 ⏩", callback_data=f"{action_prefix}_{uid}_{p_next5}")
+            types.InlineKeyboardButton("« 5x", callback_data=f"{action_prefix}_{uid}_{p_prev5}"),
+            types.InlineKeyboardButton("5x »", callback_data=f"{action_prefix}_{uid}_{p_next5}")
         )
-    else: kb = None
+        kb.row(
+            types.InlineKeyboardButton("« 10x", callback_data=f"{action_prefix}_{uid}_{p_prev10}"),
+            types.InlineKeyboardButton("10x »", callback_data=f"{action_prefix}_{uid}_{p_next10}")
+        )
     return text, kb
 
 # ================== GAME LOGIC ==================
