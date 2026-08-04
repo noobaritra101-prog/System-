@@ -584,7 +584,9 @@ def register_admin_handlers(bot, active_hunts):
                         f"👤 Users: {counts['users']}\n"
                         f"🎒 Pokémon: {counts['pokemons']}\n"
                         f"👥 Groups: {counts['groups']}\n"
-                        f"⚔️ Battle Stats: {counts['battle_stats']}"
+                        f"⚔️ Battle Stats: {counts['battle_stats']}\n"
+                        f"🏅 Badges: {counts['user_badges']}\n"
+                        f"📋 Tasks: {counts['tasks']}"
                     ),
                     chat_id=message.chat.id, message_id=status_msg.message_id
                 )
@@ -604,7 +606,7 @@ def register_admin_handlers(bot, active_hunts):
         status_msg = bot.reply_to(message, escape_md("🔄 Extracting data from the database..."), parse_mode="MarkdownV2")
         try:
             data = db.export_all_data()
-            json_data = json.dumps(data, default=str, indent=4)
+            json_data = json.dumps(data, default=str)  # compact — indent=4 was ~doubling file size
             backup_file = io.BytesIO(json_data.encode('utf-8'))
             backup_file.name = f"database_backup_{int(time.time())}.json"
             bot.send_document(message.chat.id, backup_file, caption=escape_md("📦 Here is your complete database backup! Use /import to restore it later."), parse_mode="MarkdownV2")

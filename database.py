@@ -764,14 +764,20 @@ def export_all_data():
                 for uid, u in data["users"].items()
             ],
             "pokemons": [
-                {"user_id": p["user_id"], "name": p["name"], "region": p["region"], "ivs": p.get("ivs") or {}, "nature": p.get("nature") or _random_nature()}
+                {"id": p["id"], "user_id": p["user_id"], "name": p["name"], "region": p["region"], "ivs": p.get("ivs") or {}, "nature": p.get("nature") or _random_nature()}
                 for p in data["pokemons"]
             ],
+            "next_pokemon_id": data.get("next_pokemon_id", 1),
             "groups": list(data["groups"]),
+            "pvp_settings": dict(data.get("pvp_settings", {})),
             "battle_stats": [
                 {"user_id": int(uid), "wins": s["wins"], "losses": s["losses"]}
                 for uid, s in data["battle_stats"].items()
             ],
+            "user_badges": {uid: list(badges) for uid, badges in data.get("user_badges", {}).items()},
+            "gym_images": dict(data.get("gym_images", {})),
+            "tasks": {uid: dict(t) for uid, t in data.get("tasks", {}).items()},
+            "admins": list(data.get("admins", [])),
         }
 
 
@@ -787,15 +793,22 @@ def import_backup(backup):
                 "last_reset": u.get("last_reset") or _today_str(),
             }
 
-        next_id = 1
+        # Preserve original Pokemon ids when the backup has them (new export format);
+        # fall back to sequential numbering for older exports that lack "id".
+        max_id = 0
+        next_fallback_id = 1
         for p in backup.get("pokemons", []):
+            pid = p.get("id")
+            if pid is None:
+                pid = next_fallback_id
+            next_fallback_id = max(next_fallback_id, pid) + 1
             new_data["pokemons"].append({
-                "id": next_id, "user_id": p["user_id"], "name": p["name"], "region": p.get("region", "Kanto"),
+                "id": pid, "user_id": p["user_id"], "name": p["name"], "region": p.get("region", "Kanto"),
                 "ivs": p.get("ivs") or _random_ivs(),
                 "nature": p.get("nature") or _random_nature(),
             })
-            next_id += 1
-        new_data["next_pokemon_id"] = next_id
+            max_id = max(max_id, pid)
+        new_data["next_pokemon_id"] = max(backup.get("next_pokemon_id", 1), max_id + 1)
 
         for g in backup.get("groups", []):
             gid = g[0] if isinstance(g, (list, tuple)) else g
@@ -809,6 +822,11 @@ def import_backup(backup):
             new_data["user_badges"][uid] = badges
         for leader, file_id in backup.get("gym_images", {}).items():
             new_data["gym_images"][leader] = file_id
+        for uid, settings in backup.get("pvp_settings", {}).items():
+            new_data["pvp_settings"][uid] = settings
+        for uid, tasks in backup.get("tasks", {}).items():
+            new_data["tasks"][uid] = tasks
+        new_data["admins"] = list(backup.get("admins", []))
 
         global data
         data = new_data
@@ -819,6 +837,8 @@ def import_backup(backup):
             "pokemons": len(new_data["pokemons"]),
             "groups": len(new_data["groups"]),
             "battle_stats": len(new_data["battle_stats"]),
+            "user_badges": len(new_data["user_badges"]),
+            "tasks": len(new_data["tasks"]),
         }
 
 
