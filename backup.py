@@ -25,6 +25,7 @@ import time
 import threading
 
 from config import LOG_GROUP_ID, DATA_FILE, logger
+from api_utils import escape_md
 
 STATE_FILE = "backup_state.json"  # tracks the currently-pinned backup message_id
 BACKUP_INTERVAL = 1200  # 20 minutes
@@ -60,12 +61,14 @@ def backup_database(bot):
 
     try:
         with open(DATA_FILE, "rb") as f:
+            # bot-wide default parse_mode is MarkdownV2, and passing parse_mode=None
+            # falls back to that default rather than disabling it — so the caption
+            # must actually be escaped, not just opted out.
             sent = bot.send_document(
                 LOG_GROUP_ID,
                 f,
                 visible_file_name=DATA_FILE,
-                caption="🗄️ Auto-backup",
-                parse_mode=None,  # bot-wide default is MarkdownV2; caption isn't escaped, so opt out
+                caption=escape_md("🗄️ Auto-backup"),
             )
 
         bot.pin_chat_message(LOG_GROUP_ID, sent.message_id, disable_notification=True)
