@@ -213,6 +213,7 @@ def process_catch(bot, call, uid, pid, name):
             poke_name_capped = name.title()
             caught_record = db.add_caught_pokemon(uid, poke_name_capped, db.get_user(uid)[2])
             iv_pct = caught_record["iv_percent"] if caught_record else 0.0
+            iv_pct_str = escape_md(str(iv_pct))
             try: tasks.check_and_update_catch(uid, poke_name_capped)
             except Exception: logger.exception(f"check_and_update_catch failed for uid={uid}")
             
@@ -220,11 +221,11 @@ def process_catch(bot, call, uid, pid, name):
                 try: 
                     c_name = clean_name(call.from_user.first_name)
                     p_name = to_small_caps(poke_name_capped)
-                    log_msg = f"🟢 【Cᴀᴛᴄʜ】 [{escape_md(c_name)}](tg://user?id={uid}) ᴄᴀᴜɢʜᴛ ✨ Sʜɪɴʏ {escape_md(p_name)} \\(IV: {iv_pct}%\\)"
+                    log_msg = f"🟢 【Cᴀᴛᴄʜ】 [{escape_md(c_name)}](tg://user?id={uid}) ᴄᴀᴜɢʜᴛ ✨ Sʜɪɴʏ {escape_md(p_name)} \\(IV: {iv_pct_str}%\\)"
                     bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
                 except Exception: logger.exception("LOG_GROUP_ID catch log failed")
             
-            try: bot.edit_message_caption(caption=f"✨ *Gᴏᴛᴄʜᴀ\\!* Sʜɪɴʏ *{escape_md(to_small_caps(poke_name_capped))}* ᴡᴀs ᴄᴀᴜɢʜᴛ\\!\n🧬 *IV:* {iv_pct}%\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\.", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
+            try: bot.edit_message_caption(caption=f"✨ *Gᴏᴛᴄʜᴀ\\!* Sʜɪɴʏ *{escape_md(to_small_caps(poke_name_capped))}* ᴡᴀs ᴄᴀᴜɢʜᴛ\\!\n🧬 *IV:* {iv_pct_str}%\n\nUse /inspect `{escape_md(poke_name_capped)}` to view it\\.", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
             except Exception: logger.exception(f"edit_message_caption (catch success) failed for uid={uid}")
         else:
             try: bot.edit_message_caption(caption=f"💨 *Oʜ ɴᴏ\\!* Tʜᴇ Wɪʟᴅ ✨ {escape_md(to_small_caps(name.title()))} ʙʀᴏᴋᴇ ғʀᴇᴇ ᴀɴᴅ ғʟᴇᴅ\\!", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
@@ -447,7 +448,7 @@ def register_user_handlers(bot, active_hunts):
                     ivs = db.get_pokemon_ivs(message.from_user.id, name)
                     caption = f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)"
                     if ivs:
-                        total_pct = db.iv_percentage(ivs)
+                        total_pct = escape_md(str(db.iv_percentage(ivs)))
                         caption += (f"\n🧬 *IV: {total_pct}%*\n"
                                     f"❤️ HP: {ivs.get('hp', 0)}/31  ⚔️ Atk: {ivs.get('atk', 0)}/31  🛡️ Def: {ivs.get('def', 0)}/31\n"
                                     f"✨ SpA: {ivs.get('spa', 0)}/31  💠 SpD: {ivs.get('spd', 0)}/31  ⚡ Spe: {ivs.get('spe', 0)}/31")
