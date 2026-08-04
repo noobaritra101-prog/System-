@@ -15,7 +15,8 @@ import trade
 from config import LOG_GROUP_ID, FLEE_TIMEOUT, REGIONS, logger
 from api_utils import (escape_md, fetch_random_pokemon_id_and_name_sync, official_shiny_artwork_url, 
                        get_species_catch_rate_sync, get_pokemon_stats_sync, get_pokemon_id_sync, 
-                       get_pokemon_moveset_sync, get_pokemon_relearn_moves_sync, REGION_DEX, LEGENDARY_NAMES, pokemon_name_to_id_cache)
+                       get_pokemon_moveset_sync, get_pokemon_relearn_moves_sync, get_pokemon_evolution_sync,
+                       REGION_DEX, LEGENDARY_NAMES, pokemon_name_to_id_cache)
 
 TYPE_EMOJIS = {
     'Normal': '🔘', 'Fire': '🔥', 'Water': '💧', 'Electric': '⚡', 'Grass': '🌿', 
@@ -494,23 +495,13 @@ def process_catch(bot, call, uid, pid, name):
                     bot.send_message(LOG_GROUP_ID, log_msg, parse_mode="MarkdownV2")
                 except Exception: logger.exception("LOG_GROUP_ID catch log failed")
             
-            try: bot.edit_message_caption(caption=f"✨ *Gotcha\\!* Shiny *{escape_md(poke_name_capped)}* was caught\\!", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
-            except Exception: logger.exception(f"edit_message_caption (catch success) failed for uid={uid}")
-
             caught_caption = f"You caught a wild *{escape_md(poke_name_capped)}*\\."
             kb = types.InlineKeyboardMarkup().add(
                 types.InlineKeyboardButton("View stats", callback_data=f"insp_i_{uid}_{identifier}"),
                 types.InlineKeyboardButton("Release", callback_data=f"insprel_{uid}_{identifier}")
             )
-            # Sent as a photo (reusing the encounter image) so the View stats
-            # button can edit its caption, matching the rest of the /inspect UI.
-            try:
-                photo_id = call.message.photo[-1].file_id if getattr(call.message, "photo", None) else None
-                if photo_id:
-                    bot.send_photo(chat_id, photo_id, caption=caught_caption, parse_mode="MarkdownV2", reply_markup=kb)
-                else:
-                    bot.send_message(chat_id, caught_caption, parse_mode="MarkdownV2", reply_markup=kb)
-            except Exception: logger.exception(f"send catch confirmation failed for uid={uid}")
+            try: bot.edit_message_caption(caption=caught_caption, chat_id=chat_id, message_id=msg_id, reply_markup=kb, parse_mode="MarkdownV2")
+            except Exception: logger.exception(f"edit_message_caption (catch success) failed for uid={uid}")
         else:
             try: bot.edit_message_caption(caption=f"💨 *Oh no\\!* The wild ✨ {escape_md(name.title())} broke free and fled\\!", chat_id=chat_id, message_id=msg_id, parse_mode="MarkdownV2")
             except Exception: logger.exception(f"edit_message_caption (flee) failed for uid={uid}")
@@ -535,17 +526,18 @@ def get_dex_text(name, page="info"):
         return (f"📊 *Base Stats: {escape_md(name.capitalize())}*\n━━━━━━━━━━━━━━\n{stats_str}\n━━━━━━━━━━━━━━\n📈 *Total:* {sum(stats.values())}")
 
 # ================== /inspect ENGINE ==================
-INSPECT_PAGES = [("i", "Info"), ("s", "Stats"), ("v", "IV & EV"), ("m", "Move Set")]
+INSPECT_PAGES = [("i", "Info"), ("s", "Stats"), ("v", "IV & EV"), ("e", "Evolve"), ("m", "Move Set")]
 IV_ORDER = ["hp", "atk", "def", "spa", "spd", "spe"]
 STAT_KEY_MAP = {"Hp": "hp", "Attack": "atk", "Defense": "def", "Special attack": "spa", "Special defense": "spd", "Speed": "spe"}
 STAT_LABELS = {"hp": "HP", "atk": "Attack", "def": "Defense", "spa": "Sp. Attack", "spd": "Sp. Defense", "spe": "Speed"}
+_ROW2_PAGES = {"e", "m"}
 
 def build_inspect_keyboard(user_id, identifier, active_page):
     kb = types.InlineKeyboardMarkup(row_width=3)
     row1, row2 = [], []
     for code, label in INSPECT_PAGES:
         btn = types.InlineKeyboardButton(label, callback_data="ignore" if code == active_page else f"insp_{code}_{user_id}_{identifier}")
-        (row1 if code != "m" else row2).append(btn)
+        (row2 if code in _ROW2_PAGES else row1).append(btn)
     kb.row(*row1)
     kb.row(*row2)
     kb.row(
@@ -583,6 +575,22 @@ def build_inspect_page(user_id, identifier, page_code="i"):
             suffix = " \\(\\+\\)" if key == boost else (" \\(\\-\\)" if key == lower else "")
             lines.append(f"{escape_md(STAT_LABELS[key])}: {actual[key]}{suffix}")
         caption = header + "\n".join(lines)
+
+    elif page_code == "e":
+        evo = get_pokemon_evolution_sync(name)
+        if not evo:
+            caption = header + escape_md("⚠️ Couldn't load evolution data right now — try again shortly.")
+        else:
+            lines = []
+            if evo["from"]:
+                lines.append(f"Evolves from: {escape_md(evo['from'])}")
+            if evo["into"]:
+                for nxt in evo["into"]:
+                    lvl = f" \\(Lv\\. {nxt['min_level']}\\)" if nxt.get("min_level") else ""
+                    lines.append(f"Evolves into: {escape_md(nxt['name'])}{lvl}")
+            if not lines:
+                lines.append(escape_md("This Pokémon does not evolve."))
+            caption = header + "\n".join(lines)
 
     elif page_code == "m":
         moves = db.get_pokemon_custom_moves(user_id, identifier) or get_pokemon_moveset_sync(name)
