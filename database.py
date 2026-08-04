@@ -33,6 +33,16 @@ NATURES = {
 }
 
 
+# ================== /mypokemon LIST SETTINGS ==================
+DEFAULT_LIST_SETTINGS = {
+    "sort_by": "order_caught",
+    "sort_dir": "asc",
+    "display": "none",
+    "show_numbering": True,
+    "page_size": 20,
+}
+
+
 def _random_ivs():
     return {stat: random.randint(0, 31) for stat in IV_STATS}
 
@@ -104,21 +114,27 @@ def _load():
 
 
 def _backfill_ivs():
-    """One-time migration: give every existing Pokémon (caught before IVs/nature existed)
-    a random IV spread and a random nature."""
+    """One-time migration: give every existing Pokémon a random IV spread and nature if missing or default Hardy."""
     backfilled = 0
-    for p in data["pokemons"]:
+    pokes = data.get("pokemons", [])
+    total_count = len(pokes)
+    hardy_count = sum(1 for p in pokes if p.get("nature") == "Hardy")
+    
+    # If over 30% of pokemons are Hardy (indicates legacy default-fallback issue)
+    fix_hardy = (total_count > 1 and hardy_count / total_count > 0.3) or (total_count == 1 and hardy_count == 1)
+
+    for p in pokes:
         changed = False
         if "ivs" not in p or not p["ivs"]:
             p["ivs"] = _random_ivs()
             changed = True
-        if "nature" not in p or not p["nature"]:
+        if "nature" not in p or not p["nature"] or (fix_hardy and p.get("nature") == "Hardy"):
             p["nature"] = _random_nature()
             changed = True
         if changed:
             backfilled += 1
     if backfilled:
-        logger.info(f"🎲 Backfilled random IVs/Nature for {backfilled} existing Pokémon.")
+        logger.info(f"🎲 Backfilled/randomized IVs & Nature for {backfilled} existing Pokémon.")
 
 
 def _save():
@@ -238,9 +254,6 @@ def get_all_users():
 
 # ================== POKEMON MANAGEMENT ==================
 def add_caught_pokemon(user_id, name, region, source="Wild"):
-    """Adds a caught Pokémon with a fresh random IV spread + nature and returns the created
-    record (id, name, region, ivs, nature, iv_percent) so callers don't need to re-scan
-    the whole pokemons list just to find what was caught."""
     try:
         with _lock:
             pid = data["next_pokemon_id"]
@@ -257,52 +270,84 @@ def add_caught_pokemon(user_id, name, region, source="Wild"):
 
 
 def _user_matches(p, user_id):
-    """Compares a pokemon record's user_id against the caller's user_id, tolerant of
-    str/int mismatches (legacy records migrated from Postgres may have stored the
-    id as a string, while live code passes Telegram's int id)."""
     pu = p.get("user_id")
     return pu == user_id or str(pu) == str(user_id)
 
 
-def get_pokemon_ivs(user_id, name):
-    """Returns the IV dict for the oldest matching catch, or None.
-    ⚡ Filters this user's catches first instead of sorting the entire
-    (all-users) pokemons list — sorting the global list here was blocking
-    the shared lock for a long time on accounts with a large collection."""
+def _find_pokemon_record(user_id, identifier):
+    """Finds a specific pokemon record for user_id by numeric record id OR species name."""
+    if identifier is None:
+        return None
+    ident_str = str(identifier).strip()
+    
+    # Check if identifier is numeric record ID
+    if ident_str.isdigit():
+        target_id = int(ident_str)
+        for p in data["pokemons"]:
+            if _user_matches(p, user_id) and p.get("id") == target_id:
+                return p
+    
+    # Otherwise search by species name (case-insensitive), returning oldest
+    name_lower = ident_str.lower()
+    matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
+    if not matches:
+        return None
+    return min(matches, key=lambda p: p.get("id", 0))
+
+
+def get_pokemon_ivs(user_id, identifier):
     try:
         with _lock:
-            name_lower = (name or "").lower()
-            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
-            if not matches:
+            rec = _find_pokemon_record(user_id, identifier)
+            if not rec:
                 return None
-            oldest = min(matches, key=lambda p: p.get("id", 0))
-            return dict(oldest.get("ivs") or {})
+            return dict(rec.get("ivs") or {})
     except Exception:
-        logger.exception(f"❌ get_pokemon_ivs failed for user_id={user_id} name={name}")
+        logger.exception(f"❌ get_pokemon_ivs failed for user_id={user_id} identifier={identifier}")
         return None
 
 
-def get_pokemon_details(user_id, name):
-    """Returns {'ivs': {...}, 'nature': str} for the oldest matching catch, or None.
-    Used by /inspect, which needs both IVs and nature together."""
+def get_pokemon_details(user_id, identifier):
+    """Returns {'id', 'name', 'ivs', 'nature'} for a specific Pokémon (by record ID or name)."""
     try:
         with _lock:
-            name_lower = (name or "").lower()
-            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
-            if not matches:
+            rec = _find_pokemon_record(user_id, identifier)
+            if not rec:
                 return None
-            oldest = min(matches, key=lambda p: p.get("id", 0))
             return {
-                "ivs": dict(oldest.get("ivs") or {}),
-                "nature": oldest.get("nature") or "Hardy",
+                "id": rec.get("id"),
+                "name": rec.get("name"),
+                "ivs": dict(rec.get("ivs") or {}),
+                "nature": rec.get("nature") or _random_nature(),
             }
     except Exception:
-        logger.exception(f"❌ get_pokemon_details failed for user_id={user_id} name={name}")
+        logger.exception(f"❌ get_pokemon_details failed for user_id={user_id} identifier={identifier}")
         return None
+
+
+def get_user_pokemon_by_name(user_id, name):
+    """Returns all caught records (id, name, region, ivs, iv_percent, nature) for user_id matching species name."""
+    try:
+        with _lock:
+            name_lower = (name or "").lower()
+            rows = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
+            return [
+                {
+                    "id": p.get("id", 0),
+                    "name": p.get("name"),
+                    "region": p.get("region"),
+                    "ivs": dict(p.get("ivs") or {}),
+                    "iv_percent": iv_percentage(p.get("ivs")),
+                    "nature": p.get("nature") or "Hardy",
+                }
+                for p in rows
+            ]
+    except Exception:
+        logger.exception(f"❌ get_user_pokemon_by_name failed for user_id={user_id} name={name}")
+        return []
 
 
 def get_user_pokemon(user_id):
-    """Full records (id, name, region, ivs, iv_percent) for a user, oldest first."""
     try:
         with _lock:
             rows = [p for p in data["pokemons"] if _user_matches(p, user_id)]
@@ -333,64 +378,101 @@ def list_user_pokemon_names(user_id):
         return []
 
 
-def get_pokemon_custom_moves(user_id, name):
-    """Returns the persisted, relearner-customized moveset (list of move dicts) for the
-    oldest matching catch, or None if that Pokémon still uses its default species moveset."""
+def list_user_pokemon_full(user_id):
     try:
         with _lock:
-            name_lower = (name or "").lower()
-            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
-            if not matches:
+            rows = [p for p in data["pokemons"] if _user_matches(p, user_id)]
+            rows.sort(key=lambda p: p.get("id", 0))
+            return [
+                {
+                    "id": p.get("id", 0),
+                    "name": p.get("name"),
+                    "ivs": dict(p.get("ivs") or {}),
+                    "iv_percent": iv_percentage(p.get("ivs")),
+                    "nature": p.get("nature") or "Hardy",
+                }
+                for p in rows
+            ]
+    except Exception:
+        logger.exception(f"❌ list_user_pokemon_full failed for user_id={user_id}")
+        return []
+
+
+# ================== /mypokemon LIST SETTINGS (accessors) ==================
+def get_list_settings(user_id):
+    uid = str(user_id)
+    with _lock:
+        u = data["users"].get(uid)
+        if not u:
+            return dict(DEFAULT_LIST_SETTINGS)
+        settings = u.setdefault("list_settings", {})
+        changed = False
+        for k, v in DEFAULT_LIST_SETTINGS.items():
+            if k not in settings:
+                settings[k] = v
+                changed = True
+        if changed:
+            _save()
+        return dict(settings)
+
+
+def update_list_settings(user_id, **kwargs):
+    uid = str(user_id)
+    with _lock:
+        u = data["users"].get(uid)
+        if not u:
+            return None
+        settings = u.setdefault("list_settings", dict(DEFAULT_LIST_SETTINGS))
+        for k, v in DEFAULT_LIST_SETTINGS.items():
+            settings.setdefault(k, v)
+        settings.update(kwargs)
+        _save()
+        return dict(settings)
+
+
+def get_pokemon_custom_moves(user_id, identifier):
+    try:
+        with _lock:
+            rec = _find_pokemon_record(user_id, identifier)
+            if not rec:
                 return None
-            oldest = min(matches, key=lambda p: p.get("id", 0))
-            moves = oldest.get("moves")
+            moves = rec.get("moves")
             return [dict(m) for m in moves] if moves else None
     except Exception:
-        logger.exception(f"❌ get_pokemon_custom_moves failed for user_id={user_id} name={name}")
+        logger.exception(f"❌ get_pokemon_custom_moves failed for user_id={user_id} identifier={identifier}")
         return None
 
 
-def set_pokemon_move_slot(user_id, name, base_moves, slot_index, new_move):
-    """Replaces one move slot (0-based) in a user's Pokémon's moveset via the Move Relearner
-    and persists the full 4-move list. `base_moves` seeds the moveset the first time this
-    Pokémon is relearned (its current default species moves); afterwards the already-saved
-    custom moveset is reused as the base. Returns the updated 4-move list, or None on failure."""
+def set_pokemon_move_slot(user_id, identifier, base_moves, slot_index, new_move):
     try:
         with _lock:
-            name_lower = (name or "").lower()
-            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
-            if not matches:
+            rec = _find_pokemon_record(user_id, identifier)
+            if not rec:
                 return None
-            oldest = min(matches, key=lambda p: p.get("id", 0))
-            current = oldest.get("moves") or [dict(m) for m in (base_moves or [])]
+            current = rec.get("moves") or [dict(m) for m in (base_moves or [])]
             if slot_index < 0 or slot_index >= len(current):
                 return None
             current[slot_index] = dict(new_move)
-            oldest["moves"] = current
+            rec["moves"] = current
             _save()
             return [dict(m) for m in current]
     except Exception:
-        logger.exception(f"❌ set_pokemon_move_slot failed for user_id={user_id} name={name}")
+        logger.exception(f"❌ set_pokemon_move_slot failed for user_id={user_id} identifier={identifier}")
         return None
 
 
-def delete_pokemon(user_id, name):
-    """⚡ Filters this user's catches first instead of sorting the entire
-    (all-users) pokemons list, for the same reason as get_pokemon_ivs above."""
+def delete_pokemon(user_id, identifier):
     try:
         with _lock:
-            name_lower = (name or "").lower()
-            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
-            if not matches:
+            rec = _find_pokemon_record(user_id, identifier)
+            if not rec:
                 return False
-            oldest = min(matches, key=lambda p: p.get("id", 0))
-            data["pokemons"].remove(oldest)
+            data["pokemons"].remove(rec)
             _save()
             return True
     except Exception:
-        logger.exception(f"❌ delete_pokemon failed for user_id={user_id} name={name}")
+        logger.exception(f"❌ delete_pokemon failed for user_id={user_id} identifier={identifier}")
         return False
-
 
 
 # ================== LEADERBOARD ==================
@@ -515,7 +597,6 @@ def get_gym_image(leader_name):
 
 
 def delete_gym_image(leader_name):
-    """Deletes a faulty image entry, ignoring case (like the old ILIKE)."""
     with _lock:
         target = leader_name.lower()
         keys = [k for k in data["gym_images"].keys() if k.lower() == target]
@@ -637,7 +718,6 @@ def get_all_groups():
 
 # ================== CROSS-ACCOUNT TRANSFER ==================
 def transfer_user_data(source_uid, target_uid):
-    """Moves pokemons, battle_stats and tasks from one user id to another. Returns pokemon count moved."""
     with _lock:
         poke_count = 0
         for p in data["pokemons"]:
@@ -668,7 +748,7 @@ def export_all_data():
                 for uid, u in data["users"].items()
             ],
             "pokemons": [
-                {"user_id": p["user_id"], "name": p["name"], "region": p["region"], "ivs": p.get("ivs") or {}}
+                {"user_id": p["user_id"], "name": p["name"], "region": p["region"], "ivs": p.get("ivs") or {}, "nature": p.get("nature") or _random_nature()}
                 for p in data["pokemons"]
             ],
             "groups": list(data["groups"]),
@@ -680,11 +760,6 @@ def export_all_data():
 
 
 def import_backup(backup):
-    """
-    Loads a JSON backup (in the same shape export_all_data() / the old
-    /export command produces) and REPLACES all current data with it.
-    Returns a dict with counts of what was imported.
-    """
     with _lock:
         new_data = _default_data()
 
@@ -701,6 +776,7 @@ def import_backup(backup):
             new_data["pokemons"].append({
                 "id": next_id, "user_id": p["user_id"], "name": p["name"], "region": p.get("region", "Kanto"),
                 "ivs": p.get("ivs") or _random_ivs(),
+                "nature": p.get("nature") or _random_nature(),
             })
             next_id += 1
         new_data["next_pokemon_id"] = next_id
@@ -713,7 +789,6 @@ def import_backup(backup):
         for b in backup.get("battle_stats", []):
             new_data["battle_stats"][str(b["user_id"])] = {"wins": b.get("wins", 0), "losses": b.get("losses", 0)}
 
-        # Carry over anything the backup happens to include for these optional tables
         for uid, badges in backup.get("user_badges", {}).items():
             new_data["user_badges"][uid] = badges
         for leader, file_id in backup.get("gym_images", {}).items():
@@ -732,7 +807,6 @@ def import_backup(backup):
 
 
 def restore_sqlite_data(users_data, pokemons_data, groups_data):
-    """Kept for the legacy /restore (.db file) migration path."""
     with _lock:
         for row in users_data:
             uid = str(row[0])
@@ -744,7 +818,7 @@ def restore_sqlite_data(users_data, pokemons_data, groups_data):
         for row in pokemons_data:
             pid = data["next_pokemon_id"]
             data["next_pokemon_id"] = pid + 1
-            data["pokemons"].append({"id": pid, "user_id": row[0], "name": row[1], "region": row[2], "ivs": _random_ivs()})
+            data["pokemons"].append({"id": pid, "user_id": row[0], "name": row[1], "region": row[2], "ivs": _random_ivs(), "nature": _random_nature()})
 
         for row in groups_data:
             gid = row[0] if isinstance(row, (list, tuple)) else row
@@ -768,13 +842,13 @@ def export_table_csv(table_name):
             for uid, u in data["users"].items():
                 writer.writerow([uid, u["tries_left"], u["region"], u.get("last_reset")])
         elif table_name == "pokemons":
-            writer.writerow(["id", "user_id", "name", "region", "hp", "atk", "def", "spa", "spd", "spe", "iv_percent"])
+            writer.writerow(["id", "user_id", "name", "region", "hp", "atk", "def", "spa", "spd", "spe", "iv_percent", "nature"])
             for p in data["pokemons"]:
                 ivs = p.get("ivs") or {}
                 writer.writerow([
                     p["id"], p["user_id"], p["name"], p["region"],
                     ivs.get("hp"), ivs.get("atk"), ivs.get("def"), ivs.get("spa"), ivs.get("spd"), ivs.get("spe"),
-                    iv_percentage(ivs),
+                    iv_percentage(ivs), p.get("nature", "Hardy")
                 ])
         elif table_name == "groups":
             writer.writerow(["group_id"])
