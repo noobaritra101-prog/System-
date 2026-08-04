@@ -567,6 +567,7 @@ def build_inspect_page(user_id, identifier, page_code="i"):
         actual[short_key] = db.calc_level_100_stat(base, ivs.get(short_key, 0), short_key, nature)
 
     header = f"✨ *{escape_md(name.capitalize())}* \\(Shiny\\)\n\n"
+    evo_targets = []
 
     if page_code == "s":
         boost, lower = db.nature_effect(nature)
@@ -578,6 +579,7 @@ def build_inspect_page(user_id, identifier, page_code="i"):
 
     elif page_code == "e":
         evo = get_pokemon_evolution_sync(name)
+        evo_targets = evo["into"] if evo else []
         if not evo:
             caption = header + escape_md("⚠️ Couldn't load evolution data right now — try again shortly.")
         else:
@@ -588,7 +590,7 @@ def build_inspect_page(user_id, identifier, page_code="i"):
                 for nxt in evo["into"]:
                     lvl = f" \\(Lv\\. {nxt['min_level']}\\)" if nxt.get("min_level") else ""
                     lines.append(f"Evolves into: {escape_md(nxt['name'])}{lvl}")
-            if not lines:
+            else:
                 lines.append(escape_md("This Pokémon does not evolve."))
             caption = header + "\n".join(lines)
 
@@ -625,6 +627,16 @@ def build_inspect_page(user_id, identifier, page_code="i"):
                    f"Exp\\. 1,000,000\nTo Next Lv\\. 0\nEXP ██████████")
 
     kb = build_inspect_keyboard(user_id, identifier, page_code)
+    if page_code == "e" and evo_targets:
+        stable_id = details["id"]
+        evo_row = [
+            types.InlineKeyboardButton(
+                f"Evolve into {nxt['name']}" if len(evo_targets) > 1 else "Evolve",
+                callback_data=f"evo_{user_id}_{stable_id}_{nxt['name'][:16]}"
+            )
+            for nxt in evo_targets
+        ]
+        kb.keyboard.insert(max(len(kb.keyboard) - 1, 0), evo_row)
     return caption, kb
 
 
@@ -1336,6 +1348,74 @@ def register_user_handlers(bot, active_hunts):
                 bot.answer_callback_query(call.id, "✅ Released." if ok else "⚠️ Failed.")
             except Exception:
                 logger.exception(f"❌ cq_inspect_release_confirm failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("evo_"))
+    def cq_evolve_prompt(call):
+        def process():
+            try:
+                _, uid_str, identifier, target_name = call.data.split("_", 3)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your Pokémon.", show_alert=True)
+
+                details = db.get_pokemon_details(call.from_user.id, identifier)
+                name_disp = details["name"].capitalize() if details else "Pokémon"
+
+                caption = (f"🌟 *Confirm Evolution*\n\n"
+                           f"Evolve *{escape_md(name_disp)}* into\n"
+                           f"*{escape_md(target_name)}*?\n\n"
+                           f"This action cannot be undone\\.")
+                kb = types.InlineKeyboardMarkup(row_width=2)
+                kb.add(
+                    types.InlineKeyboardButton("Confirm", callback_data=f"evoc_Y_{call.from_user.id}_{identifier}_{target_name}"),
+                    types.InlineKeyboardButton("Cancel", callback_data=f"evoc_N_{call.from_user.id}_{identifier}_{target_name}")
+                )
+                try:
+                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_evolve_prompt edit_message_caption failed: {call.data}")
+                bot.answer_callback_query(call.id)
+            except Exception:
+                logger.exception(f"❌ cq_evolve_prompt failed entirely: {call.data}")
+                try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
+                except: pass
+        threading.Thread(target=process).start()
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("evoc_"))
+    def cq_evolve_confirm(call):
+        def process():
+            try:
+                _, decision, uid_str, identifier, target_name = call.data.split("_", 4)
+                if str(call.from_user.id) != uid_str:
+                    return bot.answer_callback_query(call.id, "❌ This isn't your Pokémon.", show_alert=True)
+
+                if decision == "N":
+                    caption, kb = build_inspect_page(call.from_user.id, identifier, "e")
+                    if caption is None:
+                        return bot.answer_callback_query(call.id, "⚠️ Couldn't load that Pokémon.", show_alert=True)
+                    try:
+                        bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                    except Exception:
+                        logger.exception(f"cq_evolve_confirm(N) edit_message_caption failed: {call.data}")
+                    return bot.answer_callback_query(call.id, "❌ Evolution cancelled.")
+
+                ok = db.evolve_pokemon(call.from_user.id, identifier, target_name.title())
+                if not ok:
+                    return bot.answer_callback_query(call.id, "⚠️ Couldn't evolve that Pokémon.", show_alert=True)
+
+                caption, kb = build_inspect_page(call.from_user.id, identifier, "i")
+                if caption is None:
+                    caption = f"✨ Evolved into *{escape_md(target_name.title())}*\\!"
+                    kb = None
+                try:
+                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                except Exception:
+                    logger.exception(f"cq_evolve_confirm(Y) edit_message_caption failed: {call.data}")
+                bot.answer_callback_query(call.id, "✨ Evolved!")
+            except Exception:
+                logger.exception(f"❌ cq_evolve_confirm failed entirely: {call.data}")
                 try: bot.answer_callback_query(call.id, "⚠️ Something went wrong.", show_alert=True)
                 except: pass
         threading.Thread(target=process).start()

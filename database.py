@@ -475,6 +475,22 @@ def delete_pokemon(user_id, identifier):
         return False
 
 
+def evolve_pokemon(user_id, identifier, new_name):
+    """Renames a caught Pokémon's species to its next evolution, keeping its
+    record id, IVs, nature, and region intact."""
+    try:
+        with _lock:
+            rec = _find_pokemon_record(user_id, identifier)
+            if not rec:
+                return False
+            rec["name"] = new_name
+            _save()
+            return True
+    except Exception:
+        logger.exception(f"❌ evolve_pokemon failed for user_id={user_id} identifier={identifier}")
+        return False
+
+
 # ================== LEADERBOARD ==================
 def get_top_trainers(limit=5):
     with _lock:
