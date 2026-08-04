@@ -203,14 +203,26 @@ def add_caught_pokemon(user_id, name, region, source="Wild"):
     """Adds a caught Pokémon with a fresh random IV spread and returns the created
     record (id, name, region, ivs, iv_percent) so callers don't need to re-scan
     the whole pokemons list just to find what was caught."""
-    with _lock:
-        pid = data["next_pokemon_id"]
-        data["next_pokemon_id"] = pid + 1
-        ivs = _random_ivs()
-        record = {"id": pid, "user_id": user_id, "name": name, "region": region, "ivs": ivs}
-        data["pokemons"].append(record)
-        _save()
-        return {"id": pid, "name": name, "region": region, "ivs": ivs, "iv_percent": iv_percentage(ivs)}
+    try:
+        with _lock:
+            pid = data["next_pokemon_id"]
+            data["next_pokemon_id"] = pid + 1
+            ivs = _random_ivs()
+            record = {"id": pid, "user_id": user_id, "name": name, "region": region, "ivs": ivs}
+            data["pokemons"].append(record)
+            _save()
+            return {"id": pid, "name": name, "region": region, "ivs": ivs, "iv_percent": iv_percentage(ivs)}
+    except Exception:
+        logger.exception(f"❌ add_caught_pokemon failed for user_id={user_id} name={name}")
+        return None
+
+
+def _user_matches(p, user_id):
+    """Compares a pokemon record's user_id against the caller's user_id, tolerant of
+    str/int mismatches (legacy records migrated from Postgres may have stored the
+    id as a string, while live code passes Telegram's int id)."""
+    pu = p.get("user_id")
+    return pu == user_id or str(pu) == str(user_id)
 
 
 def get_pokemon_ivs(user_id, name):
@@ -218,51 +230,67 @@ def get_pokemon_ivs(user_id, name):
     ⚡ Filters this user's catches first instead of sorting the entire
     (all-users) pokemons list — sorting the global list here was blocking
     the shared lock for a long time on accounts with a large collection."""
-    with _lock:
-        name_lower = name.lower()
-        matches = [p for p in data["pokemons"] if p["user_id"] == user_id and p["name"].lower() == name_lower]
-        if not matches:
-            return None
-        oldest = min(matches, key=lambda p: p["id"])
-        return dict(oldest.get("ivs") or {})
+    try:
+        with _lock:
+            name_lower = (name or "").lower()
+            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
+            if not matches:
+                return None
+            oldest = min(matches, key=lambda p: p.get("id", 0))
+            return dict(oldest.get("ivs") or {})
+    except Exception:
+        logger.exception(f"❌ get_pokemon_ivs failed for user_id={user_id} name={name}")
+        return None
 
 
 def get_user_pokemon(user_id):
     """Full records (id, name, region, ivs, iv_percent) for a user, oldest first."""
-    with _lock:
-        rows = [p for p in data["pokemons"] if p["user_id"] == user_id]
-        rows.sort(key=lambda p: p["id"])
-        return [
-            {
-                "id": p["id"],
-                "name": p["name"],
-                "region": p["region"],
-                "ivs": dict(p.get("ivs") or {}),
-                "iv_percent": iv_percentage(p.get("ivs")),
-            }
-            for p in rows
-        ]
+    try:
+        with _lock:
+            rows = [p for p in data["pokemons"] if _user_matches(p, user_id)]
+            rows.sort(key=lambda p: p.get("id", 0))
+            return [
+                {
+                    "id": p.get("id"),
+                    "name": p.get("name"),
+                    "region": p.get("region"),
+                    "ivs": dict(p.get("ivs") or {}),
+                    "iv_percent": iv_percentage(p.get("ivs")),
+                }
+                for p in rows
+            ]
+    except Exception:
+        logger.exception(f"❌ get_user_pokemon failed for user_id={user_id}")
+        return []
 
 
 def list_user_pokemon_names(user_id):
-    with _lock:
-        rows = [p for p in data["pokemons"] if p["user_id"] == user_id]
-        rows.sort(key=lambda p: p["id"])
-        return [p["name"] for p in rows]
+    try:
+        with _lock:
+            rows = [p for p in data["pokemons"] if _user_matches(p, user_id)]
+            rows.sort(key=lambda p: p.get("id", 0))
+            return [p.get("name") for p in rows]
+    except Exception:
+        logger.exception(f"❌ list_user_pokemon_names failed for user_id={user_id}")
+        return []
 
 
 def delete_pokemon(user_id, name):
     """⚡ Filters this user's catches first instead of sorting the entire
     (all-users) pokemons list, for the same reason as get_pokemon_ivs above."""
-    with _lock:
-        name_lower = name.lower()
-        matches = [p for p in data["pokemons"] if p["user_id"] == user_id and p["name"].lower() == name_lower]
-        if not matches:
-            return False
-        oldest = min(matches, key=lambda p: p["id"])
-        data["pokemons"].remove(oldest)
-        _save()
-        return True
+    try:
+        with _lock:
+            name_lower = (name or "").lower()
+            matches = [p for p in data["pokemons"] if _user_matches(p, user_id) and p.get("name", "").lower() == name_lower]
+            if not matches:
+                return False
+            oldest = min(matches, key=lambda p: p.get("id", 0))
+            data["pokemons"].remove(oldest)
+            _save()
+            return True
+    except Exception:
+        logger.exception(f"❌ delete_pokemon failed for user_id={user_id} name={name}")
+        return False
 
 
 
