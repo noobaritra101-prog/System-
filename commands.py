@@ -782,7 +782,7 @@ def register_user_handlers(bot, active_hunts):
             
             text = (
                 f"*✦━━━━━━━━━━━━━━━━✦*\n"
-                f"      *🪪 Tʀᴀɪɴᴇʀ Cᴀʀᴅ 🪪*\n"
+                f"      *🪪 TʀᴀɪɴᴇR Cᴀʀᴅ 🪪*\n"
                 f"*✦━━━━━━━━━━━━━━━━✦*\n\n"
                 f"*👤 Nᴀᴍᴇ — {u_name}*\n"
                 f"*🆔 Uɪᴅ — `{user_id}`*\n"
@@ -885,6 +885,8 @@ def register_user_handlers(bot, active_hunts):
                     if not entries:
                         safe_send(bot, call.message.chat.id, escape_md(f"❌ You don't own a {name.title()}."))
                     elif len(entries) == 1:
+                        try: bot.delete_message(call.message.chat.id, call.message.message_id)
+                        except: pass
                         caption, kb = build_inspect_page(call.from_user.id, entries[0]["id"], "i")
                         poke_id = get_pokemon_id_sync(entries[0]["name"])
                         if caption and poke_id:
@@ -892,7 +894,10 @@ def register_user_handlers(bot, active_hunts):
                             bot.send_photo(call.message.chat.id, photo_payload, caption=caption, reply_markup=kb, parse_mode="MarkdownV2")
                     else:
                         text, kb = generate_inspect_multi_ui(call.from_user.id, name, 0)
-                        safe_send(bot, call.message.chat.id, text, reply_markup=kb)
+                        try:
+                            bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                        except Exception:
+                            safe_send(bot, call.message.chat.id, text, reply_markup=kb)
 
                 elif action == "rel":
                     poke_name = name.title()
@@ -1100,6 +1105,13 @@ def register_user_handlers(bot, active_hunts):
                     return bot.answer_callback_query(call.id, "⚠️ Couldn't load that Pokémon.", show_alert=True)
 
                 bot.answer_callback_query(call.id)
+
+                # Auto-delete the selection menu message upon choice
+                try:
+                    bot.delete_message(call.message.chat.id, call.message.message_id)
+                except Exception:
+                    pass
+
                 details = db.get_pokemon_details(call.from_user.id, poke_id_str)
                 poke_id = get_pokemon_id_sync(details["name"]) if details else None
 
@@ -1228,7 +1240,7 @@ def register_user_handlers(bot, active_hunts):
                     return bot.answer_callback_query(call.id, "⚠️ Couldn't save that move.", show_alert=True)
 
                 caption, kb = build_relearner_page(call.from_user.id, identifier, list_page)
-                note = f"✅ *Fᴏʀɢᴏᴛ {escape_md(old_move_name)}, ʟᴇᴀʀɴᴇᴅ {escape_md(new_move['name'])}\\!*\n\n"
+                note = f"✅ *Fᴏʀɢᴏᴛ {escape_md(old_move_name)}, ʟᴇᴀʀɴᴇD {escape_md(new_move['name'])}\\!*\n\n"
                 caption = note + caption
                 try:
                     bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
