@@ -1,29 +1,3 @@
-Here is the updated commands.py file reflecting all your requested changes:
-
-1.  /inspect Multi-Copy List:
-
-      - Removed ━━━━━━━━━━━━━━━━, Page 1/1, and divider lines from the top
-        header.
-      - Formatted items as bold Pokémon name, followed by -, and then the
-        display detail (e.g. 1. *Milcery* - Naive).
-
-2.  /mypokemon List:
-
-      - Removed Your Pokemon, ━━━━━━━━━━━━━━━━, and Page 1/9 from the top
-        header.
-      - Formatted items as bold Pokémon name followed by - and display detail
-        (e.g. 1. *Milcery* - 85 IV).
-
-3.  Inspect Move Set Page ("m"):
-
-      - Updated layout to match: *Gunk Shot* [Poison ☣️] Power: 120,
-        Accuracy: 80 (Physical) *Eternabeam* [Dragon 🐉] Power: 160, Accuracy: 90
-        (Special)
-      - Removed blank spaces between moves (single line break between move
-        blocks).
-
-Updated File: commands.py
-
 # commands.py
 import time
 import threading
