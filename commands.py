@@ -709,7 +709,7 @@ def build_relearn_slot_page(user_id, identifier, list_page, move_idx):
     caption = header + "\n".join(lines)
 
     kb = types.InlineKeyboardMarkup(row_width=3)
-    num_buttons = [types.InlineKeyboardButton(str(i + 1), callback_data=f"relr_{list_page}_{move_idx}_{i - 1}_{user_id}_{identifier}") for i in range(1, len(current_moves) + 1)]
+    num_buttons = [types.InlineKeyboardButton(str(i), callback_data=f"relr_{list_page}_{move_idx}_{i - 1}_{user_id}_{identifier}") for i in range(1, len(current_moves) + 1)]
     for i in range(0, len(num_buttons), 3):
         kb.row(*num_buttons[i:i + 3])
     kb.row(types.InlineKeyboardButton("Back", callback_data=f"relp_{list_page}_{user_id}_{identifier}"))
