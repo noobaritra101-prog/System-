@@ -551,13 +551,14 @@ def build_inspect_page(user_id, identifier, page_code="i"):
     if not details: return None, None
     
     name = details["name"]
+
+    if page_code == "r":
+        return build_relearner_page(user_id, identifier, 0)
+
     poke_id = get_pokemon_id_sync(name)
     if not poke_id: return None, None
     types_list, base_stats = get_pokemon_stats_sync(name)
     if not base_stats: return None, None
-
-    if page_code == "r":
-        return build_relearner_page(user_id, identifier, 0)
 
     ivs, nature = details["ivs"], details["nature"]
 
@@ -662,7 +663,7 @@ def build_relearner_page(user_id, identifier, list_page=0):
     blocks = []
     for i, m in enumerate(page_moves, start=1):
         emoji = TYPE_EMOJIS.get(m["type"], "")
-        blocks.append(f"{i}\\. {escape_md(m['name'])} \\[{emoji}\\]  \\[{escape_md(m['category'])}\\]\nPower: {m['power']}        Accuracy: {m['acc']}")
+        blocks.append(f"{i}\\. *{escape_md(m['name'])}* \\[{emoji}\\]  \\[{escape_md(m['category'])}\\]\nPower: {m['power']}        Accuracy: {m['acc']}")
     caption = header + "\n\n".join(blocks)
     if len(pages) > 1:
         caption += f"\n\nPage {list_page + 1} / {len(pages)}"
@@ -699,12 +700,12 @@ def build_relearn_slot_page(user_id, identifier, list_page, move_idx):
 
     n_emoji = TYPE_EMOJIS.get(new_move["type"], "")
     header = (f"*{escape_md(name.capitalize())}* \\(Shiny\\)\n\n"
-              f"Learn {escape_md(new_move['name'])} \\[{n_emoji}\\]?\n\n"
+              f"Learn *{escape_md(new_move['name'])}* \\[{n_emoji}\\]?\n\n"
               f"Select a current move to forget:\n\n")
     lines = []
     for i, m in enumerate(current_moves, start=1):
         m_emoji = TYPE_EMOJIS.get(m.get("type", "Normal"), "")
-        lines.append(f"{i}\\. {escape_md(m['name'])} \\[{m_emoji}\\]  Power: {m['power']}, Accuracy: {m['acc']}")
+        lines.append(f"{i}\\. *{escape_md(m['name'])}* \\[{m_emoji}\\]  Power: {m['power']}, Accuracy: {m['acc']}")
     caption = header + "\n".join(lines)
 
     kb = types.InlineKeyboardMarkup(row_width=3)
@@ -772,16 +773,13 @@ def register_user_handlers(bot, active_hunts):
     @bot.message_handler(commands=["open"])
     def cmd_open(message):
         if message.chat.type != "private": return safe_send(bot, message.chat.id, escape_md("⚠️ Only in DMs."), reply_to_id=message.message_id)
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1).add(types.KeyboardButton("🔎 Scout"))
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1).add(types.KeyboardButton("/scout"))
         bot.send_message(message.chat.id, "⌨️ *Mᴇɴᴜ Oᴘᴇɴᴇᴅ\\!*\n/close ᴛᴏ Hɪᴅᴇ", reply_markup=kb, parse_mode="MarkdownV2")
 
     @bot.message_handler(commands=["close"])
     def cmd_close(message):
         if message.chat.type != "private": return
         bot.send_message(message.chat.id, "⌨️ *Mᴇɴᴜ Cʟᴏsᴇᴅ\\!*\nTʏᴘᴇ /open ᴛᴏ Rᴇᴏᴘᴇɴ\\.", reply_markup=types.ReplyKeyboardRemove(), parse_mode="MarkdownV2")
-
-    @bot.message_handler(func=lambda message: message.text == "🔎 Scout" and message.chat.type == "private")
-    def text_scout(message): threading.Thread(target=start_scout, args=(bot, message.chat.id, message.from_user.id, active_hunts, message.message_id)).start()
 
     @bot.message_handler(commands=["scout"])
     def command_scout(message): threading.Thread(target=start_scout, args=(bot, message.chat.id, message.from_user.id, active_hunts, message.message_id)).start()
@@ -1416,10 +1414,21 @@ def register_user_handlers(bot, active_hunts):
                 if caption is None:
                     caption = f"✨ Evolved into *{escape_md(target_name.title())}*\\!"
                     kb = None
+
+                # The species changed, so the photo has to change too — edit_message_caption
+                # only ever touches the text, never the media, so the old artwork would stick
+                # around forever unless we swap it with edit_message_media.
+                new_poke_id = get_pokemon_id_sync(target_name)
                 try:
-                    bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
+                    if new_poke_id:
+                        img_url = official_shiny_artwork_url(new_poke_id)
+                        photo_payload = get_cached_image_payload(new_poke_id, img_url)
+                        media = types.InputMediaPhoto(photo_payload, caption=caption, parse_mode="MarkdownV2")
+                        bot.edit_message_media(media=media, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb)
+                    else:
+                        bot.edit_message_caption(caption=caption, chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=kb, parse_mode="MarkdownV2")
                 except Exception:
-                    logger.exception(f"cq_evolve_confirm(Y) edit_message_caption failed: {call.data}")
+                    logger.exception(f"cq_evolve_confirm(Y) edit_message_media failed: {call.data}")
                 bot.answer_callback_query(call.id, "✨ Evolved!")
             except Exception:
                 logger.exception(f"❌ cq_evolve_confirm failed entirely: {call.data}")
