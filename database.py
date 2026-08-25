@@ -785,13 +785,24 @@ def import_backup(backup):
     with _lock:
         new_data = _default_data()
 
-        for u in backup.get("users", []):
-            uid = str(u["user_id"])
-            new_data["users"][uid] = {
-                "tries_left": u.get("tries_left", 2500),
-                "region": u.get("region", "Kanto"),
-                "last_reset": u.get("last_reset") or _today_str(),
-            }
+        raw_users = backup.get("users", [])
+        if isinstance(raw_users, dict):
+            # Raw DB shape: {"<user_id>": {"tries_left":..., "region":..., "last_reset":...}}
+            for uid, u in raw_users.items():
+                new_data["users"][str(uid)] = {
+                    "tries_left": u.get("tries_left", 2500),
+                    "region": u.get("region", "Kanto"),
+                    "last_reset": u.get("last_reset") or _today_str(),
+                }
+        else:
+            # Export shape: [{"user_id":..., "tries_left":..., "region":..., "last_reset":...}, ...]
+            for u in raw_users:
+                uid = str(u["user_id"])
+                new_data["users"][uid] = {
+                    "tries_left": u.get("tries_left", 2500),
+                    "region": u.get("region", "Kanto"),
+                    "last_reset": u.get("last_reset") or _today_str(),
+                }
 
         # Preserve original Pokemon ids when the backup has them (new export format);
         # fall back to sequential numbering for older exports that lack "id".
@@ -815,8 +826,15 @@ def import_backup(backup):
             if gid not in new_data["groups"]:
                 new_data["groups"].append(gid)
 
-        for b in backup.get("battle_stats", []):
-            new_data["battle_stats"][str(b["user_id"])] = {"wins": b.get("wins", 0), "losses": b.get("losses", 0)}
+        raw_battle_stats = backup.get("battle_stats", [])
+        if isinstance(raw_battle_stats, dict):
+            # Raw DB shape: {"<user_id>": {"wins":..., "losses":...}}
+            for uid, s in raw_battle_stats.items():
+                new_data["battle_stats"][str(uid)] = {"wins": s.get("wins", 0), "losses": s.get("losses", 0)}
+        else:
+            # Export shape: [{"user_id":..., "wins":..., "losses":...}, ...]
+            for b in raw_battle_stats:
+                new_data["battle_stats"][str(b["user_id"])] = {"wins": b.get("wins", 0), "losses": b.get("losses", 0)}
 
         for uid, badges in backup.get("user_badges", {}).items():
             new_data["user_badges"][uid] = badges
