@@ -15,6 +15,7 @@ import json
 import random
 import datetime
 import threading
+import time
 
 from config import DATA_FILE, logger
 
@@ -138,7 +139,9 @@ def _backfill_ivs():
 
 
 def _save():
-    """Atomically write the in-memory data to disk."""
+    """Atomically write the in-memory data to disk. Only called from the
+    background flush loop (and once at startup) — never directly from a
+    request path, so no command has to block on a full-file rewrite."""
     tmp_path = f"{DATA_FILE}.tmp"
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
@@ -148,10 +151,47 @@ def _save():
         logger.error(f"❌ Failed to save {DATA_FILE}: {e}")
 
 
+_dirty = False
+FLUSH_INTERVAL = 2  # seconds between debounced disk writes
+
+
+def _mark_dirty():
+    """Cheap in-memory flag flip — replaces a synchronous full-file _save()
+    on every mutation. The background flush loop below does the actual
+    (expensive) disk write, batched, so commands like /scout never block
+    on serializing the whole database."""
+    global _dirty
+    _dirty = True
+
+
+def _flush_loop():
+    while True:
+        time.sleep(FLUSH_INTERVAL)
+        global _dirty
+        do_save = False
+        with _lock:
+            if _dirty:
+                do_save = True
+                _dirty = False
+        if do_save:
+            with _lock:
+                _save()
+
+
+def force_save():
+    """Immediate, synchronous save — for graceful shutdown (e.g. on SIGTERM)
+    so nothing in the debounce window is lost."""
+    global _dirty
+    with _lock:
+        _save()
+        _dirty = False
+
+
 def init_db():
     with _lock:
         _load()
         _save()
+    threading.Thread(target=_flush_loop, daemon=True).start()
     logger.info("✅ JSON data store ready (%s)", DATA_FILE)
 
 
@@ -189,7 +229,7 @@ def add_user_if_new(user_id):
     with _lock:
         if uid not in data["users"]:
             data["users"][uid] = {"tries_left": 2500, "region": "Kanto", "last_reset": _today_str()}
-            _save()
+            _mark_dirty()
             return True
         return False
 
@@ -223,7 +263,7 @@ def update_user_tries(user_id):
             tries -= 1
             u["tries_left"] = tries
             u["last_reset"] = _date_str(last_reset)
-            _save()
+            _mark_dirty()
             return tries, region
         return 0, region
 
@@ -234,7 +274,7 @@ def update_user_region(user_id, region):
         u = data["users"].get(uid)
         if u:
             u["region"] = region
-            _save()
+            _mark_dirty()
 
 
 def reset_user(user_id):
@@ -244,7 +284,7 @@ def reset_user(user_id):
         if u:
             u["tries_left"] = 2500
             u["last_reset"] = _today_str()
-            _save()
+            _mark_dirty()
 
 
 def get_all_users():
@@ -262,7 +302,7 @@ def add_caught_pokemon(user_id, name, region, source="Wild"):
             nature = _random_nature()
             record = {"id": pid, "user_id": user_id, "name": name, "region": region, "ivs": ivs, "nature": nature}
             data["pokemons"].append(record)
-            _save()
+            _mark_dirty()
             return {"id": pid, "name": name, "region": region, "ivs": ivs, "nature": nature, "iv_percent": iv_percentage(ivs)}
     except Exception:
         logger.exception(f"❌ add_caught_pokemon failed for user_id={user_id} name={name}")
@@ -412,7 +452,7 @@ def get_list_settings(user_id):
                 settings[k] = v
                 changed = True
         if changed:
-            _save()
+            _mark_dirty()
         return dict(settings)
 
 
@@ -426,7 +466,7 @@ def update_list_settings(user_id, **kwargs):
         for k, v in DEFAULT_LIST_SETTINGS.items():
             settings.setdefault(k, v)
         settings.update(kwargs)
-        _save()
+        _mark_dirty()
         return dict(settings)
 
 
@@ -454,7 +494,7 @@ def set_pokemon_move_slot(user_id, identifier, base_moves, slot_index, new_move)
                 return None
             current[slot_index] = dict(new_move)
             rec["moves"] = current
-            _save()
+            _mark_dirty()
             return [dict(m) for m in current]
     except Exception:
         logger.exception(f"❌ set_pokemon_move_slot failed for user_id={user_id} identifier={identifier}")
@@ -468,7 +508,7 @@ def delete_pokemon(user_id, identifier):
             if not rec:
                 return False
             data["pokemons"].remove(rec)
-            _save()
+            _mark_dirty()
             return True
     except Exception:
         logger.exception(f"❌ delete_pokemon failed for user_id={user_id} identifier={identifier}")
@@ -484,7 +524,7 @@ def evolve_pokemon(user_id, identifier, new_name):
             if not rec:
                 return False
             rec["name"] = new_name
-            _save()
+            _mark_dirty()
             return True
     except Exception:
         logger.exception(f"❌ evolve_pokemon failed for user_id={user_id} identifier={identifier}")
@@ -562,7 +602,7 @@ def update_pvp_settings(user_id, mode, size, can_switch, status_effects):
         data["pvp_settings"][uid] = {
             "mode": mode, "size": size, "can_switch": can_switch, "status_effects": status_effects
         }
-        _save()
+        _mark_dirty()
 
 
 def get_battle_stats(user_id):
@@ -582,7 +622,7 @@ def update_battle_stats(user_id, is_win=True):
             s["wins"] += 1
         else:
             s["losses"] += 1
-        _save()
+        _mark_dirty()
 
 
 # ================== 🏅 BADGE SYSTEM & GYM IMAGES ==================
@@ -592,7 +632,7 @@ def add_badge(user_id, badge_name):
         badges = data["user_badges"].setdefault(uid, [])
         if badge_name not in badges:
             badges.append(badge_name)
-            _save()
+            _mark_dirty()
 
 
 def get_user_badges(user_id):
@@ -604,7 +644,7 @@ def get_user_badges(user_id):
 def set_gym_image(leader_name, file_id):
     with _lock:
         data["gym_images"][leader_name] = file_id
-        _save()
+        _mark_dirty()
 
 
 def get_gym_image(leader_name):
@@ -619,7 +659,7 @@ def delete_gym_image(leader_name):
         for k in keys:
             del data["gym_images"][k]
         if keys:
-            _save()
+            _mark_dirty()
 
 
 def list_gym_leader_names():
@@ -630,7 +670,7 @@ def list_gym_leader_names():
 def reset_all_badges():
     with _lock:
         data["user_badges"] = {}
-        _save()
+        _mark_dirty()
 
 
 # ================== TASKS MODULE ==================
@@ -658,7 +698,7 @@ def get_daily_tasks(user_id):
                                     "reward_amount": 1, "completed": False, "last_reset": _date_str(today)},
             }
             data["tasks"][uid] = user_tasks
-            _save()
+            _mark_dirty()
 
         return [
             {
@@ -680,7 +720,7 @@ def claim_task_reward(user_id, task_type):
         t = data["tasks"].get(uid, {}).get(task_type)
         if t and t["progress"] >= t["goal"] and not t["completed"]:
             t["completed"] = True
-            _save()
+            _mark_dirty()
             return t["reward_type"], t["reward_amount"]
         return None
 
@@ -691,7 +731,7 @@ def update_task_pvp(user_id):
         t = data["tasks"].get(uid, {}).get("pvp")
         if t and not t["completed"]:
             t["progress"] += 1
-            _save()
+            _mark_dirty()
 
 
 def update_task_catch(user_id):
@@ -700,7 +740,7 @@ def update_task_catch(user_id):
         t = data["tasks"].get(uid, {}).get("catch")
         if t and not t["completed"]:
             t["progress"] += 1
-            _save()
+            _mark_dirty()
 
 
 def update_task_specific_catch(user_id, pokemon_name):
@@ -709,7 +749,7 @@ def update_task_specific_catch(user_id, pokemon_name):
         t = data["tasks"].get(uid, {}).get("catch_specific")
         if t and not t["completed"] and t["target"].lower() == pokemon_name.lower():
             t["progress"] += 1
-            _save()
+            _mark_dirty()
 
 
 # ================== GROUP MANAGEMENT ==================
@@ -717,14 +757,14 @@ def add_group(group_id):
     with _lock:
         if group_id not in data["groups"]:
             data["groups"].append(group_id)
-            _save()
+            _mark_dirty()
 
 
 def remove_group(group_id):
     with _lock:
         if group_id in data["groups"]:
             data["groups"].remove(group_id)
-            _save()
+            _mark_dirty()
 
 
 def get_all_groups():
@@ -751,7 +791,7 @@ def transfer_user_data(source_uid, target_uid):
         if src in data["tasks"]:
             data["tasks"][tgt] = data["tasks"].pop(src)
 
-        _save()
+        _mark_dirty()
         return poke_count
 
 
@@ -848,7 +888,7 @@ def import_backup(backup):
 
         global data
         data = new_data
-        _save()
+        _mark_dirty()
 
         return {
             "users": len(new_data["users"]),
@@ -879,7 +919,7 @@ def restore_sqlite_data(users_data, pokemons_data, groups_data):
             if gid not in data["groups"]:
                 data["groups"].append(gid)
 
-        _save()
+        _mark_dirty()
 
 
 def export_table_csv(table_name):
@@ -939,11 +979,11 @@ def add_admin(user_id):
     with _lock:
         if user_id not in data["admins"]:
             data["admins"].append(user_id)
-            _save()
+            _mark_dirty()
 
 
 def remove_admin(user_id):
     with _lock:
         if user_id in data["admins"]:
             data["admins"].remove(user_id)
-            _save()
+            _mark_dirty()
