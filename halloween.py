@@ -13,26 +13,44 @@ What it adds
   • Login event              — ONE 7-night event, claimed in halloween.html by watching ads
                                (Adsgram): night 1 = 1 ad -> 1,000 shards ... night 7 = 3 ads ->
                                random Halloween card + 3,000 shards (see LOGIN_EVENT).
+                               Missed exactly ONE night? You can catch up: the next time you log in you
+                               complete the missed night AND tonight together (ads of both nights).
                                /hwlogin shows the calendar and tonight's ad progress.
-  • /haunt                   — 5 daily quests + haunt-day progress (candy income for /hwstore).
-  • /treat                   — COMMUNITY command (group chats), once per UTC day: a bag of mixed
-                               candies 🍬🍭🍫🍪🍩🍰. 🍬 is the main currency; 🍭🍫🍪🍩🍰 convert to 🍬 or shards at /candies.
+  • /haunt                   — 5 daily quests (auto-assigned to everyone at 00:00 UTC) + haunt-day progress (candy income for /hwstore).
+  • /treat                   — COMMUNITY command (group chats). Reply to a player's message with /treat to
+                               give them a random bag of 1-2 candies 🍬🍭🍫🍪🍩🍰 (2 is rare, see
+                               TREAT_DOUBLE_CHANCE). Each giver can use it 3 times per UTC day. Limits: no self-treats, no bots, a receiver can get 3 treats per UTC
+                               day, and the same person can't be treated twice by one giver within 24h.
+                               🍬 is the main currency; 🍭🍫🍪🍩🍰 convert to 🍬 or shards at /candies.
   • /trick                   — COMMUNITY command (group chats), once per UTC day: Nexus Shards 💠.
-                               /treat and /trick have separate daily limits. Nothing is ever taken away.
+                               /treat and /trick have separate limits. Nothing is ever taken away.
                                (/trickortreat just explains the two commands.)
   • /hwstore, /candies       — spend candies. The Mystery Halloween Card is the last item.
+  • /hwcommands (/hwhelp)    — command list (players; owner + admins also see the admin commands)
+  • /halloween               — for EVERYONE: total candies + Mini App button (admin controls are /sthw)
   • /hwapp                   — opens halloween.html as a Telegram Mini App (HW_WEBAPP_URL).
   • Web API                  — get_router() returns a FastAPI router used by halloween.html:
                                POST /halloween/state | /halloween/login | /halloween/buy
                                mount once:  app.include_router(halloween.get_router(), prefix="/api")
-  • Admin controls
-        /halloween on [days]     start (default 9 days) — or resume if paused
-        /halloween pause         freeze the event; remaining time is kept
-        /halloween status        state, day number, card counts
-        /halloween off           end the event now
-        /hcard on <db-id>        mark an existing card as a Halloween card
-        /hcard off <db-id>       remove the mark
-        /hcard list              list all Halloween cards
+  • /halloween_lbd (/hwlbd)  — leaderboard with the event image; tabs: Top Candies / Treats Given /
+                               Treats Received / Haunt Days / Login Nights.
+  • Admin controls  /sthw    (owner + admins only; /halloween is the player command)
+        /sthw on [days]          start everything (login + haunt) — or resume if paused
+        /sthw login on|off [d]   turn the 7-night login event on / off on its own
+        /sthw haunt on|off [d]   turn /haunt quests + the Quests tab on / off on its own
+                                      ("on" with no event running starts the event with ONLY that part)
+        /sthw extend <days>      add days to the running event
+        /sthw pause              freeze the event; remaining time is kept
+        /sthw status             state, day number, login/haunt switches, card counts
+        /sthw off                end the event now
+        /hcard on <db-id>             mark an existing card as a Halloween card
+        /hcard off <db-id>            remove the mark
+        /hcard list                   list all Halloween cards
+        /hwtest <userid> on|off       test mode: that player can use EVERY Halloween command anytime
+                                      (event off, parts off, private chat). "off" resets their data.
+        /hwtest list                  show current test users
+        /hwtest clear_all             end test mode for everyone + reset all their Halloween data
+                                      (also works as a reply to the player instead of <userid>)
   • Halloween cards are locked: they can't be sold in the Offline Store, gifted,
     traded or burned (see hw_locked()).
   • Marking: upload the card as usual (/add_card), then /hcard on <db-id>.
@@ -63,7 +81,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
 
 from config import (
-    bot, main_router, ADMIN_IDS, ensure_user, load_db, save_db,
+    bot, main_router, ADMIN_IDS, SUPREME_OWNER_ID, ensure_user, load_db, save_db,
     format_rarity, is_ghost_banned, is_shadow_banned,
 )
 
@@ -80,7 +98,7 @@ CANDY = "🍬"
 #   🍬 Candy is the MAIN currency: the store only spends 🍬. A 🍬 piece is worth exactly 1 🍬 and goes straight to the balance.
 #   🍭🍫🍪🍩🍰 are collectible items kept in the player's candy bag; they can be converted to 🍬 or to
 #   Nexus Shards at /candies (1 🍬 of value = CONVERT_SHARDS_PER_CANDY shards, same rate as the store exchange).
-# Average bag (3 pieces) ~ 26 🍬 per daily /treat once the items are converted (quests add ~300/day).
+# Average piece ~ 9 🍬 once converted, so a /treat bag (1-2 pieces) is worth ~10 🍬 (quests add ~300/day).
 CANDY_TYPES = [
     ("🍬", "Candy",     1, 40),
     ("🍭", "Lollipop",  8, 25),
@@ -103,12 +121,15 @@ LOGIN_EVENT = (
     {"ads": 3, "shards": 3000, "hwcard": ("Basic 🃏", "Elite ⚓")},
 )
 # Adsgram reward postback (create a rewarded block in the Adsgram dashboard and set its reward URL to):
-#   https://<your-worker>/api/halloween/ads/reward?userid=[userId]&secret=<HW_AD_SECRET>
-HW_AD_SECRET = ""                # any random string; use the same one in the URL above
+#   https://<your-worker>/api/halloween/ads/reward?userid=[userId]&secret=<HW_AD_SECRET>   (&key=... also works)
+HW_AD_SECRET = "gUz6e7bs0-TrdtHVtx7EAM63mMpfvQsc"   # same secret as ADSGRAM_REWARD_SECRET in deck.py
 
-# /treat and /trick — community (group chat) commands, each usable once per UTC day (separate limits)
+# /treat (reply to a player, 3 uses per giver per day) and /trick (once per UTC day) — community (group chat) commands
 TOT_COMMUNITY_ONLY = True        # False = also allow them in private chats
-TREAT_BAG_SIZE = 3               # /treat: a bag holds this many candy pieces (each rolled separately)
+TREAT_DAILY_USES = 3             # /treat: uses per giver per UTC day
+TREAT_RECEIVE_DAILY_MAX = 3      # /treat: max treats one player can RECEIVE per UTC day
+TREAT_SAME_USER_HOURS = 24       # /treat: a giver can't treat the same person again within N hours
+TREAT_DOUBLE_CHANCE = 0.15       # /treat: chance (0-1) that the bag holds 2 candies instead of 1 (each rolled separately)
 TRICK_SHARD_RANGE = (100, 300)   # /trick: shards, rounded to steps of 50
 CONVERT_SHARDS_PER_CANDY = 5     # converting a candy item to shards: value x this (100 🍬 = 500 shards)
 COLLECTOR_BONUS = 100            # one-time bonus candies for collecting every candy type at least once
@@ -132,9 +153,10 @@ STORE_ITEMS = {
 STORE_REQ_HAUNT_DAYS = {}
 
 TREAT_LINES = [
-    "A neighbour hands you a full-size candy bar!",
-    "You found a bowl of candy left unattended...",
-    "Someone dressed as a ghost gives you a bag of sweets!",
+    "A full-size candy bar, straight from the bowl.",
+    "Someone left the candy bowl unattended.",
+    "A sweet, just for you.",
+    "Fresh from the trick-or-treat route.",
 ]
 TRICK_LINES = [
     "A skeleton jumps out! You drop your candy... but find a few shards.",
@@ -229,8 +251,61 @@ def _fmt_left(sec: int) -> str:
     return f"{d}d {h}h {m}m" if d else f"{h}h {m}m"
 
 
+def is_test_user(db: dict, uid) -> bool:
+    """True if /hwtest put this player in test mode (can use every Halloween command anytime)."""
+    if uid is None:
+        return False
+    u = db.get("users", {}).get(str(uid))
+    return bool(isinstance(u, dict) and u.get("hw_test"))
+
+
+def _tester_clock(user: dict):
+    """(day, total, seconds_left) of a /hwtest tester's own event run, which starts the moment
+    /hwtest <id> on is used. Only used while no real event is running."""
+    total = DEFAULT_EVENT_DAYS
+    el = max(0, time.time() - float(user.get("hw_test_start") or time.time()))
+    return min(int(el // 86400) + 1, total), total, max(0, int(total * 86400 - el))
+
+
+def _ev_on(db: dict, uid=None) -> bool:
+    """Event running, or this player is a /hwtest tester (testers ignore the event/part switches)."""
+    return event_active(db) or is_test_user(db, uid)
+
+
+def _add_shards(user: dict, n: int) -> None:
+    """Give Nexus Shards; for testers the amount is logged so /hwtest off can take it back."""
+    user["nexus_shards"] = user.get("nexus_shards", 0) + int(n)
+    if user.get("hw_test"):
+        g = user.setdefault("hw_test_grants", {})
+        g["shards"] = int(g.get("shards", 0)) + int(n)
+
+
+def _feature_on(db: dict, key: str, uid=None) -> bool:
+    """Event running AND the part switched on. The owner can always use both parts while the event runs.
+    /hwtest testers can use both parts at any time."""
+    if is_test_user(db, uid):
+        return True
+    if not event_active(db):
+        return False
+    if uid is not None and str(uid) == str(SUPREME_OWNER_ID):
+        return True
+    return bool(_state(db).get(key, True))
+
+
+def login_enabled(db: dict, uid=None) -> bool:
+    """Login part on (/sthw login on|off); the owner bypasses the switch."""
+    return _feature_on(db, "login_on", uid)
+
+
+def haunt_enabled(db: dict, uid=None) -> bool:
+    """Haunt part (quests) on (/sthw haunt on|off); the owner bypasses the switch."""
+    return _feature_on(db, "haunt_on", uid)
+
+
 def _is_admin(message: Message) -> bool:
-    return message.from_user.id in ADMIN_IDS
+    """The owner and the admins can use the admin commands."""
+    uid = message.from_user.id
+    return uid == SUPREME_OWNER_ID or uid in ADMIN_IDS
 
 
 # ==========================================
@@ -249,8 +324,11 @@ def _hw_status_text(db: dict) -> str:
         state = "⏹ OFF"
     pool = _halloween_pool(db)
     divines = sum(1 for c in pool.values() if format_rarity(c.get("rarity", "")) == HAUNT_REWARD_RARITY)
+    sw = lambda k: "ON" if st.get(k, True) else "OFF"
     return (f"{HW_EMOJI} <b>Halloween event:</b> {state}\n"
-            f"<b>Halloween cards:</b> {len(pool)}  (Divine: {divines})")
+            f"🌙 <b>Login:</b> {sw('login_on')}  •  🕯 <b>Haunt:</b> {sw('haunt_on')}\n"
+            f"<b>Halloween cards:</b> {len(pool)}  (Divine: {divines})\n"
+            f"🧪 <b>Test users:</b> {sum(1 for u in db.get('users', {}).values() if isinstance(u, dict) and u.get('hw_test'))}")
 
 
 def _miniapp_kb() -> InlineKeyboardMarkup:
@@ -258,49 +336,119 @@ def _miniapp_kb() -> InlineKeyboardMarkup:
         text=f"{HW_EMOJI} Open Halloween Mini App", url=HW_MINIAPP_LINK)]])
 
 
-@main_router.message(Command("halloween"))
-async def halloween_cmd(message: Message, command: CommandObject):
-    """/halloween on [days] | pause | status | off"""
+def _start_text(days: int, last_day: str, login: bool, haunt: bool) -> str:
+    live = []
+    if login:
+        live.append("<code>/hwlogin</code> 7-night login event")
+    if haunt:
+        live.append("<code>/haunt</code> daily quests")
+    live += ["<code>/halloween</code>", "<code>/treat</code> + <code>/trick</code> (group)", "<code>/hwstore</code>", "<code>/hwapp</code>",
+             "<code>/halloween_lbd</code> leaderboard"]
+    what = ("login + haunt" if login and haunt else "login only" if login else "haunt only")
+    tail = (f"Clear your daily quests to earn candies: ~6 days for a Divine, ~7 days for a Halloween card.\n\n"
+            if haunt else "\n")
+    return (f"🎃 <b>Halloween event started</b> ({what})! <b>{days}</b> days — today is Day 1, "
+            f"last day is <b>{last_day}</b> (UTC).\n"
+            f"Players: " + ", ".join(live) + ".\n" + tail +
+            f"{HW_EMOJI} Mini app: {HW_MINIAPP_LINK}")
+
+
+_HW_USAGE = ("<b>Usage:</b>\n"
+             "<code>/sthw on [days]</code> — start login + haunt\n"
+             "<code>/sthw login on|off [days]</code>\n"
+             "<code>/sthw haunt on|off [days]</code>\n"
+             "<code>/sthw pause</code> | <code>extend &lt;days&gt;</code> | <code>status</code> | <code>off</code>")
+
+
+@main_router.message(Command("sthw"))
+async def sthw_cmd(message: Message, command: CommandObject):
+    """/sthw on [days] | login on|off [days] | haunt on|off [days] | pause | extend <days> | status | off
+    Owner + admins only."""
     if not _is_admin(message):
         return
     parts = (command.args or "").split()
     sub = parts[0].lower() if parts else "status"
     db = load_db()
     st = _state(db)
-    now = time.time()
 
     if sub == "status":
-        await message.reply(f"{_hw_status_text(db)}\n\n{HW_EMOJI} Mini app: {HW_MINIAPP_LINK}",
+        await message.reply(f"{_hw_status_text(db)}\n\n{HW_EMOJI} Mini app: {HW_MINIAPP_LINK}\n"
+                            f"Leaderboard: /halloween_lbd",
                             reply_markup=_miniapp_kb(), parse_mode=ParseMode.HTML)
         return
 
     if sub == "pause":
-        if not st.get("active"):
-            await message.reply(f"{HW_EMOJI} The event isn't running, nothing to pause.", parse_mode=ParseMode.HTML)
-            return
-        st["active"] = False
-        st["paused_at"] = now
-        save_db()
-        await message.reply(
-            f"⏸ <b>Event paused.</b> Quests, candies and the store are frozen and the remaining time is kept.\n"
-            f"Use <code>/halloween on</code> to resume.", parse_mode=ParseMode.HTML)
+        _ok, msg = _ev_pause(db)
+        await message.reply(msg, parse_mode=ParseMode.HTML)
         return
 
     if sub in ("off", "stop", "end"):
-        st["active"] = False
-        st.pop("paused_at", None)
-        save_db()
-        await message.reply("⏹ Halloween event ended.", parse_mode=ParseMode.HTML)
+        _ok, msg = _ev_stop(db)
+        await message.reply(msg, parse_mode=ParseMode.HTML)
+        return
+
+    if sub == "extend":
+        n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+        if n <= 0:
+            await message.reply("Usage: <code>/sthw extend &lt;days&gt;</code>", parse_mode=ParseMode.HTML)
+            return
+        _ok, msg = _ev_extend(db, n)
+        await message.reply(f"{msg}\n{_hw_status_text(db)}", parse_mode=ParseMode.HTML)
+        return
+
+    # ---- login / haunt: switch ONE part on or off ----
+    if sub in ("login", "haunt"):
+        sw = parts[1].lower() if len(parts) > 1 else ""
+        if sw not in ("on", "off"):
+            await message.reply(f"Usage: <code>/sthw {sub} on|off [days]</code>", parse_mode=ParseMode.HTML)
+            return
+        key = f"{sub}_on"
+        name = "🌙 Login event" if sub == "login" else "🕯 Haunt (quests)"
+        running = bool(event_active(db) or st.get("paused_at"))
+
+        if sw == "off":
+            if not running:
+                await message.reply(f"{HW_EMOJI} The event isn't running, nothing to turn off.", parse_mode=ParseMode.HTML)
+                return
+            st[key] = False
+            save_db()
+            await message.reply(f"⏹ <b>{name} is now OFF.</b> Players can't use it until you turn it on again.\n"
+                                f"{_hw_status_text(db)}", parse_mode=ParseMode.HTML)
+            return
+
+        if st.get("paused_at"):                                   # resume, then switch the part on
+            _ok, msg = _ev_resume(db)
+            st[key] = True
+            save_db()
+            if sub == "haunt":
+                assign_quests_all(db)
+            await message.reply(f"{msg}\n✅ <b>{name} is ON.</b>\n{_hw_status_text(db)}", parse_mode=ParseMode.HTML)
+            return
+        if event_active(db):
+            if st.get(key, True):
+                await message.reply(f"{name} is already ON.\n{_hw_status_text(db)}", parse_mode=ParseMode.HTML)
+                return
+            st[key] = True
+            save_db()
+            if sub == "haunt":
+                assign_quests_all(db)
+            await message.reply(f"✅ <b>{name} is now ON.</b>\n{_hw_status_text(db)}", parse_mode=ParseMode.HTML)
+            return
+        days = DEFAULT_EVENT_DAYS                                  # no event yet: start it with ONLY this part
+        if len(parts) > 2 and parts[2].isdigit():
+            days = max(1, min(60, int(parts[2])))
+        _day0, last_day = _ev_start(db, days, login=(sub == "login"), haunt=(sub == "haunt"))
+        ensure_midnight_task()
+        if sub == "haunt":
+            assign_quests_all(db)
+        await message.reply(_start_text(days, last_day, sub == "login", sub == "haunt"),
+                            reply_markup=_miniapp_kb(), parse_mode=ParseMode.HTML)
         return
 
     if sub == "on":
         if st.get("paused_at"):                                   # resume
-            dur = now - st.pop("paused_at")
-            st["ends_at"] = st.get("ends_at", now) + dur
-            st["paused_total"] = st.get("paused_total", 0) + dur
-            st["active"] = True
-            save_db()
-            await message.reply(f"▶️ <b>Event resumed.</b>\n{_hw_status_text(db)}", parse_mode=ParseMode.HTML)
+            _ok, msg = _ev_resume(db)
+            await message.reply(f"{msg}\n{_hw_status_text(db)}", parse_mode=ParseMode.HTML)
             return
         if event_active(db):
             await message.reply(f"{HW_EMOJI} Already running.\n{_hw_status_text(db)}", parse_mode=ParseMode.HTML)
@@ -308,29 +456,81 @@ async def halloween_cmd(message: Message, command: CommandObject):
         days = DEFAULT_EVENT_DAYS
         if len(parts) > 1 and parts[1].isdigit():
             days = max(1, min(60, int(parts[1])))
-        day0 = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        st["active"] = True
-        st["event_id"] = int(now)                 # new id => everyone's haunt progress starts fresh
-        st["start_date"] = day0.strftime("%Y-%m-%d")
-        st["days"] = days
-        st["paused_total"] = 0
-        st["ends_at"] = (day0 + timedelta(days=days)).timestamp()   # end of the last UTC day
-        st.pop("paused_at", None)
-        save_db()
-        last_day = (day0 + timedelta(days=days - 1)).strftime("%Y-%m-%d")
-        await message.reply(
-            f"🎃 <b>Halloween event started!</b> <b>{days}</b> days — today is Day 1, "
-            f"last day is <b>{last_day}</b> (UTC).\n"
-            f"Players: <code>/hwlogin</code> 7-night login event, <code>/haunt</code> daily quests, "
-            f"<code>/treat</code> + <code>/trick</code> (group), <code>/hwstore</code>, <code>/hwapp</code>.\n"
-            f"Clear your daily quests to earn candies: ~6 days for a Divine, ~7 days for a Halloween card.\n\n"
-            f"{HW_EMOJI} Mini app: {HW_MINIAPP_LINK}",
-            reply_markup=_miniapp_kb(), parse_mode=ParseMode.HTML,
-        )
+        _day0, last_day = _ev_start(db, days)
+        ensure_midnight_task()
+        assign_quests_all(db)
+        await message.reply(_start_text(days, last_day, True, True),
+                            reply_markup=_miniapp_kb(), parse_mode=ParseMode.HTML)
         return
 
-    await message.reply("Usage: <code>/halloween on [days]</code> | <code>pause</code> | <code>status</code> | <code>off</code>",
-                        parse_mode=ParseMode.HTML)
+    await message.reply(_HW_USAGE, parse_mode=ParseMode.HTML)
+
+
+@main_router.message(Command("halloween"))
+async def halloween_cmd(message: Message):
+    """/halloween — for EVERYONE: your total candies + the Mini App button. (Admin controls: /sthw)"""
+    uid_int = message.from_user.id
+    if is_ghost_banned(uid_int) or is_shadow_banned(uid_int):
+        return
+    user_id = str(uid_int)
+    db = ensure_user(user_id, message.from_user.first_name, message.from_user.username)
+    u = db["users"][user_id]
+    st = _state(db)
+    left, dn = event_seconds_left(db), event_day(db)
+    if st.get("paused_at"):
+        status = "⏸ Paused"
+    elif left:
+        status = f"▶️ Day {dn[0]}/{dn[1]} · {_fmt_left(left)} left" if dn else f"▶️ {_fmt_left(left)} left"
+    elif u.get("hw_test"):
+        td, tt, tl = _tester_clock(u)
+        status = f"▶️ Day {td}/{tt} · {_fmt_left(tl)} left"
+    else:
+        status = "⏹ Not running right now"
+    lines = [
+        f"<b>「 {HW_EMOJI} HALLOWEEN 」</b>", "━━━━━━━━━━━━━━━━━",
+        f"<b>Event:</b> {status}",
+        f"{CANDY} <b>Total candies:</b> {candies_of(u):,}",
+        f"🏆 <b>Earned this event:</b> {_earned_of(u):,}",
+    ]
+    if stock_value(u) > 0:
+        lines.append(f"🎒 <b>Candy bag:</b> worth {stock_value(u):,} {CANDY}  (/candies)")
+    lines.append("\n<i>Open the Mini App for the login calendar, quests and the candy store.</i>")
+    await message.reply("\n".join(lines), reply_markup=_miniapp_kb(), parse_mode=ParseMode.HTML)
+
+
+@main_router.message(Command("hwcommands", "hwhelp"))
+async def hwcommands_cmd(message: Message):
+    """Command list: players see the player commands; owner + admins also see the admin commands."""
+    uid = message.from_user.id
+    if is_ghost_banned(uid) or is_shadow_banned(uid):
+        return
+    lines = [
+        f"<b>「 {HW_EMOJI} HALLOWEEN COMMANDS 」</b>", "━━━━━━━━━━━━━━━━━",
+        "<b>Players</b>",
+        "<code>/hwlogin</code> — 7-night login event (claim in the mini app)",
+        "<code>/haunt</code> — your 5 daily quests + haunt days",
+        f"<code>/treat</code> — reply to a player in a group: gives them 1-2 candies ({TREAT_DAILY_USES}/day)",
+        "<code>/trick</code> — Nexus Shards for you, once a day (group)",
+        "<code>/candies</code> — your candy bag, convert to 🍬 or 💠",
+        "<code>/hwstore</code> — candy store",
+        "<code>/halloween</code> — your total candies + the Halloween mini app",
+        "<code>/hwapp</code> — open the Halloween mini app",
+        "<code>/halloween_lbd</code> (<code>/hwlbd</code>) — leaderboard",
+        "<code>/trickortreat</code> — how /treat and /trick work",
+        "<code>/hwcommands</code> — this list",
+    ]
+    if _is_admin(message):
+        lines += [
+            "", "<b>Owner &amp; admins</b> (<code>/sthw</code>)",
+            "<code>/sthw on [days]</code> — start login + haunt (or resume)",
+            "<code>/sthw login on|off [days]</code> — login event only",
+            "<code>/sthw haunt on|off [days]</code> — haunt quests only",
+            "<code>/sthw extend &lt;days&gt;</code> • <code>pause</code> • <code>status</code> • <code>off</code>",
+            "<code>/hcard on|off DB-XXXXXX</code> — mark / unmark a Halloween card",
+            "<code>/hcard list</code> — all Halloween cards",
+            "<code>/hwtest &lt;userid&gt; on|off</code> • <code>list</code> • <code>clear_all</code> — test users (all commands; data reset on off)",
+        ]
+    await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @main_router.message(Command("hcard"))
@@ -402,6 +602,116 @@ async def hcard_cmd(message: Message, command: CommandObject):
 
 
 # ==========================================
+# TEST MODE: /hwtest <userid> on|off  |  /hwtest list  |  /hwtest clear_all   (owner + admins)
+# ==========================================
+# Every Halloween field stored on a player. Ending test mode wipes all of them.
+HW_USER_KEYS = (
+    "hw_candies", "hw_candies_earned", "hw_candy_stock", "hw_candy_box", "hw_collector",
+    "hw_quests", "hw_haunt", "hw_login", "hw_login_ads", "hw_bought",
+    "hw_treat_day", "hw_treat_to", "hw_treat_recv", "hw_treat_given", "hw_treat_got",
+    "hw_trick_date", "hw_trick_count",
+)
+
+
+def _reset_test_user(user: dict) -> None:
+    """Leave test mode and wipe the player's Halloween data. Shards and cards that Halloween gave
+    them while testing are taken back; anything they had before stays untouched."""
+    grants = user.get("hw_test_grants") or {}
+    sh = int(grants.get("shards", 0) or 0)
+    if sh:
+        user["nexus_shards"] = max(0, int(user.get("nexus_shards", 0) or 0) - sh)
+    cards = user.get("cards", {})
+    for cid, n in (grants.get("cards") or {}).items():
+        entry = cards.get(cid)
+        if entry:
+            entry["amount"] = int(entry.get("amount", 0) or 0) - int(n)
+            if entry["amount"] <= 0:
+                cards.pop(cid, None)
+    for k in HW_USER_KEYS + ("hw_test", "hw_test_grants", "hw_test_start"):
+        user.pop(k, None)
+
+
+@main_router.message(Command("hwtest"))
+async def hwtest_cmd(message: Message, command: CommandObject):
+    """/hwtest <userid> on|off | list | clear_all  — testers can use every Halloween command at any
+    time (event off, parts off, private chats). off / clear_all reset their Halloween data."""
+    if not _is_admin(message):
+        return
+    parts = (command.args or "").split()
+    db = load_db()
+    users = db.get("users", {})
+    usage = ("<b>Usage:</b>\n<code>/hwtest &lt;userid&gt; on</code> — test mode for a player (or reply to them)\n"
+             "<code>/hwtest &lt;userid&gt; off</code> — end test mode + reset their Halloween data\n"
+             "<code>/hwtest list</code> — current testers\n"
+             "<code>/hwtest clear_all</code> — end test mode for everyone + reset all their data")
+    sub = parts[0].lower() if parts else ""
+
+    if sub == "list":
+        testers = [(uid, u) for uid, u in users.items() if isinstance(u, dict) and u.get("hw_test")]
+        if not testers:
+            await message.reply("🧪 No test users.", parse_mode=ParseMode.HTML)
+            return
+        lines = [f"<b>🧪 Test users ({len(testers)})</b>"]
+        for uid, u in testers[:40]:
+            lines.append(f"• {_uname(u)} — <code>{_esc(str(uid))}</code> — {candies_of(u):,} {CANDY}")
+        if len(testers) > 40:
+            lines.append(f"<i>…and {len(testers) - 40} more</i>")
+        await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
+        return
+
+    if sub == "clear_all":
+        n = 0
+        for u in users.values():
+            if isinstance(u, dict) and u.get("hw_test"):
+                _reset_test_user(u)
+                n += 1
+        save_db()
+        await message.reply(f"🧹 Test mode ended for <b>{n}</b> user(s); their Halloween data was reset.",
+                            parse_mode=ParseMode.HTML)
+        return
+
+    # <userid> on|off   (or: reply to a player + on|off)
+    if len(parts) >= 2 and parts[0].lstrip("-").isdigit():
+        uid, action = parts[0], parts[1].lower()
+    elif len(parts) == 1 and message.reply_to_message and message.reply_to_message.from_user:
+        uid, action = str(message.reply_to_message.from_user.id), parts[0].lower()
+    else:
+        await message.reply(usage, parse_mode=ParseMode.HTML)
+        return
+    if action not in ("on", "off"):
+        await message.reply(usage, parse_mode=ParseMode.HTML)
+        return
+    u = users.get(uid)
+    if not isinstance(u, dict):
+        await message.reply(f"User <code>{_esc(uid)}</code> not found. They must have started the bot.",
+                            parse_mode=ParseMode.HTML)
+        return
+    name = _uname(u)
+    if action == "on":
+        if u.get("hw_test"):
+            await message.reply(f"🧪 <b>{name}</b> is already a test user.", parse_mode=ParseMode.HTML)
+            return
+        u["hw_test"] = True
+        u["hw_test_start"] = time.time()
+        _roll_quests(u)                    # their event + today's quests start right now
+        _haunt(db, u)
+        save_db()
+        await message.reply(f"🧪 <b>{name}</b> (<code>{_esc(uid)}</code>) is now a <b>test user</b>: their Halloween "
+                            f"event (Day 1/{DEFAULT_EVENT_DAYS}) and today's quests started, and every Halloween "
+                            f"command works for them even when the event is off.\n"
+                            f"<code>/hwtest {_esc(uid)} off</code> resets their Halloween data.",
+                            parse_mode=ParseMode.HTML)
+        return
+    if not u.get("hw_test"):
+        await message.reply(f"<b>{name}</b> isn't a test user.", parse_mode=ParseMode.HTML)
+        return
+    _reset_test_user(u)
+    save_db()
+    await message.reply(f"🧹 <b>{name}</b> (<code>{_esc(uid)}</code>): test mode ended and Halloween data reset.",
+                        parse_mode=ParseMode.HTML)
+
+
+# ==========================================
 # CANDY + CARD HELPERS
 # ==========================================
 def candies_of(user: dict) -> int:
@@ -409,11 +719,12 @@ def candies_of(user: dict) -> int:
 
 
 def roll_candy_bag(user: dict) -> tuple:
-    """Roll a treat bag. Returns (pieces, direct_candies, collector_bonus).
+    """Roll a treat bag of 1 (usually) or 2 (rarely) candies. Returns (pieces, direct_candies, collector_bonus).
     🍬 pieces add straight to the balance; other types go into user['hw_candy_stock'] (convertible).
     user['hw_candy_box'] is the lifetime 'found' log used for the Candy Collector bonus."""
     weights = [t[3] for t in CANDY_TYPES]
-    picks = random.choices(CANDY_TYPES, weights=weights, k=TREAT_BAG_SIZE)
+    k = 2 if random.random() < TREAT_DOUBLE_CHANCE else 1      # 1 candy, rarely 2
+    picks = random.choices(CANDY_TYPES, weights=weights, k=k)
     pieces = [(e, n, v) for e, n, v, _ in picks]
     box = user.setdefault("hw_candy_box", {})
     stock = user.setdefault("hw_candy_stock", {})
@@ -475,8 +786,23 @@ def candy_convert_kb(owner: str, user: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _spent_of(user: dict) -> int:
+    """Candies spent in the store (derived from purchases, so it works for old accounts too)."""
+    bought = user.get("hw_bought", {}) or {}
+    return sum(int(bought.get(k, 0) or 0) * v[1] for k, v in STORE_ITEMS.items())
+
+
+def _earned_of(user: dict) -> int:
+    """Lifetime candies earned this event (leaderboard stat). Accounts from before tracking = balance + spent."""
+    if "hw_candies_earned" in user:
+        return int(user["hw_candies_earned"] or 0)
+    return candies_of(user) + _spent_of(user)
+
+
 def add_candies(user: dict, n: int) -> None:
-    user["hw_candies"] = candies_of(user) + int(n)
+    n = int(n)
+    user["hw_candies_earned"] = _earned_of(user) + max(0, n)   # read BEFORE the balance changes
+    user["hw_candies"] = candies_of(user) + n
 
 
 def award_seize_candies(db: dict, user: dict, global_card: dict) -> int:
@@ -493,6 +819,9 @@ def _grant_card(user: dict, cid: str, card: dict) -> None:
         "amount": 0,
     })
     entry["amount"] = entry.get("amount", 0) + 1
+    if user.get("hw_test"):
+        g = user.setdefault("hw_test_grants", {}).setdefault("cards", {})
+        g[cid] = int(g.get(cid, 0)) + 1
 
 
 def _pick_card(db: dict, rarities, halloween: bool):
@@ -510,20 +839,20 @@ def _pick_card(db: dict, rarities, halloween: bool):
 
 
 # ==========================================
-# PLAYER COMMANDS: /treat (candies) and /trick (shards) — each once per UTC day
+# PLAYER COMMANDS: /treat (candies for a replied-to player) and /trick (shards)
 # ==========================================
 async def _tot_guard(message: Message, date_key: str, cmd: str, done_text: str):
     """Shared checks for /treat and /trick. Returns (db, user, user_id, today) or None (already replied)."""
     uid_int = message.from_user.id
     if is_ghost_banned(uid_int) or is_shadow_banned(uid_int):
         return None
-    if TOT_COMMUNITY_ONLY and message.chat.type not in ("group", "supergroup"):
+    if TOT_COMMUNITY_ONLY and message.chat.type not in ("group", "supergroup") and not is_test_user(load_db(), uid_int):
         await message.reply(f"{HW_EMOJI} <code>/{cmd}</code> is a <b>community command</b> — "
                             f"use it in the group chat.", parse_mode=ParseMode.HTML)
         return None
     user_id = str(uid_int)
     db = ensure_user(user_id, message.from_user.first_name, message.from_user.username)
-    if not event_active(db):
+    if not _ev_on(db, user_id):
         await message.reply(f"{HW_EMOJI} The Halloween event isn't running right now.", parse_mode=ParseMode.HTML)
         return None
     user = db["users"][user_id]
@@ -534,28 +863,101 @@ async def _tot_guard(message: Message, date_key: str, cmd: str, done_text: str):
     return db, user, user_id, today
 
 
+def _mention(u) -> str:
+    return f'<a href="tg://user?id={u.id}">{_esc(u.first_name or "Player")}</a>'
+
+
 @main_router.message(Command("treat"))
 async def treat_cmd(message: Message):
-    g = await _tot_guard(message, "hw_treat_date", "treat",
-                         f"{HW_EMOJI} You've already collected your treat today. Come back tomorrow!")
-    if not g:
+    """Reply to a player's message with /treat to give them one random candy.
+    Giver: TREAT_DAILY_USES per UTC day. Receiver: up to TREAT_RECEIVE_DAILY_MAX per UTC day."""
+    giver_tg = message.from_user
+    if is_ghost_banned(giver_tg.id) or is_shadow_banned(giver_tg.id):
         return
-    db, user, user_id, today = g
-    pieces, direct, bonus = roll_candy_bag(user)
-    user["hw_treat_date"] = today
+    if message.chat.type not in ("group", "supergroup"):
+        await message.reply("<b>/treat</b> works in group chats. Reply to someone's message with /treat.",
+                            parse_mode=ParseMode.HTML)
+        return
+    target = message.reply_to_message.from_user if message.reply_to_message else None
+    if not target:
+        await message.reply("Reply to a player's message with <b>/treat</b> to give them candies.",
+                            parse_mode=ParseMode.HTML)
+        return
+    if target.is_bot:
+        await message.reply("Bots don't eat candy.", parse_mode=ParseMode.HTML)
+        return
+    if target.id == giver_tg.id:
+        await message.reply("You can't treat yourself. Reply to someone else.", parse_mode=ParseMode.HTML)
+        return
+    if is_ghost_banned(target.id) or is_shadow_banned(target.id):
+        return
+
+    gid, tid = str(giver_tg.id), str(target.id)
+    db = ensure_user(gid, giver_tg.first_name, giver_tg.username)
+    if not (_ev_on(db, gid) or is_test_user(db, tid)):
+        await message.reply("The Halloween event isn't running right now.", parse_mode=ParseMode.HTML)
+        return
+    giver = db["users"][gid]
+    now = time.time()
+
+    # giver daily limit
+    gd = giver.get("hw_treat_day")
+    if not isinstance(gd, dict) or gd.get("date") != _today():
+        gd = {"date": _today(), "n": 0}
+    if gd["n"] >= TREAT_DAILY_USES:
+        await message.reply(f"You've used all {TREAT_DAILY_USES} treats today. Refills at 00:00 UTC "
+                            f"(in <b>{_fmt_left(int(86400 - now % 86400))}</b>).", parse_mode=ParseMode.HTML)
+        return
+    # same person twice
+    recent = {k: v for k, v in (giver.get("hw_treat_to", {}) or {}).items()
+              if now - float(v) < TREAT_SAME_USER_HOURS * 3600}
+    if tid in recent:
+        left = int(TREAT_SAME_USER_HOURS * 3600 - (now - float(recent[tid])))
+        await message.reply(f"You already treated {_mention(target)}. Try someone else, "
+                            f"or wait <b>{_fmt_left(left)}</b>.", parse_mode=ParseMode.HTML)
+        return
+
+    db = ensure_user(tid, target.first_name, target.username)
+    receiver = db["users"][tid]
+    giver = db["users"][gid]
+    today = _today()
+    rec = receiver.get("hw_treat_recv")
+    if not isinstance(rec, dict) or rec.get("date") != today:
+        rec = {"date": today, "n": 0}
+    if rec["n"] >= TREAT_RECEIVE_DAILY_MAX:
+        await message.reply(f"{_mention(target)} has had enough treats today. Try again after 00:00 UTC.",
+                            parse_mode=ParseMode.HTML)
+        return
+
+    pieces, direct, bonus = roll_candy_bag(receiver)
+    rec["n"] += 1
+    receiver["hw_treat_recv"] = rec
+    recent[tid] = now
+    giver["hw_treat_to"] = recent
+    gd["n"] += 1
+    giver["hw_treat_day"] = gd
+    giver["hw_treat_given"] = int(giver.get("hw_treat_given", 0) or 0) + 1
+    receiver["hw_treat_got"] = int(receiver.get("hw_treat_got", 0) or 0) + 1
     save_db()
 
-    lines = [f"<b>「 {HW_EMOJI} TREAT 」</b>", "━━━━━━━━━━━━━━━━━",
-             f"<i>{random.choice(TREAT_LINES)}</i>\n",
-             f"🎃 You got  {' '.join(e for e, _, _ in pieces)}"]
-    if direct:
-        lines.append(f"{CANDY} <b>+{direct} Candies</b> added to your balance")
     items = [e for e, _, _ in pieces if e != CANDY]
+    lines = [
+        f"<b>Treat for {_mention(target)}</b>",
+        f"<i>{random.choice(TREAT_LINES)}</i>",
+        "",
+        f"<b>{'  '.join(e for e, _, _ in pieces)}</b>",
+        "",
+    ]
+    if len(pieces) > 1:
+        lines.insert(4, "🎉 <b>Lucky bag!</b> Two candies this time.")
+    if direct:
+        lines.append(f"+{direct} {CANDY} added to balance")
     if items:
-        lines.append(f"🧺 <b>{' '.join(items)}</b> added to your candy bag — convert them at /candies")
+        lines.append(f"{' '.join(items)} added to the candy bag")
     if bonus:
-        lines.append(f"🏅 <b>Candy Collector!</b> You found every candy type: {CANDY} +{bonus} bonus!")
-    lines.append(f"\n{CANDY} Balance: <b>{candies_of(user)}</b>  •  /candies  •  /hwstore")
+        lines.append(f"Candy Collector bonus: +{bonus} {CANDY}")
+    lines.append(f"\nBalance: <b>{candies_of(receiver)}</b> {CANDY}  ·  from {_mention(giver_tg)}  ·  {TREAT_DAILY_USES - gd['n']} left today")
+    lines.append(f"<i>Bag: /candies  ·  Store: /hwstore</i>")
     await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
@@ -568,8 +970,9 @@ async def trick_cmd(message: Message):
     db, user, user_id, today = g
     lo, hi = TRICK_SHARD_RANGE
     shards = random.randint(lo // 50, hi // 50) * 50
-    user["nexus_shards"] = user.get("nexus_shards", 0) + shards
+    _add_shards(user, shards)
     user["hw_trick_date"] = today
+    user["hw_trick_count"] = int(user.get("hw_trick_count", 0) or 0) + 1
     save_db()
 
     lines = [f"<b>「 👻 TRICK 」</b>", "━━━━━━━━━━━━━━━━━",
@@ -584,10 +987,11 @@ async def trickortreat_info_cmd(message: Message):
     if is_ghost_banned(message.from_user.id) or is_shadow_banned(message.from_user.id):
         return
     await message.reply(
-        f"<b>「 {HW_EMOJI} TRICK OR TREAT 」</b>\n━━━━━━━━━━━━━━━━━\n"
-        f"🍬 <code>/treat</code> — a bag of candies 🍬🍭🍫🍪🍩🍰 (once a day)\n"
-        f"👻 <code>/trick</code> — Nexus Shards 💠 (once a day)\n\n"
-        f"<i>Separate daily limits — do both! Convert candies at /candies.</i>",
+        f"<b>Trick or Treat</b>\n━━━━━━━━━━━━━━━━━\n"
+        f"{CANDY} <code>/treat</code>  Reply to a player to give them a bag of 1-2 candies. "
+        f"{TREAT_DAILY_USES} times a day.\n"
+        f"💠 <code>/trick</code>  Nexus Shards for you. Once a day.\n\n"
+        f"<i>Convert candies at /candies.</i>",
         parse_mode=ParseMode.HTML)
 
 
@@ -625,7 +1029,7 @@ def _store_text(db: dict, user: dict) -> str:
         f"<b>「 {HW_EMOJI} CANDY STORE 」</b>",
         "━━━━━━━━━━━━━━━━━",
         f"{CANDY} Your Candies: <b>{candies_of(user)}</b>",
-        f"⏳ Event ends in: <b>{_fmt_left(event_seconds_left(db))}</b>\n",
+        f"⏳ Event ends in: <b>{_fmt_left(event_seconds_left(db)) if event_active(db) else _fmt_left(_tester_clock(user)[2])}</b>\n",
     ]
     for key, (label, price, limit, _k, _v) in STORE_ITEMS.items():
         lock = "  🔒" if _store_gate(db, user, key) else ""
@@ -654,7 +1058,7 @@ def _purchase(db: dict, user: dict, key: str):
     item = STORE_ITEMS.get(key)
     if not item:
         return "Item not found.", None
-    if not event_active(db):
+    if not (event_active(db) or user.get("hw_test")):
         return "The store is closed.", None
     label, price, limit, kind, value = item
     bought = user.setdefault("hw_bought", {})
@@ -680,7 +1084,7 @@ def _purchase(db: dict, user: dict, key: str):
     user["hw_candies"] = candies_of(user) - price
     bought[key] = bought.get(key, 0) + 1
     if kind == "shards":
-        user["nexus_shards"] = user.get("nexus_shards", 0) + value
+        _add_shards(user, value)
     else:
         _grant_card(user, card_id, card)
     save_db()
@@ -695,7 +1099,7 @@ async def hwstore_cmd(message: Message):
         return
     user_id = str(uid_int)
     db = ensure_user(user_id, message.from_user.first_name, message.from_user.username)
-    if not event_active(db):
+    if not _ev_on(db, user_id):
         await message.reply(f"{HW_EMOJI} The Halloween store is closed right now.", parse_mode=ParseMode.HTML)
         return
     await message.reply(_store_text(db, db["users"][user_id]),
@@ -710,7 +1114,7 @@ async def hwcv_cb(cq: CallbackQuery):
         await cq.answer("This isn't your menu.", show_alert=True)
         return
     db = ensure_user(owner, cq.from_user.first_name, cq.from_user.username)
-    if not event_active(db):
+    if not _ev_on(db, owner):
         await cq.answer("The event isn't running right now.", show_alert=True)
         return
     user = db["users"][owner]
@@ -740,7 +1144,7 @@ async def hwcv_cb(cq: CallbackQuery):
         msg = f"Converted to +{value} 🍬"
     else:
         shards = value * CONVERT_SHARDS_PER_CANDY
-        user["nexus_shards"] = user.get("nexus_shards", 0) + shards
+        _add_shards(user, shards)
         msg = f"Converted to +{shards} 💠 Shards"
     save_db()
     await cq.message.edit_text(
@@ -773,7 +1177,7 @@ async def hwbuy_cb(cq: CallbackQuery):
         await cq.answer("Item not found.", show_alert=True)
         return
     db = ensure_user(owner, cq.from_user.first_name, cq.from_user.username)
-    if not event_active(db):
+    if not _ev_on(db, owner):
         await cq.answer("The store is closed.", show_alert=True)
         return
     label, price, limit, *_ = item
@@ -822,7 +1226,7 @@ async def hwok_cb(cq: CallbackQuery):
         await cq.answer("Item not found.", show_alert=True)
         return
     db = ensure_user(owner, cq.from_user.first_name, cq.from_user.username)
-    if not event_active(db):
+    if not _ev_on(db, owner):
         await cq.answer("The store is closed.", show_alert=True)
         return
 
@@ -931,7 +1335,7 @@ def quest_progress(user_id, key: str, amount: int = 1, db: dict | None = None) -
     the user doesn't have that quest today, or it's already done). Safe to call anywhere."""
     try:
         db = db or load_db()
-        if not event_active(db) or amount <= 0:
+        if not haunt_enabled(db, user_id) or amount <= 0:
             return
         uid = str(user_id)
         user = db.get("users", {}).get(uid)
@@ -967,6 +1371,64 @@ def quest_progress(user_id, key: str, amount: int = 1, db: dict | None = None) -
         print(f"[halloween] quest_progress error: {e}")
 
 
+def assign_quests_all(db: dict) -> int:
+    """Hand today's quests to EVERY player (skips banned). Returns how many got a new set."""
+    n = 0
+    for uid, u in db.get("users", {}).items():
+        if not isinstance(u, dict):
+            continue
+        try:
+            if is_ghost_banned(int(uid)) or is_shadow_banned(int(uid)):
+                continue
+        except ValueError:
+            continue
+        before = (u.get("hw_quests") or {}).get("date") if isinstance(u.get("hw_quests"), dict) else None
+        _roll_quests(u)
+        _haunt(db, u)
+        if before != _today():
+            n += 1
+    if n:
+        save_db()
+    return n
+
+
+_midnight_task = None
+
+
+async def _midnight_loop():
+    """Every 00:00 UTC: if haunt is on, assign the new day's quests to everyone."""
+    while True:
+        now = time.time()
+        await asyncio.sleep(86400 - (now % 86400) + 3)
+        try:
+            db = load_db()
+            if haunt_enabled(db):
+                print(f"[halloween] midnight: assigned quests to {assign_quests_all(db)} player(s)")
+        except Exception as e:
+            print(f"[halloween] midnight assign error: {e}")
+
+
+def ensure_midnight_task() -> None:
+    global _midnight_task
+    if _midnight_task and not _midnight_task.done():
+        return
+    try:
+        _midnight_task = asyncio.get_running_loop().create_task(_midnight_loop())
+    except RuntimeError:
+        pass
+
+
+@main_router.startup()
+async def _hw_startup():
+    ensure_midnight_task()
+    try:
+        db = load_db()
+        if haunt_enabled(db):
+            assign_quests_all(db)      # catch up after a restart
+    except Exception as e:
+        print(f"[halloween] startup assign error: {e}")
+
+
 def _bar(p: int, t: int, width: int = 8) -> str:
     filled = 0 if t <= 0 else int(width * min(p, t) / t)
     return "▰" * filled + "▱" * (width - filled)
@@ -977,10 +1439,15 @@ async def haunt_cmd(message: Message):
     uid_int = message.from_user.id
     if is_ghost_banned(uid_int) or is_shadow_banned(uid_int):
         return
+    ensure_midnight_task()
     user_id = str(uid_int)
     db = ensure_user(user_id, message.from_user.first_name, message.from_user.username)
-    if not event_active(db):
+    if not _ev_on(db, uid_int):
         await message.reply(f"{HW_EMOJI} The Halloween event isn't running right now.", parse_mode=ParseMode.HTML)
+        return
+    if not haunt_enabled(db, uid_int):
+        await message.reply(f"🕯 <b>Haunt is switched off right now.</b> Quests are paused until an admin turns it on.",
+                            parse_mode=ParseMode.HTML)
         return
 
     user = db["users"][user_id]
@@ -989,6 +1456,8 @@ async def haunt_cmd(message: Message):
     save_db()
 
     dn = event_day(db)
+    if not dn and not event_active(db) and user.get("hw_test"):
+        dn = _tester_clock(user)[:2]
     head = f"<b>「 {HW_EMOJI} HAUNT 」</b>" + (f"  —  Day <b>{dn[0]}/{dn[1]}</b>" if dn else "")
     lines = [head, "━━━━━━━━━━━━━━━━━"]
     for it in q["items"]:
@@ -1030,16 +1499,35 @@ def _login(db: dict, user: dict) -> dict:
 
 
 def _login_view(db: dict, user: dict):
-    """(nights claimed in the current run, can claim tonight?, streak just broke?)"""
+    """(nights claimed in the current run, can claim tonight?, streak just broke?, catch-up?)
+    catch-up = exactly ONE night was missed: tonight completes the missed night AND tonight together."""
     h = _login(db, user)
     today, last, streak = _today(), h.get("last"), int(h.get("streak", 0))
-    broken = False
+    if streak >= len(LOGIN_EVENT):
+        return streak, False, False, False      # finished all nights: nothing more to claim or watch this event
+    broken = catchup = False
     if last and last != today:
-        if streak >= len(LOGIN_EVENT):
-            streak = 0                          # finished all 7 nights: a new run starts
-        elif streak > 0 and _gap(last, today) > 1:
-            streak, broken = 0, True            # missed a night: back to night 1
-    return streak, last != today, broken
+        if streak > 0 and _gap(last, today) > 1:
+            if _gap(last, today) == 2 and streak + 1 < len(LOGIN_EVENT):
+                catchup = True                  # missed one night: claim it together with tonight
+            else:
+                streak, broken = 0, True        # missed more: back to night 1
+    return streak, last != today, broken, catchup
+
+
+def login_completed(db: dict, user: dict) -> bool:
+    """True once the player has claimed all nights of the login event (no more ads / claims)."""
+    return int(_login(db, user).get("streak", 0)) >= len(LOGIN_EVENT)
+
+
+def _nights_due(streak: int, catchup: bool) -> tuple:
+    """The LOGIN_EVENT nights that tonight's claim pays out (2 when catching up a missed night)."""
+    return LOGIN_EVENT[streak:streak + (2 if catchup else 1)]
+
+
+def _ads_needed(streak: int, catchup: bool) -> int:
+    nights = _nights_due(streak, catchup)
+    return sum(d["ads"] for d in nights) if nights else LOGIN_EVENT[-1]["ads"]
 
 
 def _ads_today(user: dict) -> int:
@@ -1047,15 +1535,15 @@ def _ads_today(user: dict) -> int:
     return int(a.get("n", 0)) if isinstance(a, dict) and a.get("date") == _today() else 0
 
 
-def record_ad(db: dict, user: dict) -> int:
+def record_ad(db: dict, user: dict, uid=None) -> int:
     """Count one confirmed rewarded ad toward tonight's login reward. Called from the Adsgram
     reward postback only (never trust the client). Returns the ads counted tonight."""
-    if not event_active(db):
+    if not login_enabled(db, uid):
         return 0
-    streak, can, _broken = _login_view(db, user)
+    streak, can, _broken, catchup = _login_view(db, user)
     if not can:
         return _ads_today(user)
-    n = min(LOGIN_EVENT[streak]["ads"], _ads_today(user) + 1)
+    n = min(_ads_needed(streak, catchup), _ads_today(user) + 1)
     user["hw_login_ads"] = {"date": _today(), "n": n}
     save_db()
     return n
@@ -1072,53 +1560,68 @@ def _reward_text(day: dict) -> str:
     return " + ".join(parts)
 
 
-def claim_login(db: dict, user: dict):
-    """Claim tonight's reward once enough ads were counted.
-    Returns (ok, {'day','shards','cards':[{'name','rarity'}]} | {'error'})."""
-    if not event_active(db):
+def claim_login(db: dict, user: dict, uid=None):
+    """Claim tonight's reward once enough ads were counted. If exactly one night was missed,
+    the missed night and tonight are paid together (ads of both nights are needed).
+    Returns (ok, {'day','nights','catchup','shards','cards':[{'name','rarity'}]} | {'error'})."""
+    if not (event_active(db) or user.get("hw_test")):
         return False, {"error": "The Halloween event isn't running right now."}
-    streak, can, _broken = _login_view(db, user)
+    if not login_enabled(db, uid):
+        return False, {"error": "The login event is switched off right now."}
+    if login_completed(db, user):
+        return False, {"error": "You already completed all 7 nights. Nothing more to claim!"}
+    streak, can, _broken, catchup = _login_view(db, user)
     if not can:
         return False, {"error": "Already claimed tonight — come back after 00:00 UTC."}
-    day = LOGIN_EVENT[streak]
+    nights = _nights_due(streak, catchup)
+    if not nights:
+        return False, {"error": "Nothing to claim right now."}
+    need = _ads_needed(streak, catchup)
     seen = _ads_today(user)
-    if seen < day["ads"]:
-        return False, {"error": f"Watch {day['ads']} ad(s) first ({seen}/{day['ads']})."}
+    if seen < need:
+        return False, {"error": f"Watch {need} ad(s) first ({seen}/{need})."}
 
     # Pick the cards BEFORE granting anything, so an empty pool never costs the player.
     picks = []
-    if day.get("card"):
-        picks.append(_pick_card(db, day["card"], halloween=False))
-    if day.get("hwcard"):
-        picks.append(_pick_card(db, day["hwcard"], halloween=True))
+    for day in nights:
+        if day.get("card"):
+            picks.append(_pick_card(db, day["card"], halloween=False))
+        if day.get("hwcard"):
+            picks.append(_pick_card(db, day["hwcard"], halloween=True))
     if any(c is None for _cid, c in picks):
         return False, {"error": "That reward is out of stock right now. Try again later — your ads are kept."}
 
-    shards = int(day.get("shards", 0))
+    shards = sum(int(d.get("shards", 0)) for d in nights)
     if shards:
-        user["nexus_shards"] = user.get("nexus_shards", 0) + shards
+        _add_shards(user, shards)
     cards = []
     for cid, c in picks:
         _grant_card(user, cid, c)
         cards.append({"name": str(c.get("name", "Card")), "rarity": format_rarity(c.get("rarity", ""))})
     h = _login(db, user)
-    h["streak"], h["last"] = streak + 1, _today()
+    h["streak"], h["last"] = streak + len(nights), _today()
     user["hw_login_ads"] = {"date": _today(), "n": 0}
     save_db()
-    return True, {"day": streak + 1, "shards": shards, "cards": cards}
+    return True, {"day": streak + len(nights), "nights": [streak + 1 + i for i in range(len(nights))],
+                  "catchup": bool(catchup), "shards": shards, "cards": cards}
 
 
 def _login_text(db: dict, user: dict) -> str:
-    streak, can, broken = _login_view(db, user)
+    streak, can, broken, catchup = _login_view(db, user)
+    due = {streak, streak + 1} if catchup else {streak}
     rows = []
     for i, d in enumerate(LOGIN_EVENT):
-        mark = "✅" if i < streak else ("🎁" if i == streak and can else "▫️")
+        mark = "✅" if i < streak else ("🎁" if i in due and can else "▫️")
         rows.append(f"{mark} Night {i + 1} — {d['ads']} ad{'s' if d['ads'] > 1 else ''}: {_reward_text(d)}")
-    if not can:
+    if streak >= len(LOGIN_EVENT):
+        head = "🏁 <b>You completed all 7 nights!</b> <i>Nothing more to watch or claim this event.</i>"
+    elif not can:
         head = "✅ <i>Tonight's reward is claimed. Come back after 00:00 UTC.</i>"
     else:
-        need = LOGIN_EVENT[streak]["ads"]
-        head = (f"📺 <b>Tonight:</b> watch {need} ad{'s' if need > 1 else ''} "
+        need = _ads_needed(streak, catchup)
+        what = (f"catch up: nights <b>{streak + 1}</b> + <b>{streak + 2}</b> together"
+                if catchup else f"night <b>{streak + 1}</b>")
+        head = (f"📺 <b>Tonight:</b> {what} — watch {need} ad{'s' if need > 1 else ''} "
                 f"({min(_ads_today(user), need)}/{need}), then claim — open /hwapp.")
     note = "\n⚠️ <i>You missed a night, so the event restarted at night 1.</i>" if broken else ""
     return f"<b>「 {HW_EMOJI} 7-NIGHT LOGIN EVENT 」</b>\n━━━━━━━━━━━━━━━━━\n{head}\n\n" + "\n".join(rows) + note
@@ -1131,8 +1634,12 @@ async def hwlogin_cmd(message: Message):
         return
     user_id = str(uid_int)
     db = ensure_user(user_id, message.from_user.first_name, message.from_user.username)
-    if not event_active(db):
+    if not _ev_on(db, uid_int):
         await message.reply(f"{HW_EMOJI} The Halloween event isn't running right now.", parse_mode=ParseMode.HTML)
+        return
+    if not login_enabled(db, uid_int):
+        await message.reply("🌙 <b>The login event is switched off right now.</b> Check back later.",
+                            parse_mode=ParseMode.HTML)
         return
     await message.reply(_login_text(db, db["users"][user_id]), parse_mode=ParseMode.HTML)
 
@@ -1144,6 +1651,189 @@ async def hwapp_cmd(message: Message):
         return
     await message.reply(f"{HW_EMOJI} <b>Anime Nexus Halloween Event</b>\nLogin calendar, quests and the candy store.",
                         reply_markup=_miniapp_kb(), parse_mode=ParseMode.HTML)
+
+
+# ==========================================
+# LEADERBOARD: /halloween_lbd (with the event image)
+# ==========================================
+HW_LBD_IMAGE = "https://i.ibb.co/V01FqSZY/4c2fb04e-70f1-44b2-a9b9-bccfbd3a22fb.jpg"
+LBD_TOP = 10                     # rows shown per board
+_lbd_file_id = None              # Telegram file_id cached after the first successful upload
+
+
+def _ro_haunt_days(eid, u: dict) -> int:
+    h = u.get("hw_haunt")
+    return len(h.get("days", [])) if isinstance(h, dict) and h.get("event") == eid else 0
+
+
+def _ro_login_nights(eid, u: dict) -> int:
+    h = u.get("hw_login")
+    return int(h.get("streak", 0) or 0) if isinstance(h, dict) and h.get("event") == eid else 0
+
+
+# key -> (title, value fn(event_id, user), unit)
+LBD_BOARDS = {
+    "candies": (f"{CANDY} Top Candies",        lambda eid, u: _earned_of(u),                          CANDY),
+    "given":   ("💝 Most Treats Given",        lambda eid, u: int(u.get("hw_treat_given", 0) or 0),   "treats"),
+    "got":     ("🎁 Most Treats Received",     lambda eid, u: int(u.get("hw_treat_got", 0) or 0),     "treats"),
+    "haunt":   ("🕯 Haunt Days",               _ro_haunt_days,                                        "days"),
+    "login":   ("🌙 Login Nights",             _ro_login_nights,                                      "nights"),
+}
+
+
+def _uname(u: dict) -> str:
+    n = u.get("name") or u.get("first_name") or u.get("username") or "Player"
+    return _esc(str(n)[:18])
+
+
+def _lbd_rows(db: dict, key: str) -> list:
+    eid = _state(db).get("event_id", 0)
+    fn = LBD_BOARDS[key][1]
+    rows = []
+    for uid, u in db.get("users", {}).items():
+        if not isinstance(u, dict):
+            continue
+        try:
+            if is_ghost_banned(int(uid)) or is_shadow_banned(int(uid)):
+                continue
+        except ValueError:
+            continue
+        if u.get("hw_test"):          # /hwtest testers are not ranked
+            continue
+        v = fn(eid, u)
+        if v > 0:
+            rows.append((uid, v, _uname(u)))
+    rows.sort(key=lambda r: (-r[1], r[2].lower()))
+    return rows
+
+
+def _lbd_caption(db: dict, key: str, viewer_id: str) -> str:
+    title, _fn, unit = LBD_BOARDS[key]
+    rows = _lbd_rows(db, key)
+    lines = [f"<b>「 {HW_EMOJI} HALLOWEEN LEADERBOARD 」</b>", f"<b>{title}</b>", "━━━━━━━━━━━━━━━━━"]
+    if not rows:
+        lines.append("<i>Nobody on the board yet.</i>")
+    medals = ("🥇", "🥈", "🥉")
+    for i, (uid, v, name) in enumerate(rows[:LBD_TOP]):
+        lead = medals[i] if i < 3 else f"{i + 1}."
+        lines.append(f"{lead} {name} — <b>{v:,}</b> {unit}" + ("  ← you" if uid == viewer_id else ""))
+    pos = next((i for i, r in enumerate(rows) if r[0] == viewer_id), None)
+    if pos is None:
+        lines.append("\n<i>You aren't ranked on this board yet.</i>")
+    elif pos >= LBD_TOP:
+        lines.append(f"…\n<b>#{pos + 1}</b> You — <b>{rows[pos][1]:,}</b> {unit}")
+    if key == "candies":
+        lines.append(f"\n<i>Ranked by candies earned all event (spending in the store doesn't lower your rank).</i>")
+    return "\n".join(lines)
+
+
+def _lbd_kb(current: str, owner: str) -> InlineKeyboardMarkup:
+    btns = [InlineKeyboardButton(text=("• " if k == current else "") + v[0], callback_data=f"hwlb_{k}_{owner}")
+            for k, v in LBD_BOARDS.items()]
+    return InlineKeyboardMarkup(inline_keyboard=[btns[0:2], btns[2:4], btns[4:]])
+
+
+@main_router.message(Command("halloween_lbd", "hwlbd"))
+async def halloween_lbd_cmd(message: Message):
+    global _lbd_file_id
+    uid = message.from_user.id
+    if is_ghost_banned(uid) or is_shadow_banned(uid):
+        return
+    owner = str(uid)
+    db = load_db()
+    cap, kb = _lbd_caption(db, "candies", owner), _lbd_kb("candies", owner)
+    for src in [s for s in (_lbd_file_id, HW_LBD_IMAGE) if s]:
+        try:
+            sent = await message.reply_photo(photo=src, caption=cap, reply_markup=kb, parse_mode=ParseMode.HTML)
+            if sent.photo and src == HW_LBD_IMAGE:
+                _lbd_file_id = sent.photo[-1].file_id
+            return
+        except Exception as e:
+            print(f"[halloween] leaderboard photo failed ({src[:30]}...): {e}")
+            if src == _lbd_file_id:
+                _lbd_file_id = None
+    await message.reply(cap, reply_markup=kb, parse_mode=ParseMode.HTML)   # image unavailable: text only
+
+
+@main_router.callback_query(F.data.startswith("hwlb_"))
+async def hwlb_cb(cq: CallbackQuery):
+    _, key, owner = cq.data.split("_", 2)
+    if str(cq.from_user.id) != owner:
+        await cq.answer("Open your own board with /halloween_lbd.", show_alert=True)
+        return
+    if key not in LBD_BOARDS:
+        await cq.answer("Unknown board.", show_alert=True)
+        return
+    db = load_db()
+    cap, kb = _lbd_caption(db, key, owner), _lbd_kb(key, owner)
+    try:
+        if cq.message.photo:
+            await cq.message.edit_caption(caption=cap, reply_markup=kb, parse_mode=ParseMode.HTML)
+        else:
+            await cq.message.edit_text(cap, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass   # "message is not modified"
+    await cq.answer()
+
+
+# ==========================================
+# EVENT CONTROL HELPERS (used by /sthw)
+# ==========================================
+def _ev_start(db: dict, days: int, login: bool = True, haunt: bool = True):
+    st, now = _state(db), time.time()
+    day0 = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    st["active"] = True
+    st["event_id"] = int(now)                 # new id => everyone's haunt / login progress starts fresh
+    st["start_date"] = day0.strftime("%Y-%m-%d")
+    st["days"] = days
+    st["login_on"], st["haunt_on"] = bool(login), bool(haunt)
+    st["paused_total"] = 0
+    st["ends_at"] = (day0 + timedelta(days=days)).timestamp()   # end of the last UTC day
+    st.pop("paused_at", None)
+    save_db()
+    return day0, (day0 + timedelta(days=days - 1)).strftime("%Y-%m-%d")
+
+
+def _ev_pause(db: dict):
+    st = _state(db)
+    if not st.get("active"):
+        return False, f"{HW_EMOJI} The event isn't running, nothing to pause."
+    st["active"] = False
+    st["paused_at"] = time.time()
+    save_db()
+    return True, ("⏸ <b>Event paused.</b> Quests, candies and the store are frozen and the remaining time is kept.\n"
+                  "Use <code>/sthw on</code> to resume.")
+
+
+def _ev_resume(db: dict):
+    st, now = _state(db), time.time()
+    if not st.get("paused_at"):
+        return False, "The event isn't paused."
+    dur = now - st.pop("paused_at")
+    st["ends_at"] = st.get("ends_at", now) + dur
+    st["paused_total"] = st.get("paused_total", 0) + dur
+    st["active"] = True
+    save_db()
+    return True, "▶️ <b>Event resumed.</b>"
+
+
+def _ev_stop(db: dict):
+    st = _state(db)
+    st["active"] = False
+    st.pop("paused_at", None)
+    save_db()
+    return True, "⏹ Halloween event ended."
+
+
+def _ev_extend(db: dict, n: int):
+    st = _state(db)
+    if not (st.get("paused_at") or event_active(db)):
+        return False, "The event is over — start a new one with /sthw on."
+    n = max(1, min(30, int(n)))
+    st["ends_at"] = st.get("ends_at", time.time()) + n * 86400
+    st["days"] = int(st.get("days", 0) or 0) + n
+    save_db()
+    return True, f"➕ Event extended by <b>{n}</b> day(s)."
 
 
 # ==========================================
@@ -1164,24 +1854,31 @@ def _verify_init_data(init_data: str):
         return None
 
 
-def _web_view(db: dict, user: dict) -> dict:
+def _web_view(db: dict, user: dict, uid=None) -> dict:
     """Everything halloween.html needs to draw itself. The server is the source of truth,
     including store prices and limits."""
-    q, h = _roll_quests(user), _haunt(db, user)
-    streak, can, broken = _login_view(db, user)
-    dn, bought, active = event_day(db), user.get("hw_bought", {}), event_active(db)
+    lon, hon = login_enabled(db, uid), haunt_enabled(db, uid)
+    q, h = (_roll_quests(user) if hon else None), _haunt(db, user)
+    streak, can, broken, catchup = _login_view(db, user)
+    need = _ads_needed(streak, catchup)
+    dn, bought, active = event_day(db), user.get("hw_bought", {}), (event_active(db) or bool(user.get("hw_test")))
+    left = event_seconds_left(db)
+    if not left and user.get("hw_test"):          # no real event: the tester runs their own (starts at /hwtest on)
+        td, tt, left = _tester_clock(user)
+        dn = (td, tt)
     return {
         "event": {"active": active, "day": dn[0] if dn else 0, "total": dn[1] if dn else 0,
-                  "seconds_left": event_seconds_left(db)},
+                  "seconds_left": left},
         "candies": candies_of(user),
         "shards": int(user.get("nexus_shards", 0) or 0),
-        "login": {"streak": streak, "can_claim": bool(can and active), "broken": broken,
-                  "ads_needed": LOGIN_EVENT[min(streak, len(LOGIN_EVENT) - 1)]["ads"],
-                  "ads_watched": min(_ads_today(user), LOGIN_EVENT[min(streak, len(LOGIN_EVENT) - 1)]["ads"]) if can else 0},
+        "features": {"login": lon, "haunt": hon},
+        "login": {"streak": streak, "completed": streak >= len(LOGIN_EVENT), "can_claim": bool(can and lon), "broken": broken, "catchup": bool(catchup),
+                  "ads_needed": need,
+                  "ads_watched": min(_ads_today(user), need) if (can and lon) else 0},
         "quests": {"items": [{"k": i["k"], "text": QUESTS[i["k"]][0].format(t=i["t"]), "t": i["t"],
-                              "p": i["p"], "r": i["r"], "done": i["done"]} for i in q["items"]],
-                   "bonus": q["bonus"], "bonus_amount": ALL_DONE_BONUS},
-        "haunt": {"days": len(h["days"]), "required": HAUNT_DAYS_REQUIRED, "today": q["date"] in h["days"]},
+                              "p": i["p"], "r": i["r"], "done": i["done"]} for i in q["items"]] if q else [],
+                   "bonus": bool(q and q["bonus"]), "bonus_amount": ALL_DONE_BONUS},
+        "haunt": {"days": len(h["days"]), "required": HAUNT_DAYS_REQUIRED, "today": bool(q and q["date"] in h["days"])},
         "store": [{"key": k, "price": v[1], "limit": v[2], "bought": bought.get(k, 0),
                    "locked": _store_gate(db, user, k)} for k, v in STORE_ITEMS.items()],
     }
@@ -1217,30 +1914,30 @@ def get_router():
         return db, user
 
     @router.get("/ads/reward")
-    async def ad_reward(userid: int = 0, secret: str = ""):
+    async def ad_reward(userid: int = 0, secret: str = "", key: str = ""):
         """Adsgram reward postback: counts one confirmed ad toward tonight's login reward."""
-        if HW_AD_SECRET and not hmac.compare_digest(secret, HW_AD_SECRET):
+        if HW_AD_SECRET and not hmac.compare_digest(secret or key, HW_AD_SECRET):
             raise HTTPException(403, "Bad secret.")
         db = load_db()
         user = db.get("users", {}).get(str(userid))
         if not user:
             raise HTTPException(404, "Unknown user.")
-        return {"ok": True, "watched": record_ad(db, user)}
+        return {"ok": True, "watched": record_ad(db, user, userid)}
 
     @router.post("/state")
     async def state(req: Req):
         db, user = ctx(req)
-        view = _web_view(db, user)
+        view = _web_view(db, user, req.user_id)
         save_db()                      # persists today's freshly rolled quests
         return {"ok": True, "view": view}
 
     @router.post("/login")
     async def login(req: Req):
         db, user = ctx(req)
-        ok, info = claim_login(db, user)
+        ok, info = claim_login(db, user, req.user_id)
         if not ok:
             raise HTTPException(400, info["error"])
-        return {"ok": True, **info, "view": _web_view(db, user)}
+        return {"ok": True, **info, "view": _web_view(db, user, req.user_id)}
 
     @router.post("/buy")
     async def buy(req: Req):
@@ -1249,6 +1946,6 @@ def get_router():
         if err:
             raise HTTPException(400, err)
         return {"ok": True, "name": res["name"], "rarity": res["rarity"], "shards": res["shards"],
-                "view": _web_view(db, user)}
+                "view": _web_view(db, user, req.user_id)}
 
     return router
