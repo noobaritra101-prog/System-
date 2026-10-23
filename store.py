@@ -3,6 +3,7 @@ import uuid
 import random
 import asyncio
 import logging
+import html
 from aiogram import F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputRichMessage
 from aiogram.filters import Command, CommandObject
@@ -13,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import config
+from halloween import quest_progress, hw_locked
 from config import (
     bot, main_router, load_db, save_db, ensure_user, 
     format_rarity, SHOP_PRICES, OFFLINE_STORE_GROUP
@@ -39,6 +41,29 @@ async def verify_user(cq: CallbackQuery, target_id: str) -> bool:
 def is_divine_day() -> bool:
     """The Divine slot only appears on Sundays (UTC, matching the daily shop reset)."""
     return datetime.now(timezone.utc).weekday() == 6  # Monday=0 ... Sunday=6
+
+def _sunday_special_ids(db: dict) -> set:
+    """Card IDs the admin added to the Sunday Special pool (can be from locked series)."""
+    return {str(x) for x in db.get("settings", {}).get("sunday_special_cards", [])}
+
+def _is_sunday_special(db: dict, card_id) -> bool:
+    """True only on Sunday, for cards on the admin's Sunday Special list."""
+    return is_divine_day() and str(card_id) in _sunday_special_ids(db)
+
+def _pick_sunday_divine(db: dict, uid: str, divines: dict):
+    """Pick the Divine slot card. MUST be called right after random.seed(...)
+    so the pick stays deterministic per user/day/refresh.
+    - A user who already owns ANY Sunday Special never gets a Sunday Special
+      again (they only see regular Divines; if there are none, no Divine slot).
+    - Everyone else picks evenly from the whole Divine pool.
+    """
+    special_ids = _sunday_special_ids(db)
+    owned = db["users"].get(uid, {}).get("cards", {})
+    if any(str(cid) in special_ids and c.get("amount", 0) > 0 for cid, c in owned.items()):
+        divines = {k: v for k, v in divines.items() if str(k) not in special_ids}
+        if not divines:
+            return None
+    return random.choice(list(divines.items()))
 
 def time_until_shop_reset() -> str:
     """Returns a human-readable 'Xh Ym' countdown until the next midnight UTC
@@ -108,6 +133,214 @@ async def _reject_stale_online_offer(cq: CallbackQuery, uid: str):
         pass
 
 # ==========================================
+# STORE STATS TRACKING + /store_stats (admin, DM only)
+# ==========================================
+# Counters live in db["store_stats"] = {"tracking_since": ts, "all": {...}, "today": {"date": "YYYY-MM-DD", ...}}
+# and are bumped at every online purchase, offline sale, listing created/removed and
+# paid refresh (bot and Web App API paths). "today" rolls over at midnight UTC.
+# Only events from the moment this was added are counted; earlier history is not backfilled.
+
+def _stats_today_key() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+def _blank_stats_bucket() -> dict:
+    return {
+        "online_buys": 0, "online_shards": 0,
+        "offline_sales": 0, "offline_shards": 0,
+        "listed": 0, "delisted": 0,
+        "paid_refreshes": 0, "refresh_shards": 0,
+        "by_rarity": {}, "buyers": [],
+    }
+
+def _rarity_plain(rarity) -> str:
+    r = str(rarity or "Unknown")
+    return r.rpartition(" ")[0] or r
+
+def _record_store_event(db: dict, kind: str, price: int = 0, rarity=None, user_id=None):
+    """kind: online_buy | offline_sale | listed | delisted | paid_refresh.
+    Call right before save_db(). Never raises — stats must not break a purchase."""
+    try:
+        stats = db.setdefault("store_stats", {})
+        stats.setdefault("tracking_since", int(time.time()))
+        stats.setdefault("all", _blank_stats_bucket())
+        today = _stats_today_key()
+        t = stats.get("today")
+        if not t or t.get("date") != today:
+            t = _blank_stats_bucket()
+            t["date"] = today
+            stats["today"] = t
+
+        for bucket in (stats["all"], t):
+            for k, v in _blank_stats_bucket().items():
+                bucket.setdefault(k, v)
+            if kind == "online_buy":
+                bucket["online_buys"] += 1
+                bucket["online_shards"] += int(price)
+            elif kind == "offline_sale":
+                bucket["offline_sales"] += 1
+                bucket["offline_shards"] += int(price)
+            elif kind == "listed":
+                bucket["listed"] += 1
+            elif kind == "delisted":
+                bucket["delisted"] += 1
+            elif kind == "paid_refresh":
+                bucket["paid_refreshes"] += 1
+                bucket["refresh_shards"] += int(price)
+            if kind in ("online_buy", "offline_sale"):
+                name = _rarity_plain(rarity)
+                bucket["by_rarity"][name] = bucket["by_rarity"].get(name, 0) + 1
+                if user_id is not None and str(user_id) not in bucket["buyers"]:
+                    bucket["buyers"].append(str(user_id))
+    except Exception as e:
+        dlog.error(f"[store_stats_record_CRASH] kind={kind}: {e}", exc_info=True)
+
+def _fmt_stats_section(title: str, b: dict) -> list:
+    b = b or _blank_stats_bucket()
+    total_sales = b.get("online_buys", 0) + b.get("offline_sales", 0)
+    total_shards = b.get("online_shards", 0) + b.get("offline_shards", 0)
+    lines = [
+        f"<b>「 {title} 」</b>",
+        "━━━━━━━━━━━━━━━━━",
+        f"<b>Total Sales:</b> {total_sales:,}",
+        f"<b>Total Shards Moved:</b> {total_shards:,}",
+        f"<b>Unique Buyers:</b> {len(b.get('buyers', [])):,}",
+        "",
+        f"<b>Online Store Purchases:</b> {b.get('online_buys', 0):,} ({b.get('online_shards', 0):,} Shards)",
+        f"<b>Offline Store Sales:</b> {b.get('offline_sales', 0):,} ({b.get('offline_shards', 0):,} Shards)",
+        f"<b>Listings Created:</b> {b.get('listed', 0):,}",
+        f"<b>Listings Removed:</b> {b.get('delisted', 0):,}",
+        f"<b>Paid Refreshes:</b> {b.get('paid_refreshes', 0):,} ({b.get('refresh_shards', 0):,} Shards)",
+    ]
+    by_rarity = b.get("by_rarity", {})
+    if by_rarity:
+        lines.append("")
+        lines.append("<b>Sales by Rarity:</b>")
+        for name, n in sorted(by_rarity.items(), key=lambda x: -x[1]):
+            lines.append(f"  {name}: {n:,}")
+    return lines
+
+@main_router.message(Command("sundaycard"))
+async def sundaycard_cmd(message: Message, command: CommandObject):
+    """Admin: /sundaycard add <card_id> | remove <card_id> | remove all | list
+    Cards on this list can spawn in the Sunday Divine slot even if their series is locked."""
+    if message.chat.type != "private":
+        return
+    if not message.from_user or message.from_user.id not in config.ADMIN_IDS:
+        return
+
+    db = load_db()
+    settings = db.setdefault("settings", {})
+    ids = [str(x) for x in settings.get("sunday_special_cards", [])]
+    args = (command.args or "").split()
+    action = args[0].lower() if args else "list"
+
+    if action == "list":
+        if not ids:
+            await message.reply("No Sunday Special cards set.\nUse /sundaycard add &lt;card_id&gt;")
+            return
+        lines = []
+        for cid in ids:
+            c = db["global_cards"].get(cid)
+            lines.append(f"• <code>{cid}</code> — {c['name'] if c else '⚠️ missing'}")
+        await message.reply("<b>❄️ Sunday Special cards</b>\n" + "\n".join(lines), parse_mode=ParseMode.HTML)
+        return
+
+    if action not in ("add", "remove") or len(args) < 2:
+        await message.reply("Usage: /sundaycard add|remove &lt;card_id&gt; | remove all | list", parse_mode=ParseMode.HTML)
+        return
+
+    if action == "remove" and args[1].lower() == "all":
+        if not ids:
+            await message.reply("The Sunday Special list is already empty.")
+            return
+        count = len(ids)
+        settings["sunday_special_cards"] = []
+        save_db()
+        await message.reply(f"✅ Cleared the Sunday Special list ({count} card{'s' if count != 1 else ''} removed).")
+        return
+
+    cid = args[1]
+    if action == "add":
+        card = db["global_cards"].get(cid)
+        if not card:
+            await message.reply("❌ Card ID not found.")
+            return
+        if format_rarity(card["rarity"]) != "Divine ❄️":
+            await message.reply("❌ Only Divine cards can be Sunday Specials.")
+            return
+        if cid in ids:
+            await message.reply("Already on the list.")
+            return
+        ids.append(cid)
+        settings["sunday_special_cards"] = ids
+        save_db()
+        await message.reply(f"✅ Added <b>{card['name']}</b> to Sunday Special.", parse_mode=ParseMode.HTML)
+    else:
+        if cid not in ids:
+            await message.reply("That card isn't on the list.")
+            return
+        ids.remove(cid)
+        settings["sunday_special_cards"] = ids
+        save_db()
+        await message.reply("✅ Removed from Sunday Special.")
+
+@main_router.message(Command("store_stats"))
+async def store_stats_cmd(message: Message):
+    # Silent ignore: not an admin, or not a private chat.
+    if message.chat.type != "private":
+        return
+    if not message.from_user or message.from_user.id not in config.ADMIN_IDS:
+        return
+
+    db = load_db()
+    stats = db.get("store_stats", {})
+
+    # Live snapshot of what is currently in the store
+    offline = db.get("offline_store", {})
+    live_rarity: dict = {}
+    live_value = 0
+    sellers = set()
+    for data in offline.values():
+        live_value += int(data.get("price", 0))
+        sellers.add(str(data.get("seller_id")))
+        gc = db.get("global_cards", {}).get(data.get("card_id"), {})
+        name = _rarity_plain(format_rarity(gc["rarity"])) if gc.get("rarity") else "Unknown"
+        live_rarity[name] = live_rarity.get(name, 0) + 1
+
+    lines = [
+        "<b>「 STORE STATS 」</b>",
+        "━━━━━━━━━━━━━━━━━",
+        f"<b>Cards in Catalog:</b> {len(db.get('global_cards', {})):,}",
+        f"<b>Active Offline Listings:</b> {len(offline):,}",
+        f"<b>Active Listing Value:</b> {live_value:,} Shards",
+        f"<b>Active Sellers:</b> {len(sellers):,}",
+    ]
+    if live_rarity:
+        lines.append("<b>Listings by Rarity:</b>")
+        for name, n in sorted(live_rarity.items(), key=lambda x: -x[1]):
+            lines.append(f"  {name}: {n:,}")
+    lines.append("")
+
+    all_bucket = stats.get("all")
+    today_bucket = stats.get("today")
+    if not today_bucket or today_bucket.get("date") != _stats_today_key():
+        today_bucket = None
+
+    lines += _fmt_stats_section("ALL TIME", all_bucket)
+    lines.append("")
+    lines += _fmt_stats_section("TODAY'S", today_bucket)
+    lines.append("━━━━━━━━━━━━━━━━━")
+
+    since = stats.get("tracking_since")
+    if since:
+        lines.append(f"<i>Tracking since {datetime.fromtimestamp(since, tz=timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC. Today resets at midnight UTC.</i>")
+    else:
+        lines.append("<i>No store activity recorded yet.</i>")
+
+    await message.reply("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+# ==========================================
 # NEXUS MARKETPLACE (/store)
 # ==========================================
 @main_router.message(Command("store"))
@@ -123,7 +356,7 @@ async def store_cmd(message: Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛒 Online Store", callback_data=f"st_on_{uid}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🛍️ Manage Offline Store", callback_data=f"st_off_{uid}", style=ButtonStyle.PRIMARY)],
-        [InlineKeyboardButton(text="📋 All Active Listings", callback_data=f"st_glob_off_{uid}_0_all", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="All Active Listings", callback_data=f"st_glob_off_{uid}_0_all", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="🛍️ Oϝϝʅιɳҽ Sƚσɾҽ (GC)", url="https://t.me/nexus_offstore")]
     ])
     
@@ -147,7 +380,7 @@ async def store_main_cb(cq: CallbackQuery):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛒 Online Store", callback_data=f"st_on_{uid}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🛍️ Manage Offline Store", callback_data=f"st_off_{uid}", style=ButtonStyle.PRIMARY)],
-        [InlineKeyboardButton(text="📋 All Active Listings", callback_data=f"st_glob_off_{uid}_0_all", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="All Active Listings", callback_data=f"st_glob_off_{uid}_0_all", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="🛍️ Oϝϝʅιɳҽ Sƚσɾҽ (GC)", url="https://t.me/nexus_offstore")]
     ])
     
@@ -228,14 +461,14 @@ async def store_online_cb(cq: CallbackQuery):
         # Divine slot only rolls in on Sundays.
         divines = {}
         if divine_day:
-            divines = {k: v for k, v in db["global_cards"].items() if format_rarity(v["rarity"]) == "Divine ❄️" and v["anime"].lower().strip() not in locked_animes_lower}
+            divines = {k: v for k, v in db["global_cards"].items() if format_rarity(v["rarity"]) == "Divine ❄️" and (v["anime"].lower().strip() not in locked_animes_lower or str(k) in _sunday_special_ids(db))}
 
         # Basic/Elite/Divine re-roll on refresh — their seed includes the offset.
         seed = f"{today}_{uid}_{offset}"
         random.seed(seed)
         c_b = random.choice(list(basics.items()))
         c_e = random.choice(list(elites.items()))
-        c_d = random.choice(list(divines.items())) if divines else None
+        c_d = _pick_sunday_divine(db, uid, divines) if divines else None
         random.seed()
 
         # Lock in today's selection so it stays stable regardless of any
@@ -249,14 +482,15 @@ async def store_online_cb(cq: CallbackQuery):
     text = (
         "<b>「 🛒 𝗢𝗡𝗟𝗜𝗡𝗘 𝗦𝗧𝗢𝗥𝗘 」</b>\n"
         "━━━━━━━━━━━━━━━━━\n"
-        f"<i>Your personalized daily stock. Resets in {time_until_shop_reset()}.</i>\n\n"
         f"🃏 <b>{c_b[1]['name']}</b> ➜ {SHOP_PRICES['Basic 🃏']} 💠\n"
         f"⚓ <b>{c_e[1]['name']}</b> ➜ {SHOP_PRICES['Elite ⚓']} 💠\n"
     )
     if c_d:
         divine_price = SHOP_PRICES.get('Divine ❄️', 5000)
-        text += f"❄️ <b>{c_d[1]['name']}</b> ➜ {divine_price} 💠 <i>(Sunday Special!)</i>\n"
-    text += "━━━━━━━━━━━━━━━━━"
+        tag = "🌟 Sunday Special!" if _is_sunday_special(db, c_d[0]) else "Sunday Divine"
+        text += f"❄️ <b>{c_d[1]['name']}</b> ➜ {divine_price} 💠 <i>({tag})</i>\n"
+    text += "━━━━━━━━━━━━━━━━━\n"
+    text += f"<i>Your personalized daily stock. Resets in {time_until_shop_reset()}.</i>"
 
     btn_b = InlineKeyboardButton(text=f"Buy {c_b[1]['name']}", callback_data=f"buyon_{uid}_{c_b[0]}", style=ButtonStyle.SUCCESS) if c_b[0] not in bought_list else InlineKeyboardButton(text="Sold Out (Basic)", callback_data="noop", style=ButtonStyle.DANGER)
     btn_e = InlineKeyboardButton(text=f"Buy {c_e[1]['name']}", callback_data=f"buyon_{uid}_{c_e[0]}", style=ButtonStyle.SUCCESS) if c_e[0] not in bought_list else InlineKeyboardButton(text="Sold Out (Elite)", callback_data="noop", style=ButtonStyle.DANGER)
@@ -348,6 +582,7 @@ async def online_store_refresh_cb(cq: CallbackQuery):
             dp["paid_refreshes_used"] = 1
             dp["refresh_seed_offset"] = dp.get("refresh_seed_offset", 0) + 1
             reset_bought()
+            _record_store_event(db, "paid_refresh", 200)
             save_db()
             await config.flush_db_now()
             await cq.answer("🔄 Store refreshed! -200 Shards 💠", show_alert=True)
@@ -373,7 +608,7 @@ async def buy_online_confirm_cb(cq: CallbackQuery):
 
     card_data = db["global_cards"][card_id]
     locked_animes_lower = [a.lower().strip() for a in db.get("settings", {}).get("locked_animes", [])]
-    if card_data["anime"].lower().strip() in locked_animes_lower:
+    if card_data["anime"].lower().strip() in locked_animes_lower and not _is_sunday_special(db, card_id):
         await cq.answer("🔒 This card's series is currently locked and unavailable.", show_alert=True)
         return
 
@@ -440,7 +675,7 @@ async def buy_online_execute_cb(cq: CallbackQuery):
 
         card_data = db["global_cards"][card_id]
         locked_animes_lower = [a.lower().strip() for a in db.get("settings", {}).get("locked_animes", [])]
-        if card_data["anime"].lower().strip() in locked_animes_lower:
+        if card_data["anime"].lower().strip() in locked_animes_lower and not _is_sunday_special(db, card_id):
             await cq.answer("🔒 This card's series is currently locked and unavailable.", show_alert=True)
             return
 
@@ -465,6 +700,8 @@ async def buy_online_execute_cb(cq: CallbackQuery):
         db["users"][uid]["total_claimed"] = db["users"][uid].get("total_claimed", 0) + 1
 
         db["users"][uid]["daily_purchases"]["bought"].append(card_id)
+        _record_store_event(db, "online_buy", price, rarity, uid)
+        quest_progress(uid, "store_buy", db=db)   # 🎃 quest
         save_db()
         await config.flush_db_now()
 
@@ -547,6 +784,17 @@ async def sell_cmd(message: Message, command: CommandObject):
         return
 
     matched_cid, matched_data = best_match
+
+    # Star cards are bound to their owner and can never be sold on the Offline Store
+    if matched_cid in user_data.get("star_purchases", []):
+        await message.reply_rich(InputRichMessage(html="🌟 <b>Star cards cannot be sold in the Offline Store.</b>"))
+        return
+
+    # Halloween cards are event-bound and can never be sold on the Offline Store
+    if hw_locked(db, matched_cid):
+        await message.reply_rich(InputRichMessage(html="🎃 <b>Halloween cards cannot be sold in the Offline Store.</b>"))
+        return
+
     global_data = db["global_cards"].get(matched_cid, {})
     
     # safeguard 2: Enforce rarity-based price floors to protect market value boundaries
@@ -555,7 +803,7 @@ async def sell_cmd(message: Message, command: CommandObject):
     if rarity_normalized == "Elite ⚓":
         min_price = 600
     elif rarity_normalized == "Divine ❄️":
-        min_price = 2500
+        min_price = 7000
         
     if price < min_price:
         await message.reply_rich(InputRichMessage(html=(
@@ -613,6 +861,15 @@ async def confirm_sell_cb(cq: CallbackQuery):
         await cq.answer("You don't own this card anymore!", show_alert=True)
         return
 
+    # Re-check at confirmation time (the card may have become a star card since /sell)
+    if card_id in db["users"][uid].get("star_purchases", []):
+        await cq.answer("🌟 Star cards cannot be sold in the Offline Store.", show_alert=True)
+        return
+
+    if hw_locked(db, card_id):
+        await cq.answer("🎃 Halloween cards cannot be sold in the Offline Store.", show_alert=True)
+        return
+
     my_cards[card_id]["amount"] -= 1
     if my_cards[card_id]["amount"] <= 0:
         del my_cards[card_id]
@@ -660,6 +917,7 @@ async def confirm_sell_cb(cq: CallbackQuery):
             "price": price,
             "msg_id": msg.message_id
         }
+        _record_store_event(db, "listed", price, rarity_str, uid)
         save_db()
 
         success_text = (
@@ -683,47 +941,68 @@ async def confirm_sell_cb(cq: CallbackQuery):
         await cq.answer(f"Failed to list in group: {e}", show_alert=True)
 
 @main_router.callback_query(F.data.startswith("st_off_"))
-async def offline_listings_mgr(cq: CallbackQuery, uid: str = None):
+async def offline_listings_mgr(cq: CallbackQuery, uid: str = None, page: int = 0):
     if uid is None:
-        uid = cq.data.split("_")[2]
+        parts = cq.data.split("_")
+        uid = parts[2]
+        try:
+            page = int(parts[3]) if len(parts) > 3 else 0
+        except ValueError:
+            page = 0
     if not await verify_user(cq, uid): return
 
     db = load_db()
     my_listings = {lid: data for lid, data in db.get("offline_store", {}).items() if data["seller_id"] == uid}
-    
+    pic = db.get("settings", {}).get("pic_offline_store")
+
     if not my_listings:
         text = "<b>「 🛍️ 𝗠𝗬 𝗟𝗜𝗦𝗧𝗜𝗡𝗚𝗦  」</b>\n━━━━━━━━━━━━━━━━━\nYou currently have no active listings.\nUse <code>/sell &lt;card&gt; &lt;price&gt;</code> to list an item."
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📋 All Active Listings", callback_data=f"st_glob_off_{uid}_0_all", style=ButtonStyle.SUCCESS)],
+            [InlineKeyboardButton(text="All Active Listings", callback_data=f"st_glob_off_{uid}_0_all", style=ButtonStyle.SUCCESS)],
             [InlineKeyboardButton(text="🛍️ Oϝϝʅιɳҽ Sƚσɾҽ (GC)", url="https://t.me/nexus_offstore")],
             [InlineKeyboardButton(text="Back", callback_data=f"st_main_{uid}", style=ButtonStyle.DANGER)]
         ])
     else:
-        text = "<b>「 🛍️ 𝗠𝗬 𝗟𝗜𝗦𝗧𝗜𝗡𝗚𝗦  」</b>\n━━━━━━━━━━━━━━━━━\nSelect a listing to remove it and retrieve your card:\n\n"
+        items = list(my_listings.items())
+        per_page = 10
+        total = len(items)
+        total_pages = max(1, (total - 1) // per_page + 1)
+        page = max(0, min(page, total_pages - 1))
+        start = page * per_page
+        sliced = items[start:start + per_page]
+
+        text = "<b>「 🛍️ 𝗠𝗬 𝗟𝗜𝗦𝗧𝗜𝗡𝗚𝗦  」</b>\n━━━━━━━━━━━━━━━━━\nTap a number to remove that listing and get your card back:\n\n"
+        num_buttons = []
+        idx = start
+        for lid, data in sliced:
+            card_data = db["global_cards"].get(data["card_id"], {})
+            card_name = html.escape(str(card_data.get("name", "Unknown")))
+            rarity = html.escape(format_rarity(card_data["rarity"])) if card_data.get("rarity") else "Unknown"
+            msg_id = data.get("msg_id")
+            link = f"https://t.me/nexus_offstore/{msg_id}" if msg_id else "https://t.me/nexus_offstore"
+            idx += 1
+            text += f"{idx}. <a href=\"{link}\">{card_name}</a> - {rarity}\n"
+            num_buttons.append(InlineKeyboardButton(text=str(idx), callback_data=f"rm_list_{uid}_{lid}", style=ButtonStyle.DANGER))
+        text += f"\n━━━━━━━━━━━━━━━━━\nPage <b>{page+1}/{total_pages}</b>"
+
         buttons = []
-        for lid, data in my_listings.items():
-            card_name = db["global_cards"].get(data["card_id"], {}).get("name", "Unknown")
-            btn_text = f"Remove {card_name} ({data['price']} 💠)"
-            buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"rm_list_{uid}_{lid}", style=ButtonStyle.DANGER)])
-            
-        buttons.append([InlineKeyboardButton(text="📋 All Active Listings", callback_data=f"st_glob_off_{uid}_0_all", style=ButtonStyle.SUCCESS)])
+        for i in range(0, len(num_buttons), 4):
+            buttons.append(num_buttons[i:i+4])
+        if total_pages > 1:
+            prev_btn = InlineKeyboardButton(text="❮ Prev", callback_data=f"st_off_{uid}_{page-1}") if page > 0 else InlineKeyboardButton(text="•", callback_data="noop")
+            page_btn = InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop")
+            next_btn = InlineKeyboardButton(text="Next ❯", callback_data=f"st_off_{uid}_{page+1}") if page < total_pages - 1 else InlineKeyboardButton(text="•", callback_data="noop")
+            buttons.append([prev_btn, page_btn, next_btn])
+        buttons.append([InlineKeyboardButton(text="All Active Listings", callback_data=f"st_glob_off_{uid}_0_all", style=ButtonStyle.SUCCESS)])
         buttons.append([InlineKeyboardButton(text="🛍️ Oϝϝʅιɳҽ Sƚσɾҽ (GC)", url="https://t.me/nexus_offstore")])
         buttons.append([InlineKeyboardButton(text="Back", callback_data=f"st_main_{uid}", style=ButtonStyle.DANGER)])
         kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    
-    pic = db.get("settings", {}).get("pic_offline_store")
-    
+
+    await _show_panel(cq, text, kb, pic)
     try:
-        if pic:
-            await cq.message.edit_media(InputMediaPhoto(media=pic, caption=text, parse_mode=ParseMode.HTML), reply_markup=kb)
-        else:
-            if cq.message.photo:
-                await cq.message.edit_caption(caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
-            else:
-                await cq.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        await cq.answer()
     except Exception:
         pass
-    await cq.answer()
 
 @main_router.callback_query(F.data.startswith("rm_list_"))
 async def remove_listing_cb(cq: CallbackQuery):
@@ -751,6 +1030,7 @@ async def remove_listing_cb(cq: CallbackQuery):
     except Exception: pass
     
     del db["offline_store"][lid]
+    _record_store_event(db, "delisted")
     save_db()
     
     await cq.answer("✅ Listing removed! The card was returned to your deck.", show_alert=True)
@@ -811,6 +1091,21 @@ async def execute_offline_buy_cb(cq: CallbackQuery):
     uid, lid = parts[1], parts[2]
     if not await verify_user(cq, uid): return
 
+    try:
+        await _execute_offline_buy(cq, uid, lid)
+    except Exception as e:
+        # Whatever goes wrong here, the tap must still resolve — an
+        # uncaught exception before cq.answer() leaves Telegram's client
+        # spinning on the button forever, which is what "Confirm button
+        # not working" actually looks like from the user's side.
+        dlog.error(f"[offline_buy_CRASH] uid={uid} lid={lid}: {e}", exc_info=True)
+        try:
+            await cq.answer("Something went wrong completing this purchase. Please try again.", show_alert=True)
+        except Exception:
+            pass
+
+
+async def _execute_offline_buy(cq: CallbackQuery, uid: str, lid: str):
     async with _get_lock(f"buy_offline_{lid}"):
         db = ensure_user(uid, cq.from_user.first_name, cq.from_user.username)
 
@@ -856,6 +1151,8 @@ async def execute_offline_buy_cb(cq: CallbackQuery):
         buyer_cards[card_id]["amount"] += 1
 
         del db["offline_store"][lid]
+        _record_store_event(db, "offline_sale", price, format_rarity(global_card["rarity"]), uid)
+        quest_progress(uid, "store_buy", db=db)   # 🎃 quest (the buyer)
         save_db()
         await config.flush_db_now()
 
@@ -969,123 +1266,155 @@ CATEGORY_MAP = {
     "divine": ("Divine ❄️",   "Divine ❄️"),
 }
 
+async def _show_panel(cq: CallbackQuery, text: str, kb: InlineKeyboardMarkup, pic=None):
+    """Edit the current panel no matter what it currently is (photo or text),
+    and fall back to sending a fresh message if Telegram refuses the edit
+    (caption too long, text->photo switch, etc.). Previously every failure was
+    swallowed silently, which is why the panel looked like it 'did not open'."""
+    try:
+        if pic and cq.message.photo:
+            await cq.message.edit_media(InputMediaPhoto(media=pic, caption=text, parse_mode=ParseMode.HTML), reply_markup=kb)
+        elif cq.message.photo:
+            await cq.message.edit_caption(caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        else:
+            await cq.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        return
+    except Exception as e:
+        if "not modified" in str(e).lower():
+            return
+        dlog.error(f"[store_panel_edit_FAIL] {e}", exc_info=True)
+    # Fallback: replace the old message with a fresh one.
+    try:
+        try:
+            await cq.message.delete()
+        except Exception:
+            pass
+        if pic and len(text) <= 1024:
+            await bot.send_photo(cq.message.chat.id, photo=pic, caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        else:
+            await bot.send_message(cq.message.chat.id, text, reply_markup=kb, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    except Exception as e:
+        dlog.error(f"[store_panel_send_FAIL] {e}", exc_info=True)
+
+
 @main_router.callback_query(F.data.startswith("st_glob_off_"))
 async def st_global_listings_cb(cq: CallbackQuery):
-    parts = cq.data.split("_")
-    uid = parts[3]
-    page = int(parts[4])
-    # Older buttons (from before categories existed) won't have a 6th part —
-    # fall back to "all" so they keep working instead of erroring out.
-    cat = parts[5] if len(parts) > 5 else "all"
-    if cat not in CATEGORY_MAP:
-        cat = "all"
+    try:
+        parts = cq.data.split("_")
+        uid = parts[3]
+        page = int(parts[4])
+        # Older buttons (from before categories existed) won't have a 6th part -
+        # fall back to "all" so they keep working instead of erroring out.
+        cat = parts[5] if len(parts) > 5 else "all"
+        if cat not in CATEGORY_MAP:
+            cat = "all"
+    except Exception:
+        await cq.answer("Invalid button.", show_alert=True)
+        return
     if not await verify_user(cq, uid): return
 
-    db = load_db()
-    offline_store = db.get("offline_store", {})
-
-    rarity_filter, _ = CATEGORY_MAP[cat]
-
-    # Build the category selector row. The active category is highlighted.
-    def cat_button(code: str) -> InlineKeyboardButton:
-        _, label = CATEGORY_MAP[code]
-        is_active = (code == cat)
-        return InlineKeyboardButton(
-            text=label,
-            callback_data=f"st_glob_off_{uid}_0_{code}",
-            style=ButtonStyle.SUCCESS if is_active else ButtonStyle.PRIMARY
-        )
-    selector_row = [cat_button("basic"), cat_button("elite")]
-    selector_row2 = [cat_button("divine"), cat_button("all")]
-
-    if not offline_store:
-        text = "<b>「 🌐 𝗚𝗟𝗢𝗕𝗔𝗟 𝗟𝗜𝗦𝗧𝗜𝗡𝗚𝗦 」</b>\n━━━━━━━━━━━━━━━━━\nNo active listings found in the Offline Store."
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            selector_row,
-            selector_row2,
-            [InlineKeyboardButton(text="Back", callback_data=f"st_main_{uid}", style=ButtonStyle.DANGER)]
-        ])
-        try:
-            await cq.message.edit_caption(caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
-        except Exception:
-            await cq.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
-        return
-
-    listings_list = list(offline_store.items())
-
-    # Filter by the selected rarity category (skip cards missing from the
-    # global card table rather than erroring, same as the render loop below).
-    if rarity_filter is not None:
-        filtered = []
-        for lid, data in listings_list:
-            card_data = db["global_cards"].get(data["card_id"])
-            if not card_data:
-                continue
-            if format_rarity(card_data["rarity"]) == rarity_filter:
-                filtered.append((lid, data))
-        listings_list = filtered
-
-    # Sorter: lowest price first
-    listings_list.sort(key=lambda x: x[1].get("price", 0))
-
-    per_page = 10
-    total = len(listings_list)
-    total_pages = max(1, (total - 1) // per_page + 1)
-    
-    if page >= total_pages: page = total_pages - 1
-    if page < 0: page = 0
-    
-    start = page * per_page
-    end = min(start + per_page, total)
-    sliced = listings_list[start:end]
-
-    _, cat_label = CATEGORY_MAP[cat]
-    text = f"<b>「 🌐 𝗚𝗟𝗢𝗕𝗔𝗟 𝗟𝗜𝗦𝗧𝗜𝗡𝗚𝗦 」</b>\n━━━━━━━━━━━━━━━━━\n"
-    text += f"<i>Category: {cat_label}</i>\n"
-    text += "<i>Click on a card name to view its post in the Offline GC:</i>\n\n"
-
-    if not sliced:
-        text += "<i>No active listings in this category.</i>\n"
-
-    for lid, data in sliced:
-        card_data = db["global_cards"].get(data["card_id"])
-        if not card_data: continue
-        rarity = format_rarity(card_data["rarity"])
-        seller_id = data["seller_id"]
-        seller_name = db["users"].get(seller_id, {}).get("name", "User")
-        
-        # Hyperlink configured to redirect specifically to the offline GC post
-        msg_id = data.get("msg_id")
-        gc_post_link = f"https://t.me/nexus_offstore/{msg_id}" if msg_id else "https://t.me/nexus_offstore"
-        text += f"• <a href='{gc_post_link}'>{card_data['name']}</a> [{rarity}] - <b>{data['price']} 💠</b> (by {seller_name})\n"
-        
-    text += f"\n━━━━━━━━━━━━━━━━━\nPage <b>{page+1}/{total_pages}</b>"
-    
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton(text="❮", callback_data=f"st_glob_off_{uid}_{page-1}_{cat}"))
-    if end < total:
-        nav.append(InlineKeyboardButton(text="❯", callback_data=f"st_glob_off_{uid}_{page+1}_{cat}"))
-        
-    kb_list = [selector_row, selector_row2]
-    if nav:
-        kb_list.append(nav)
-    kb_list.append([InlineKeyboardButton(text="Back to Store", callback_data=f"st_main_{uid}", style=ButtonStyle.DANGER)])
-    kb = InlineKeyboardMarkup(inline_keyboard=kb_list)
-    
-    pic = db.get("settings", {}).get("pic_offline_store") or db.get("settings", {}).get("pic_store")
-    
+    # Answer immediately so the button never spins, whatever happens next.
     try:
-        if pic:
-            await cq.message.edit_media(InputMediaPhoto(media=pic, caption=text, parse_mode=ParseMode.HTML), reply_markup=kb)
-        else:
-            if cq.message.photo:
-                await cq.message.edit_caption(caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
-            else:
-                await cq.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        await cq.answer()
     except Exception:
         pass
-    await cq.answer()
+
+    try:
+        db = load_db()
+        offline_store = db.get("offline_store", {})
+        rarity_filter, cat_label = CATEGORY_MAP[cat]
+
+        def cat_button(code: str) -> InlineKeyboardButton:
+            _, label = CATEGORY_MAP[code]
+            return InlineKeyboardButton(
+                text=label,
+                callback_data=f"st_glob_off_{uid}_0_{code}",
+                style=ButtonStyle.SUCCESS if code == cat else ButtonStyle.PRIMARY
+            )
+        selector_row = [cat_button("basic"), cat_button("elite")]
+        selector_row2 = [cat_button("divine"), cat_button("all")]
+
+        pic = db.get("settings", {}).get("pic_offline_store") or db.get("settings", {}).get("pic_store")
+
+        if not offline_store:
+            text = "<b>「 🌐 𝗚𝗟𝗢𝗕𝗔𝗟 𝗟𝗜𝗦𝗧𝗜𝗡𝗚𝗦 」</b>\n━━━━━━━━━━━━━━━━━\nNo active listings found in the Offline Store."
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                selector_row, selector_row2,
+                [InlineKeyboardButton(text="Back", callback_data=f"st_main_{uid}", style=ButtonStyle.DANGER)]
+            ])
+            await _show_panel(cq, text, kb, pic)
+            return
+
+        listings_list = list(offline_store.items())
+
+        if rarity_filter is not None:
+            filtered = []
+            for lid, data in listings_list:
+                card_data = db["global_cards"].get(data["card_id"])
+                if not card_data:
+                    continue
+                if format_rarity(card_data["rarity"]) == rarity_filter:
+                    filtered.append((lid, data))
+            listings_list = filtered
+
+        # Sorter: lowest price first
+        listings_list.sort(key=lambda x: x[1].get("price", 0))
+
+        per_page = 10
+        total = len(listings_list)
+        total_pages = max(1, (total - 1) // per_page + 1)
+        if page >= total_pages: page = total_pages - 1
+        if page < 0: page = 0
+
+        start = page * per_page
+        end = min(start + per_page, total)
+        sliced = listings_list[start:end]
+
+        text = "<b>「 🌐 𝗚𝗟𝗢𝗕𝗔𝗟 𝗟𝗜𝗦𝗧𝗜𝗡𝗚𝗦 」</b>\n━━━━━━━━━━━━━━━━━\n"
+        text += f"Category: {html.escape(cat_label)}\n\n"
+
+        n = 0
+        for lid, data in sliced:
+            card_data = db["global_cards"].get(data["card_id"])
+            if not card_data: continue
+            n += 1
+            rarity = format_rarity(card_data["rarity"])
+            seller_id = data["seller_id"]
+            seller_name = html.escape(str(db["users"].get(seller_id, {}).get("name", "User")))
+
+            # Hyperlink configured to redirect specifically to the offline GC post
+            msg_id = data.get("msg_id")
+            gc_post_link = f"https://t.me/nexus_offstore/{msg_id}" if msg_id else "https://t.me/nexus_offstore"
+            text += f"• <a href=\"{gc_post_link}\">{html.escape(str(card_data['name']))}</a> [{html.escape(rarity)}] - <b>{data['price']} 💠</b> (by {seller_name})\n"
+
+        if n == 0:
+            text += "No active listings in this category.\n"
+
+        text += (
+            "\n<blockquote>Click on a card name to view its post in the "
+            "<a href=\"https://t.me/nexus_offstore\">Offline GC</a></blockquote>\n"
+        )
+        text += f"━━━━━━━━━━━━━━━━━\nPage <b>{page+1}/{total_pages}</b>"
+
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="❮", callback_data=f"st_glob_off_{uid}_{page-1}_{cat}"))
+        if end < total:
+            nav.append(InlineKeyboardButton(text="❯", callback_data=f"st_glob_off_{uid}_{page+1}_{cat}"))
+
+        kb_list = [selector_row, selector_row2]
+        if nav:
+            kb_list.append(nav)
+        kb_list.append([InlineKeyboardButton(text="Back to Store", callback_data=f"st_main_{uid}", style=ButtonStyle.DANGER)])
+        kb = InlineKeyboardMarkup(inline_keyboard=kb_list)
+
+        await _show_panel(cq, text, kb, pic)
+    except Exception as e:
+        dlog.error(f"[store_global_listings_CRASH] uid={uid}: {e}", exc_info=True)
+        try:
+            await cq.message.answer("Something went wrong opening the listings. Please try again.")
+        except Exception:
+            pass
 
 # ==========================================
 # REST API — used by the /webdeck Mini App's Store tab.
@@ -1176,13 +1505,13 @@ async def api_get_online_store(user_id: str):
 
             divines = {}
             if divine_day:
-                divines = {k: v for k, v in db["global_cards"].items() if format_rarity(v["rarity"]) == "Divine ❄️" and v["anime"].lower().strip() not in locked_animes_lower}
+                divines = {k: v for k, v in db["global_cards"].items() if format_rarity(v["rarity"]) == "Divine ❄️" and (v["anime"].lower().strip() not in locked_animes_lower or str(k) in _sunday_special_ids(db))}
 
             seed = f"{today}_{user_id}_{offset}"
             random.seed(seed)
             c_b = random.choice(list(basics.items()))
             c_e = random.choice(list(elites.items()))
-            c_d = random.choice(list(divines.items())) if divines else None
+            c_d = _pick_sunday_divine(db, user_id, divines) if divines else None
             random.seed()
 
             dp["rolled_offset"] = offset
@@ -1247,6 +1576,7 @@ async def api_online_refresh(req: OnlineRefreshRequest):
                 dp["paid_refreshes_used"] = 1
                 dp["refresh_seed_offset"] = dp.get("refresh_seed_offset", 0) + 1
                 dp["bought"] = []
+                _record_store_event(db, "paid_refresh", 200)
                 save_db()
                 await config.flush_db_now()
             else:
@@ -1285,7 +1615,7 @@ async def api_online_buy(req: OnlineBuyRequest):
 
             card_data = db["global_cards"][req.card_id]
             locked_animes_lower = [a.lower().strip() for a in db.get("settings", {}).get("locked_animes", [])]
-            if card_data["anime"].lower().strip() in locked_animes_lower:
+            if card_data["anime"].lower().strip() in locked_animes_lower and not _is_sunday_special(db, req.card_id):
                 raise HTTPException(status_code=403, detail="This card's series is currently locked and unavailable.")
 
             rarity = format_rarity(card_data["rarity"])
@@ -1303,6 +1633,7 @@ async def api_online_buy(req: OnlineBuyRequest):
             user_data["cards"][req.card_id]["amount"] += 1
             user_data["total_claimed"] = user_data.get("total_claimed", 0) + 1
             dp["bought"].append(req.card_id)
+            _record_store_event(db, "online_buy", price, rarity, req.user_id)
             save_db()
             await config.flush_db_now()
 
@@ -1414,6 +1745,7 @@ async def api_create_listing(req: SellRequest):
                 "price": req.price,
                 "msg_id": msg.message_id
             }
+            _record_store_event(db, "listed", req.price, format_rarity(global_data["rarity"]), req.user_id)
             save_db()
             await config.flush_db_now()
         except Exception as e:
@@ -1456,6 +1788,7 @@ async def api_remove_listing(req: RemoveListingRequest):
             pass
 
         del db["offline_store"][req.listing_id]
+        _record_store_event(db, "delisted")
         save_db()
         await config.flush_db_now()
         return {"success": True}
@@ -1557,6 +1890,7 @@ async def api_buy_offline(req: OfflineBuyRequest):
             buyer_cards[card_id]["amount"] += 1
 
             del db["offline_store"][req.listing_id]
+            _record_store_event(db, "offline_sale", price, format_rarity(global_card["rarity"]), req.user_id)
             save_db()
             await config.flush_db_now()
 
