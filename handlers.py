@@ -966,6 +966,9 @@ async def expire_drop(chat_id: str, msg_id: int):
 
 
 async def trigger_drop(chat_id: int):
+    # Groups under DROP_MIN_MEMBERS (40) do not get card drops
+    if not await config.group_has_min_members(chat_id):
+        return
     db = load_db()
     if not db["global_cards"]: return
 

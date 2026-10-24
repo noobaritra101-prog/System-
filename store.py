@@ -1634,6 +1634,7 @@ async def api_online_buy(req: OnlineBuyRequest):
             user_data["total_claimed"] = user_data.get("total_claimed", 0) + 1
             dp["bought"].append(req.card_id)
             _record_store_event(db, "online_buy", price, rarity, req.user_id)
+            quest_progress(req.user_id, "store_buy", db=db)   # 🎃 quest (web buy)
             save_db()
             await config.flush_db_now()
 
@@ -1891,6 +1892,7 @@ async def api_buy_offline(req: OfflineBuyRequest):
 
             del db["offline_store"][req.listing_id]
             _record_store_event(db, "offline_sale", price, format_rarity(global_card["rarity"]), req.user_id)
+            quest_progress(req.user_id, "store_buy", db=db)   # 🎃 quest (web buy, the buyer)
             save_db()
             await config.flush_db_now()
 
